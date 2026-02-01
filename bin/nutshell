@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell - Interpreter for #!/usr/bin/env nutshell scripts
+# =============================================================================
+# This allows scripts to use the shebang:
+#   #!/usr/bin/env nutshell
+#
+# When used as a shebang interpreter, this script:
+#   1. Sets up the nutshell environment
+#   2. Defines the 'use' function
+#   3. Sources the user's script
+#
+# Can also be used as a CLI:
+#   nutshell <script.sh>     Run a script with nutshell environment
+#   nutshell --version       Show version
+#   nutshell --help          Show help
+#
+# =============================================================================
+
+set -uo pipefail
+
+# =============================================================================
+# Resolve our location
+# =============================================================================
+
+# Handle symlinks and find the real location
+_resolve_path() {
+    local path="$1"
+    while [[ -L "$path" ]]; do
+        local dir="$(cd "$(dirname "$path")" && pwd)"
+        path="$(readlink "$path")"
+        [[ "$path" != /* ]] && path="$dir/$path"
+    done
+    echo "$path"
+}
+
+_SELF="$(_resolve_path "${BASH_SOURCE[0]}")"
+_NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
+_NUTSHELL_ROOT="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
+
+# =============================================================================
+# Environment setup
+# =============================================================================
+
+export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
+export NUTSHELL_VERSION="0.1.0"
+export PATH="${_NUTSHELL_BIN_DIR}:$PATH"
+
+# Track loaded modules
+declare -gA _NUTSHELL_LOADED=() 2>/dev/null || declare -A _NUTSHELL_LOADED=()
+
+# The 'use' function - loads modules
+use() {
+    local mod
+    for mod in "$@"; do
+        [[ -n "${_NUTSHELL_LOADED[$mod]:-}" ]] && continue
+        
+        local mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
+        if [[ -f "$mod_path" ]]; then
+            source "$mod_path"
+            _NUTSHELL_LOADED[$mod]=1
+        else
+            echo "nutshell: unknown module '$mod'" >&2
+            return 1
+        fi
+    done
+}
+export -f use
+
+# Check if module is loaded
+nutshell_loaded() {
+    [[ -n "${_NUTSHELL_LOADED[$1]:-}" ]]
+}
+export -f nutshell_loaded
+
+# List loaded modules
+nutshell_modules() {
+    local mod
+    for mod in "${!_NUTSHELL_LOADED[@]}"; do
+        echo "$mod"
+    done | sort
+}
+export -f nutshell_modules
+
+# =============================================================================
+# CLI handling
+# =============================================================================
+
+_show_help() {
+    cat <<EOF
+nutshell - Everything you need, in a nutshell.
+
+Usage:
+  nutshell <script>       Run a script with nutshell environment
+  nutshell --version      Show version
+  nutshell --help         Show this help
+
+As a shebang:
+  #!/usr/bin/env nutshell
+  use os log
+  log_info "Hello!"
+
+Available modules:
+  $(ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | tr '\n' ' ')
+
+For more information: https://github.com/orgrinrt/nutshell
+EOF
+}
+
+_show_version() {
+    echo "nutshell ${NUTSHELL_VERSION}"
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+case "${1:-}" in
+    --help|-h)
+        _show_help
+        exit 0
+        ;;
+    --version|-v)
+        _show_version
+        exit 0
+        ;;
+    "")
+        _show_help
+        exit 1
+        ;;
+    *)
+        # Run the script
+        _SCRIPT="$1"
+        shift
+        
+        if [[ ! -f "$_SCRIPT" ]]; then
+            echo "nutshell: script not found: $_SCRIPT" >&2
+            exit 1
+        fi
+        
+        # Source the script (so it runs in our environment with 'use' available)
+        source "$_SCRIPT"
+        ;;
+esac

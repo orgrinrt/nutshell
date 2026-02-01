@@ -457,39 +457,78 @@ fi
 
 ## Tool Combos
 
-Some operations work best with multiple tools. The stub pattern handles this:
+Some operations work best with multiple tools. The stub pattern handles this
+by preferring combo implementations when multiple tools are available.
+
+### Example: text_replace with grep+sed combo
 
 ```bash
-# text.sh
+# text.sh - stub prefers combo when both tools available
 
-text_search_and_transform() {
-    # Check for optimal combo: grep (fast filter) + sed (transform)
-    if [[ " $_TOOLS_AVAILABLE " == *" grep "* ]] && \
-       [[ " $_TOOLS_AVAILABLE " == *" sed "* ]]; then
-        source "${_TEXT_IMPL_DIR}/combo/grep_sed_search_transform.sh"
-    elif [[ " $_TOOLS_AVAILABLE " == *" perl "* ]]; then
-        source "${_TEXT_IMPL_DIR}/perl_search_transform.sh"
-    else
-        source "${_TEXT_IMPL_DIR}/awk_search_transform.sh"
+text_replace() {
+    # Prefer combo when both grep and sed are available
+    # The combo checks if pattern exists before invoking sed (optimization)
+    if deps_has_all "grep" "sed"; then
+        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+        _TEXT_REPLACE_IMPL="grep_sed"
+    elif deps_has "sed"; then
+        source "${_TEXT_IMPL_DIR}/sed_replace.sh"
+        _TEXT_REPLACE_IMPL="sed"
+    elif deps_has "perl"; then
+        source "${_TEXT_IMPL_DIR}/perl_replace.sh"
+        _TEXT_REPLACE_IMPL="perl"
+    # ...
     fi
     
-    text_search_and_transform "$@"
+    text_replace "$@"
 }
 ```
 
-The combo impl:
-```bash
-# text/impl/combo/grep_sed_search_transform.sh
+### Combo Impl Structure
 
-text_search_and_transform() {
-    local search="$1"
-    local transform="$2"
-    local file="$3"
+Combo impls live in `impl/combo/` and follow the same contract as single-tool impls:
+
+```bash
+# text/impl/combo/grep_sed.sh
+
+# Optimized: check if pattern exists before running sed
+_text_replace_grep_sed_impl() {
+    local pattern="${1:-}"
+    local replacement="${2:-}"
+    local file="${3:-}"
     
-    # grep is optimized for matching, sed for transforming
-    "${_TOOL_PATH[grep]}" -E "$search" "$file" | \
-        "${_TOOL_PATH[sed]}" "$transform"
+    # Quick check: does the pattern even exist?
+    if ! "${_TOOL_PATH[grep]}" -qE "$pattern" "$file" 2>/dev/null; then
+        return 0  # Pattern not found, nothing to replace
+    fi
+    
+    # Pattern exists, do the replacement
+    "${_TOOL_PATH[sed]}" -i "s/${pattern}/${replacement}/g" "$file"
 }
+
+# When sourced: replace the stub
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    text_replace() {
+        _text_replace_grep_sed_impl "$@"
+    }
+fi
+```
+
+### Combo-Only Functions
+
+Some functions only make sense as combos:
+
+- `text_filtered_replace "filter" "search" "replace" "file"` - Replace only in matching lines
+- `text_extract_transform "pattern" "search" "replace" "file"` - Extract and transform (non-destructive)
+- `text_count_in_matches "filter" "count_pattern" "file"` - Scoped counting
+
+### Introspection
+
+Modules expose which impl was selected (useful for debugging/testing):
+
+```bash
+text_replace "foo" "bar" file.txt
+echo "Used impl: $(text_replace_impl)"  # -> "grep_sed" or "sed" or "perl"
 ```
 
 ## Module Status Tracking

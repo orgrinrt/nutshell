@@ -1,6 +1,6 @@
-#!/usr/bin/env bash
+#!/usr/bin/env nutshell
 # =============================================================================
-# test_trivial_wrappers.sh - Trivial Wrapper Function Detection Test
+# check_trivial_wrappers.sh - Trivial Wrapper Function Detection Check
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
@@ -9,9 +9,9 @@
 # another call, AND are not used frequently enough to justify their existence.
 #
 # FULLY CONFIG-DRIVEN: All thresholds and patterns come from nut.toml.
-# See templates/empty.nut.toml for all available options.
+# See examples/configs/empty.nut.toml for all available options.
 #
-# Usage: ./tests/test_trivial_wrappers.sh
+# Usage: ./examples/checks/check_trivial_wrappers.sh
 #
 # Exit codes:
 #   0 - All checks passed (may have warnings)
@@ -20,9 +20,11 @@
 
 set -uo pipefail
 
-# Source the test framework
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/framework.sh"
+# Load the check-runner framework (provides cfg_*, log_*, etc.)
+use check-runner
+
+# Quiet mode - when run from main check runner, be terse
+QUIET_MODE="${NUTSHELL_CHECK_QUIET:-0}"
 
 # =============================================================================
 # CONFIG-DRIVEN PARAMETERS
@@ -252,14 +254,16 @@ get_function_preview() {
 # =============================================================================
 
 test_trivial_wrappers() {
-    log_header "Trivial Wrapper Function Detection Test"
-    
-    log_info "Detecting functions with 1-$MAX_LINES lines that just wrap another call"
-    log_info "Thresholds (ANY passes): local >= $LOCAL_USAGE_THRESHOLD OR global >= $GLOBAL_USAGE_THRESHOLD usages"
-    log_info "Ergonomic: >= $MIN_VARS_FOR_ERGONOMIC variables OR >= $TOKEN_COMPLEXITY_PASS tokens auto-pass"
-    log_info "Token complexity >= $TOKEN_COMPLEXITY_WARN triggers warning instead of error"
-    log_info "Exempt annotations: $PUBLIC_API_ANNOTATION, $ERGONOMICS_ANNOTATION"
-    echo ""
+    if [[ "$QUIET_MODE" != "1" ]]; then
+        log_header "Trivial Wrapper Function Detection Test"
+        
+        log_info "Detecting functions with 1-$MAX_LINES lines that just wrap another call"
+        log_info "Thresholds (ANY passes): local >= $LOCAL_USAGE_THRESHOLD OR global >= $GLOBAL_USAGE_THRESHOLD usages"
+        log_info "Ergonomic: >= $MIN_VARS_FOR_ERGONOMIC variables OR >= $TOKEN_COMPLEXITY_PASS tokens auto-pass"
+        log_info "Token complexity >= $TOKEN_COMPLEXITY_WARN triggers warning instead of error"
+        log_info "Exempt annotations: $PUBLIC_API_ANNOTATION, $ERGONOMICS_ANNOTATION"
+        echo ""
+    fi
     
     local files
     files=$(get_script_files)
@@ -306,12 +310,14 @@ test_trivial_wrappers() {
                     local preview
                     preview=$(get_function_preview "$file" "$func_name")
                     
-                    if [[ $file_has_issues -eq 0 ]]; then
-                        file_issues+="\n${rel_path}"
-                        file_has_issues=1
+                    if [[ "$QUIET_MODE" != "1" ]]; then
+                        if [[ $file_has_issues -eq 0 ]]; then
+                            file_issues+="\n${rel_path}"
+                            file_has_issues=1
+                        fi
+                        file_issues+="\n${YELLOW}[WARN]${NC} ${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"
+                        file_issues+="\n       ${preview}"
                     fi
-                    file_issues+="\n${YELLOW}[WARN]${NC} ${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"
-                    file_issues+="\n       ${preview}"
                     
                     warnings+=("${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens")
                     ;;
@@ -323,62 +329,66 @@ test_trivial_wrappers() {
                     local preview
                     preview=$(get_function_preview "$file" "$func_name")
                     
-                    if [[ $file_has_issues -eq 0 ]]; then
-                        file_issues+="\n${rel_path}"
-                        file_has_issues=1
+                    if [[ "$QUIET_MODE" != "1" ]]; then
+                        if [[ $file_has_issues -eq 0 ]]; then
+                            file_issues+="\n${rel_path}"
+                            file_has_issues=1
+                        fi
+                        file_issues+="\n  ${RED}✗${NC} ${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"
+                        file_issues+="\n       ${preview}"
                     fi
-                    file_issues+="\n  ${RED}✗${NC} ${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"
-                    file_issues+="\n       ${preview}"
                     
                     errors+=("${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens")
                     ;;
             esac
         done <<< "$functions"
         
-        if [[ -n "$file_issues" ]]; then
+        if [[ -n "$file_issues" ]] && [[ "$QUIET_MODE" != "1" ]]; then
             echo -e "$file_issues"
         fi
         
     done <<< "$files"
     
-    log_info "Scanned $file_count files"
-    echo ""
-    
-    # Summary
-    if [[ $wrapper_count -gt 0 ]]; then
-        log_section "Trivial Wrappers Found: $wrapper_count"
+    if [[ "$QUIET_MODE" != "1" ]]; then
+        log_info "Scanned $file_count files"
         echo ""
         
-        if [[ $error_count -gt 0 ]]; then
-            echo -e "${RED}Found $error_count errors, $warn_count warnings${NC}"
-        else
-            echo -e "${YELLOW}Found $warn_count warnings${NC}"
+        # Summary and help text only in verbose mode
+        if [[ $wrapper_count -gt 0 ]]; then
+            log_section "Trivial Wrappers Found: $wrapper_count"
+            echo ""
+            
+            if [[ $error_count -gt 0 ]]; then
+                echo -e "${RED}Found $error_count errors, $warn_count warnings${NC}"
+            else
+                echo -e "${YELLOW}Found $warn_count warnings${NC}"
+            fi
+            echo ""
+            
+            # Help text
+            echo "What makes a function a 'trivial wrapper':"
+            echo "  - Only 1-$MAX_LINES lines of meaningful code (excluding declarations, comments)"
+            echo "  - Just calls another function/command without adding logic"
+            echo "  - Does NOT meet ANY of the ergonomic thresholds below"
+            echo ""
+            echo "How to resolve:"
+            echo "  1. Inline the wrapper at call sites (if rarely used)"
+            echo "  2. Expand with real logic (error handling, validation, logging)"
+            echo "  3. Add # $PUBLIC_API_ANNOTATION if it's part of the public API"
+            echo "  4. Add # $ERGONOMICS_ANNOTATION if it's intentional for API consistency"
+            echo ""
+            echo "NOT trivial (passes if ANY condition is met):"
+            echo "  - Functions with >$MAX_LINES lines of meaningful code"
+            echo "  - Functions with >= $LOCAL_USAGE_THRESHOLD local or >= $GLOBAL_USAGE_THRESHOLD global usages"
+            echo "  - Functions using >= $MIN_VARS_FOR_ERGONOMIC variables (ergonomic benefit)"
+            echo "  - Functions with >= $TOKEN_COMPLEXITY_PASS tokens (complex enough)"
+            echo "  - Functions with conditionals, loops, or complex logic"
+            echo "  - Functions marked with exempt annotations"
+            echo ""
+            echo "WARNING instead of ERROR:"
+            echo "  - Functions with >= $TOKEN_COMPLEXITY_WARN tokens get a warning, not error"
+            echo ""
         fi
-        echo ""
-        
-        # Help text
-        echo "What makes a function a 'trivial wrapper':"
-        echo "  - Only 1-$MAX_LINES lines of meaningful code (excluding declarations, comments)"
-        echo "  - Just calls another function/command without adding logic"
-        echo "  - Does NOT meet ANY of the ergonomic thresholds below"
-        echo ""
-        echo "How to resolve:"
-        echo "  1. Inline the wrapper at call sites (if rarely used)"
-        echo "  2. Expand with real logic (error handling, validation, logging)"
-        echo "  3. Add # $PUBLIC_API_ANNOTATION if it's part of the public API"
-        echo "  4. Add # $ERGONOMICS_ANNOTATION if it's intentional for API consistency"
-        echo ""
-        echo "NOT trivial (passes if ANY condition is met):"
-        echo "  - Functions with >$MAX_LINES lines of meaningful code"
-        echo "  - Functions with >= $LOCAL_USAGE_THRESHOLD local or >= $GLOBAL_USAGE_THRESHOLD global usages"
-        echo "  - Functions using >= $MIN_VARS_FOR_ERGONOMIC variables (ergonomic benefit)"
-        echo "  - Functions with >= $TOKEN_COMPLEXITY_PASS tokens (complex enough)"
-        echo "  - Functions with conditionals, loops, or complex logic"
-        echo "  - Functions marked with exempt annotations"
-        echo ""
-        echo "WARNING instead of ERROR:"
-        echo "  - Functions with >= $TOKEN_COMPLEXITY_WARN tokens get a warning, not error"
-        echo ""
     fi
     
     # Set test counters for framework

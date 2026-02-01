@@ -13,8 +13,8 @@
 #   - Self-documenting code
 #   - Small, focused modules
 #
-# For gentler defaults, see: default.nut.toml
-# For all options documented: empty.nut.toml
+# For gentler defaults, see: examples/configs/default.nut.toml
+# For all options documented: examples/configs/empty.nut.toml
 # =============================================================================
 
 [meta]
@@ -26,7 +26,7 @@ description = "Strict conventions. No compromises. No technical debt."
 # Paths
 # -----------------------------------------------------------------------------
 [paths]
-lib_dir = "core"
+lib_dir = "lib"
 exclude = [".git", ".legacy", "node_modules", "vendor", "target", "dist", "build", "templates", "/impl/", "impl/"]
 include = ["*.sh"]
 
@@ -139,19 +139,26 @@ exclude_patterns = [
 # -----------------------------------------------------------------------------
 [tests.cruft]
 # Debug code patterns - these should NEVER be committed
+# Note: Patterns are case-sensitive and use grep -E regex
+# Be careful not to match legitimate code comments
 debug_patterns = [
     "echo.*DEBUG",
     "echo.*TODO",
     "echo.*FIXME",
     "echo.*XXX",
-    "set -x",
-    "PS4=",
+    "^[[:space:]]*set -x",
+    "^[[:space:]]*PS4=",
     "BASH_XTRACEFD",
-    "# DEBUG",
-    "# TEMP",
-    "# TEMPORARY",
-    "# REMOVE",
-    "# DELETE",
+    "# DEBUG:",
+    "# DEBUG$",
+    "# TEMP:",
+    "# TEMP$",
+    "# TEMPORARY:",
+    "# TEMPORARY$",
+    "# REMOVE THIS",
+    "# DELETE THIS",
+    "# REMOVE BEFORE",
+    "# DELETE BEFORE",
 ]
 
 # TODO patterns - tracked but limited

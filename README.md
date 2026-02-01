@@ -2,308 +2,544 @@
 
 > Everything you need, in a nutshell.
 
-A minimal bash utility library providing core primitives for shell scripting.
+A minimal, portable bash library for shell scripting.
 
-## Philosophy
+**Version**: 0.1.0
 
-- **Minimal dependencies**: Uses standard Unix tools (see below)
-- **Lazy initialization**: Functions load implementations on first call only
-- **Cross-platform**: Handles BSD/GNU tool differences transparently
-- **Self-documenting**: Every public function is annotated and documented
-- **Quality-first**: Ships with its own QA test suite
+---
 
 ## Installation
 
-### As a git submodule (recommended)
+Add nutshell to your project:
 
 ```bash
-git submodule add https://github.com/orgrinrt/nutshell.git lib/nutshell
+# Option A: Git submodule (recommended)
+git submodule add https://github.com/orgrinrt/nutshell.git scripts/lib/nutshell
+
+# Option B: Download a release
+curl -L https://github.com/orgrinrt/nutshell/releases/latest/download/nutshell.tar.gz | tar -xz -C scripts/lib/
 ```
 
-### Direct clone
+That's it. No global install required. Nutshell lives in your project.
 
-```bash
-git clone https://github.com/orgrinrt/nutshell.git
-```
+---
 
 ## Quick Start
 
+Every script that uses nutshell needs **one line** at the top:
+
 ```bash
 #!/usr/bin/env bash
-source "path/to/nutshell/nutshell.sh"
+. "${0%/*}/lib/nutshell/init"
+
+use os log
 
 log_info "Hello from nutshell!"
-str_upper "hello"  # -> "HELLO"
+```
 
-# Check module readiness
-if text_ready; then
-    text_replace "foo" "bar" file.txt
+The `. "${0%/*}/lib/nutshell/init"` line is the **only boilerplate**. Copy it exactly.
+
+> **What does `${0%/*}` mean?**  
+> It's bash for "directory containing this script". It ensures the script works regardless of where it's called from.
+
+---
+
+## Project Structure
+
+```
+nutshell/
+├── init                    # Source this: . "${0%/*}/lib/nutshell/init"
+├── check                   # Main QA entry point (executable)
+├── bin/
+│   └── nutshell           # Interpreter for #!/usr/bin/env nutshell
+├── lib/                   # All modules
+│   ├── os.sh, log.sh, deps.sh, ...
+│   ├── json.sh, http.sh, prompt.sh, ...
+│   └── check-runner.sh    # QA/check framework
+├── examples/
+│   ├── configs/           # Configuration templates
+│   │   ├── default.nut.toml
+│   │   ├── empty.nut.toml
+│   │   └── tough.nut.toml
+│   └── checks/            # Built-in QA checks
+│       ├── run_builtins.sh
+│       └── check_*.sh
+├── schemas/               # JSON schema for nut.toml
+├── nutshell.sh            # Alternative: load ALL modules at once
+├── README.md
+└── nut.toml               # Nutshell's own config
+```
+
+A typical project setup:
+
+```
+myproject/
+├── scripts/
+│   ├── lib/
+│   │   └── nutshell/          # ← Nutshell lives here
+│   │       ├── init           # ← The file you source
+│   │       ├── bin/
+│   │       └── lib/
+│   ├── build.sh               # Your scripts
+│   ├── check.sh
+│   └── deploy.sh
+├── src/
+├── deno.json                  # (or package.json, Makefile, etc.)
+└── ...
+```
+
+---
+
+## Usage Patterns
+
+### Pattern 1: Standalone Scripts (Most Common)
+
+Each script is independent. Each one has the init line:
+
+```bash
+#!/usr/bin/env bash
+# scripts/build.sh
+. "${0%/*}/lib/nutshell/init"
+
+use os log fs
+
+log_info "Building for $(os_name)..."
+fs_mkdir dist
+# ...
+```
+
+**When to use:** Most projects. Simple, each script works on its own.
+
+### Pattern 2: Entry Point + Internal Scripts
+
+One script bootstraps, others use the clean shebang:
+
+```bash
+#!/usr/bin/env bash
+# scripts/main.sh - The entry point
+. "${0%/*}/lib/nutshell/init"
+
+# PATH is already set by init, so internal scripts can use nutshell shebang
+"${0%/*}/internal/build.sh" "$@"
+```
+
+```bash
+#!/usr/bin/env nutshell
+# scripts/internal/build.sh - Clean shebang!
+use os log
+
+log_info "Building..."
+```
+
+**When to use:** Complex script suites where you want cleaner internal files.
+
+---
+
+## Integrating with Task Runners
+
+Nutshell scripts work with any task runner. The scripts bootstrap themselves:
+
+**deno.json:**
+```json
+{
+  "tasks": {
+    "build": "./scripts/build.sh",
+    "check": "./scripts/lib/nutshell/check"
+  }
+}
+```
+
+**package.json:**
+```json
+{
+  "scripts": {
+    "build": "./scripts/build.sh",
+    "check": "./scripts/lib/nutshell/check"
+  }
+}
+```
+
+**Makefile:**
+```makefile
+build:
+	./scripts/build.sh
+
+check:
+	./scripts/lib/nutshell/check
+```
+
+Anyone can run `deno task build` or `npm run check` without knowing nutshell exists.
+
+---
+
+## Available Modules
+
+Load modules with `use`:
+
+```bash
+use os log json http
+```
+
+| Module | Description |
+|--------|-------------|
+| `os` | OS detection (`os_name`, `os_is_macos`, `os_is_linux`) |
+| `log` | Logging (`log_info`, `log_warn`, `log_error`, `log_success`) |
+| `deps` | Tool detection (`deps_has`, `deps_require`, `deps_path`) |
+| `fs` | Filesystem (`fs_exists`, `fs_mkdir`, `fs_temp_file`, `fs_size`) |
+| `string` | String manipulation (`str_upper`, `str_lower`, `str_trim`, `str_contains`) |
+| `array` | Array operations (`arr_contains`, `arr_unique`, `arr_join`) |
+| `text` | Text processing (`text_grep`, `text_replace`, `text_count_matches`) |
+| `json` | JSON parsing (`json_get`, `json_set`, `json_valid`, `json_pretty`) |
+| `http` | HTTP requests (`http_get`, `http_post`, `http_download`) |
+| `toml` | TOML parsing (`toml_get`, `toml_get_or`, `toml_is_true`) |
+| `prompt` | User prompts (`prompt_confirm`, `prompt_input`, `prompt_select`) |
+| `color` | Terminal colors (`color_red`, `color_green`, `color_bold`) |
+| `validate` | Validation (`is_set`, `is_integer`, `require_command`) |
+| `xdg` | XDG directories (`xdg_config`, `xdg_data`, `xdg_cache`) |
+| `check-runner` | Testing framework (`cfg_get`, `log_pass`, `log_fail`) |
+
+---
+
+## For Module Authors
+
+### The `module` Function
+
+When creating new modules, use the `module` function to handle boilerplate:
+
+```bash
+#!/usr/bin/env bash
+# lib/mymodule.sh
+
+# This handles:
+# - Guard variable to prevent double-sourcing
+# - Creates MYMODULE_ERROR variable for error tracking
+# - Creates MYMODULE_INIT variable (1 = ready, 0 = error)
+# - Registers module in nutshell's loaded modules list
+module mymodule || return 0
+
+# Your module code here...
+
+my_function() {
+    echo "Hello from mymodule!"
+}
+
+# If something goes wrong during init:
+# module_error mymodule "Failed to initialize: reason"
+```
+
+The `module` function replaces this manual boilerplate:
+
+```bash
+# OLD WAY (manual):
+[[ -n "${_NUTSHELL_MODULE_MYMODULE_LOADED:-}" ]] && return 0
+declare -g _NUTSHELL_MODULE_MYMODULE_LOADED=1
+declare -g MYMODULE_ERROR=""
+declare -g MYMODULE_INIT=1
+```
+
+### Module Helper Functions
+
+```bash
+# Check if a module is ready
+module_ready mymodule && echo "Ready!"
+
+# Get a module's error message
+error=$(module_get_error mymodule)
+
+# Set an error (marks module as not ready)
+module_error mymodule "Something went wrong"
+```
+
+### The `impl` Function
+
+For modules with multiple implementations (e.g., using sed vs perl):
+
+```bash
+#!/usr/bin/env bash
+# lib/text/impl/sed_grep.sh
+
+# Check if required tools are available
+# Returns 0 if all deps available, 1 if not
+impl sed,grep || return 1
+
+# Implementation using sed and grep
+text_replace() {
+    # ...
+}
+```
+
+With explicit impl name:
+
+```bash
+impl sed,grep sed_grep_combo || return 1
+```
+
+---
+
+## Examples
+
+### Example: Build Script
+
+```bash
+#!/usr/bin/env bash
+# scripts/build.sh
+. "${0%/*}/lib/nutshell/init"
+
+use os log deps fs
+
+# Check requirements
+deps_require "cargo"
+
+# Build based on OS
+log_info "Building for $(os_name)..."
+
+if os_is_macos; then
+    cargo build --release --target aarch64-apple-darwin
+else
+    cargo build --release
+fi
+
+fs_mkdir dist
+cp target/release/myapp dist/
+
+log_success "Build complete!"
+```
+
+### Example: API Client
+
+```bash
+#!/usr/bin/env bash
+# scripts/fetch-data.sh
+. "${0%/*}/lib/nutshell/init"
+
+use log http json
+
+API_URL="https://api.example.com"
+
+http_get_json "$API_URL/users"
+
+if http_ok; then
+    users=$(http_body)
+    count=$(json_get "$users" "length")
+    log_success "Fetched $count users"
+else
+    log_error "API request failed: $(http_status)"
+    exit 1
 fi
 ```
 
-## Dependencies
+### Example: Interactive Installer
 
-Nutshell uses standard Unix tools with automatic BSD/GNU detection:
+```bash
+#!/usr/bin/env bash
+# scripts/install.sh
+. "${0%/*}/lib/nutshell/init"
 
-| Tool | Purpose | Variants Detected |
-|------|---------|-------------------|
-| `bash` | Shell (4.0+) | Required for associative arrays |
-| `sed` | Stream editing | gnu, bsd |
-| `awk` | Text processing | gawk, mawk, nawk, bsd |
-| `grep` | Pattern matching | gnu, bsd |
-| `perl` | Fallback processing | standard |
-| `stat` | File information | gnu, bsd |
-| `find` | File discovery | gnu, bsd |
+use log prompt fs color
 
-### Custom Tool Paths
+color_bold "=== My App Installer ==="
+echo
 
-Override tool paths in `nut.toml`:
+if ! prompt_confirm "Install My App?" "y"; then
+    log_info "Installation cancelled"
+    exit 0
+fi
+
+install_dir=$(prompt_dir "Installation directory:" "$HOME/.local/share/myapp")
+log_info "Installing to: $install_dir"
+
+fs_mkdir "$install_dir"
+cp -r ./dist/* "$install_dir/"
+
+log_success "Installation complete!"
+```
+
+---
+
+## The Init Line Explained
+
+Every script needs this line:
+
+```bash
+. "${0%/*}/lib/nutshell/init"
+```
+
+Breaking it down:
+- `.` — Source a file (same as `source`)
+- `"${0%/*}"` — Directory containing this script
+- `/lib/nutshell/init` — Path to nutshell's init file
+
+This works regardless of:
+- Where the script is called from (`./scripts/build.sh` or `scripts/build.sh`)
+- The current working directory
+- Whether called directly or via a task runner
+
+**Just copy the line. Don't modify it.**
+
+---
+
+## QA / Check System
+
+Nutshell includes a QA system for checking your shell scripts:
+
+```bash
+./lib/nutshell/check
+```
+
+Or with options:
+
+```bash
+./lib/nutshell/check --builtins      # Only built-in checks
+./lib/nutshell/check --list          # List available checks
+./lib/nutshell/check --help          # Show help
+```
+
+### Configuration
+
+Configure via `nut.toml` in your project root:
 
 ```toml
-[deps.paths]
-sed = "/opt/gnu/bin/sed"
-awk = "/opt/gnu/bin/gawk"
+[qa]
+run_builtins = true
+
+[tests.syntax]
+shell = "bash"
+
+[tests.file_size]
+max_loc = 300
 ```
 
-### Checking Dependencies
+See `examples/configs/` for configuration templates:
+- `empty.nut.toml` - Minimal defaults
+- `default.nut.toml` - Recommended settings
+- `tough.nut.toml` - Strict settings for quality-conscious projects
+
+### Built-in Checks
+
+| Check | Description |
+|-------|-------------|
+| `syntax` | Bash syntax validation |
+| `file_size` | File size / LOC limits |
+| `function_duplication` | Detect copy-pasted functions |
+| `trivial_wrappers` | Find unnecessary wrapper functions |
+| `no_cruft` | Detect debug code, TODOs |
+| `public_api_docs` | Validate API documentation |
+| `config_schema` | Validate nut.toml structure |
+
+---
+
+## Why This Design?
+
+**Q: Why not a global install?**  
+A: Nutshell is designed to be bundled with your project. When someone clones your repo and runs `npm run build`, it should just work—no "please install nutshell first".
+
+**Q: Why not `#!/usr/bin/env nutshell` everywhere?**  
+A: That requires `nutshell` to be in PATH, which means global installation or setup steps for every developer. The source line is self-contained.
+
+**Q: Can I use the pretty shebang?**  
+A: Yes! The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`. This is great for internal scripts in complex projects.
+
+**Q: What if I have many scripts?**  
+A: Each standalone script needs the init line. It's one line of boilerplate per file. For large script suites, consider Pattern 2 (entry point + internal scripts).
+
+---
+
+## Module Reference
+
+### Logging (`use log`)
 
 ```bash
-source nutshell/core/deps.sh
-
-deps_info              # Print tool paths, variants, and capabilities
-deps_check             # Check all required tools, returns 0/1
-deps_require_all "sed" "awk" "grep"  # Exit if any missing
-
-# Query specific tools
-deps_has "perl"        # -> 0 (true) or 1 (false)
-deps_path "sed"        # -> "/usr/bin/sed"
-deps_variant "sed"     # -> "gnu" or "bsd"
-deps_is_gnu "grep"     # -> 0 (true) or 1 (false)
-
-# Query capabilities
-deps_can "grep_pcre"   # -> 0 if grep supports -P
-deps_can "sed_extended" # -> 0 if sed supports -E
+log_debug "Debug info"      # Only shown if LOG_LEVEL=debug
+log_info "Information"      # Blue
+log_warn "Warning"          # Yellow
+log_error "Error"           # Red
+log_success "Success!"      # Green
+log_fatal "Fatal error"     # Red, then exits
 ```
 
-## Modules
-
-### Layer -1 (Foundation)
-
-Zero internal dependencies:
-
-| Module | Description |
-|--------|-------------|
-| `core/os.sh` | OS detection (linux/macos/windows/wsl) |
-| `core/log.sh` | Logging with levels and colors |
-| `core/deps.sh` | Tool detection, variants, and capabilities |
-
-### Layer 0 (Core)
-
-May depend on foundation:
-
-| Module | Description |
-|--------|-------------|
-| `core/validate.sh` | Input validation, type checks |
-| `core/string.sh` | String manipulation (pure bash) |
-| `core/array.sh` | Array operations (pure bash) |
-| `core/fs.sh` | Filesystem primitives |
-| `core/text.sh` | Text file processing |
-| `core/toml.sh` | TOML parsing |
-| `core/xdg.sh` | XDG Base Directory support |
-
-## API Reference
-
-### Logging (`core/log.sh`)
+### OS Detection (`use os`)
 
 ```bash
-log_debug "Debug message"      # Gray, only if LOG_LEVEL=debug
-log_info "Info message"        # Blue
-log_warn "Warning message"     # Yellow, to stderr
-log_error "Error message"      # Red, to stderr
-log_success "Success!"         # Green
-log_fatal "Fatal error"        # Red, exits with code 1
+os_name        # "linux", "macos", "windows", "unknown"
+os_arch        # "x86_64", "arm64", etc.
+os_is_linux    # Returns 0 (true) or 1 (false)
+os_is_macos    # Returns 0 or 1
+os_is_wsl      # Returns 0 or 1
+os_is_windows  # Returns 0 or 1
 ```
 
-### Validation (`core/validate.sh`)
+### HTTP (`use http`)
 
 ```bash
-# Type checks (return 0/1)
-is_set "VAR_NAME"              # Variable is set and non-empty
-is_integer "42"                # Is an integer
-is_truthy "yes"                # Is truthy (1/true/yes/on/y)
+http_get "https://example.com"
+http_post "https://example.com" "data=value"
+http_get_json "https://api.example.com/data"
+http_post_json "https://api.example.com/data" '{"key":"value"}'
 
-# Soft checks (warn and return 1)
-ensure_command "git" "message" # Warn if missing
+http_body      # Response body
+http_status    # HTTP status code
+http_ok        # True if 2xx status
 
-# Hard checks (exit on failure)
-require_command "git" "msg"    # Exit if missing
-require_file "path" "msg"      # Exit if not found
+http_download "https://example.com/file.zip" "./file.zip"
 ```
 
-### Strings (`core/string.sh`)
+### JSON (`use json`)
 
 ```bash
-str_lower "HELLO"              # -> "hello"
-str_upper "hello"              # -> "HELLO"
-str_trim "  hello  "           # -> "hello"
-str_replace "hi world" "hi" "hello"  # -> "hello world"
-str_contains "hello" "ell"     # -> 0 (true)
-str_split ":" "a:b:c" arr      # arr=("a" "b" "c")
-str_join "," "a" "b" "c"       # -> "a,b,c"
+json_get '{"name":"alice"}' "name"              # "alice"
+json_get '{"user":{"id":1}}' "user.id"          # "1"
+json_set '{"a":1}' "b" "2"                      # '{"a":1,"b":2}'
+json_valid '{"a":1}'                            # Returns 0 (valid)
+json_pretty '{"a":1}'                           # Formatted output
+json_keys '{"a":1,"b":2}'                       # "a" and "b"
 ```
 
-### Arrays (`core/array.sh`)
+### Filesystem (`use fs`)
 
 ```bash
-arr_contains "needle" "${arr[@]}"   # Check if contains
-arr_unique arr                       # Remove duplicates in place
-arr_sort arr                         # Sort in place
-arr_length "${arr[@]}"              # Get length
+fs_exists "path"           # True if exists
+fs_is_file "path"          # True if regular file
+fs_is_dir "path"           # True if directory
+fs_mkdir "path"            # Create directory (with parents)
+fs_size "file"             # Size in bytes
+fs_temp_file "prefix"      # Create temp file, print path
+fs_temp_dir "prefix"       # Create temp dir, print path
 ```
 
-### Filesystem (`core/fs.sh`)
+### Prompts (`use prompt`)
 
 ```bash
-fs_exists "path"               # Path exists (file or dir)
-fs_is_file "path"              # Is a regular file
-fs_mkdir "path"                # Create directory (with parents)
-fs_realpath "relative"         # Get absolute path
-fs_extension "file.txt"        # -> "txt"
-fs_size "file"                 # Size in bytes
-fs_mtime "file"                # Modification time (epoch)
-fs_temp_file "prefix"          # Create temp file
-
-# Module status
-fs_ready                       # -> 0 if module is ready
-fs_error                       # -> error message if not ready
+prompt_confirm "Continue?" "y"                    # Yes/no, default yes
+name=$(prompt_input "Name:" "default")            # Text input
+pass=$(prompt_password "Password:")               # Hidden input
+choice=$(prompt_select "Pick:" "A" "B" "C")       # Selection
+count=$(prompt_int "Count:" 1 100)                # Integer with range
 ```
 
-### Text Processing (`core/text.sh`)
+### Strings (`use string`)
 
 ```bash
-text_grep "pattern" "file"     # Find matching lines
-text_contains "pattern" "file" # Check if pattern exists
-text_replace "old" "new" "file" # In-place replacement
-text_line "file" 5             # Get line 5
-text_lines "file" 5 10         # Get lines 5-10
-
-# Module status
-text_ready                     # -> 0 if module is ready
-text_error                     # -> error message if not ready
+str_upper "hello"                    # "HELLO"
+str_lower "HELLO"                    # "hello"
+str_trim "  hello  "                 # "hello"
+str_contains "hello" "ell"           # Returns 0 (true)
+str_replace "hello" "l" "L"          # "heLLo"
+str_split ":" "a:b:c" arr            # arr=("a" "b" "c")
+str_join "," "a" "b" "c"             # "a,b,c"
 ```
 
-### Dependencies (`core/deps.sh`)
+### Dependencies (`use deps`)
 
 ```bash
-# Availability
-deps_has "sed"                 # Tool is available
-deps_has_all "sed" "awk"       # All tools available
-deps_has_any "perl" "python"   # At least one available
-deps_available                 # List all available tools
-
-# Paths and variants
-deps_path "awk"                # -> "/usr/bin/awk"
-deps_variant "sed"             # -> "gnu" or "bsd"
-deps_is_gnu "grep"             # Check if GNU variant
-deps_is_bsd "stat"             # Check if BSD variant
-
-# Capabilities
-deps_can "grep_pcre"           # grep supports -P
-deps_can "sed_extended"        # sed supports -E
-deps_can "awk_gensub"          # awk has gensub()
-deps_caps                      # List all capabilities
-
-# Requirements
-deps_require "git"             # Exit if missing
-deps_require_all "sed" "awk"   # Exit if any missing
-deps_require_cap "grep_pcre"   # Exit if capability missing
-
-# Portable wrappers
-deps_sed_inplace "s/a/b/" file # BSD/GNU compatible
-deps_stat_size "file"          # File size in bytes
-deps_stat_mtime "file"         # Modification time
+deps_has "git"                       # True if available
+deps_require "git"                   # Exit if missing
+deps_require_all "git" "curl"        # Exit if any missing
+deps_path "git"                      # "/usr/bin/git"
+deps_is_gnu "sed"                    # True if GNU variant
 ```
 
-### TOML Parsing (`core/toml.sh`)
-
-```bash
-toml_get "file.toml" "key"           # Get value
-toml_get "file.toml" "section.key"   # Get from [section]
-toml_get_or "file.toml" "key" "def"  # Get with default
-toml_is_true "file.toml" "key"       # Check if truthy
-toml_array "file.toml" "key" arr     # Parse into array
-```
-
-### XDG Directories (`core/xdg.sh`)
-
-```bash
-xdg_set_app_name "my-app"
-xdg_app_data                   # ~/.local/share/my-app
-xdg_app_config                 # ~/.config/my-app
-xdg_app_cache                  # ~/.cache/my-app
-```
-
-## QA Test Suite
-
-Nutshell ships with a configurable QA test suite:
-
-```bash
-# Run all tests
-./nutshell/tests/run_all.sh
-
-# With options
-./nutshell/tests/run_all.sh --level=error  # Only show errors
-./nutshell/tests/run_all.sh --level=info   # Show all diagnostics
-```
-
-### Config Templates
-
-Copy a template to your repo root as `nut.toml`:
-
-| Template | Description |
-|----------|-------------|
-| `empty.nut.toml` | All tests disabled (schema reference) |
-| `default.nut.toml` | Sensible defaults |
-| `tough.nut.toml` | Strict, no compromises |
-
-### Example Output
-
-```
-nutshell QA
-
-  Syntax                         ✓
-  File Size                      ⚠
-  Duplication                    ✓
-  Trivial Wrappers               ✓
-  Cruft                          ✓
-
-Diagnostics:
-
-  core/
-    large_file.sh
-      ⚠ 421 LOC
-        └─ consider splitting or add @@ALLOW_LOC_421@@
-
-PASSED (5/5 tests, 1 with warnings)
-```
-
-## Architecture
-
-Nutshell uses a lazy-init stub pattern for tool-dependent functions:
-
-1. Public functions start as stubs
-2. On first call, the stub selects the best implementation
-3. The impl file is sourced, replacing the stub
-4. Subsequent calls go directly to the implementation
-
-This gives fast startup (no eager loading) and zero overhead after first call.
-
-See [DESIGN.md](DESIGN.md) for details.
-
-## Related
-
-- **[the-whole-shebang](https://github.com/orgrinrt/the-whole-shebang)**: Full bash library building on nutshell with infrastructure, services, and more.
+---
 
 ## License
 
-MIT
+MPL-2.0

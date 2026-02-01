@@ -68,6 +68,7 @@ _toml_extract_value() {
 # Get a value from a TOML file
 # Usage: toml_get "file.toml" "key" -> prints value
 # Usage: toml_get "file.toml" "section.key" -> prints value from [section]
+# Usage: toml_get "file.toml" "section.subsection.key" -> prints value from [section.subsection]
 toml_get() {
     local file="${1:-}"
     local key="${2:-}"
@@ -78,17 +79,53 @@ toml_get() {
     local section=""
     local search_key="$key"
     
-    # Check if key has section prefix (section.key)
+    # Check if key has section prefix (section.key or section.subsection.key)
+    # We need to find the longest matching section name
     if [[ "$key" == *.* ]]; then
-        section="${key%%.*}"
-        search_key="${key#*.}"
+        # Try progressively shorter section prefixes until we find a match
+        local test_section="$key"
+        while [[ "$test_section" == *.* ]]; do
+            test_section="${test_section%.*}"
+            # Check if this section exists in the file
+            if grep -qE "^\[${test_section}\]" "$file" 2>/dev/null; then
+                section="$test_section"
+                search_key="${key#${section}.}"
+                break
+            fi
+        done
+        
+        # If no section found, use the simple split (first.rest)
+        if [[ -z "$section" && "$key" == *.* ]]; then
+            section="${key%%.*}"
+            search_key="${key#*.}"
+        fi
     fi
     
     local in_section=0
     local current_section=""
     local line clean_line
+    local in_multiline_array=0
+    local multiline_value=""
     
     while IFS= read -r line || [[ -n "$line" ]]; do
+        # If we're collecting a multiline array, keep collecting
+        # Don't use _toml_clean_line here because it would strip # inside quoted strings
+        if [[ $in_multiline_array -eq 1 ]]; then
+            # Just trim whitespace, don't strip comments (they may be inside quotes)
+            local trimmed
+            trimmed="$(str_trim "$line")"
+            [[ -z "$trimmed" ]] && continue  # Skip empty lines
+            multiline_value+="$trimmed"
+            # Check if this line closes the array (] not inside quotes)
+            # Simple heuristic: line ends with ] or ],
+            if [[ "$trimmed" == *"]" ]] || [[ "$trimmed" == "]," ]]; then
+                in_multiline_array=0
+                _toml_extract_value "$multiline_value"
+                return 0
+            fi
+            continue
+        fi
+        
         clean_line="$(_toml_clean_line "$line")"
         [[ -z "$clean_line" ]] && continue
         
@@ -122,6 +159,12 @@ toml_get() {
             v="$(str_trim "${BASH_REMATCH[2]}")"
             
             if [[ "$k" == "$search_key" ]]; then
+                # Check if value starts an array that spans multiple lines
+                if [[ "$v" == "["* && "$v" != *"]"* ]]; then
+                    in_multiline_array=1
+                    multiline_value="$v"
+                    continue
+                fi
                 _toml_extract_value "$v"
                 return 0
             fi

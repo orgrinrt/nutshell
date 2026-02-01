@@ -11,6 +11,10 @@
 # external tools (sed, grep, awk, perl) use lazy-init stubs that, on first
 # call, select and source the appropriate implementation. Subsequent calls
 # go directly to the implementation with no overhead.
+#
+# Implementation selection priority:
+#   1. Combo implementations (grep+sed) when both are available
+#   2. Single-tool implementations in order: sed > perl > awk
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -26,8 +30,9 @@ _NUTSHELL_TEXT_DIR="${BASH_SOURCE[0]%/*}"
 [[ "$_NUTSHELL_TEXT_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_TEXT_DIR="."
 source "${_NUTSHELL_TEXT_DIR}/deps.sh"
 
-# Path to impl directory
+# Path to impl directories
 readonly _TEXT_IMPL_DIR="${_NUTSHELL_TEXT_DIR}/text/impl"
+readonly _TEXT_COMBO_DIR="${_TEXT_IMPL_DIR}/combo"
 
 # -----------------------------------------------------------------------------
 # Module status
@@ -42,6 +47,10 @@ if deps_has_any "sed" "perl" "awk"; then
 else
     _TEXT_ERROR="No text processing tool available (need sed, perl, or awk)"
 fi
+
+# Track which impl was loaded (useful for debugging/testing)
+_TEXT_REPLACE_IMPL=""
+_TEXT_MATCH_IMPL=""
 
 # -----------------------------------------------------------------------------
 # Line operations (pure bash + standard tools; no impl switching needed)
@@ -150,14 +159,17 @@ text_grep() {
     # First call: decide which implementation to use
     if deps_has "grep"; then
         source "${_TEXT_IMPL_DIR}/grep_match.sh"
+        _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
         source "${_TEXT_IMPL_DIR}/perl_match.sh"
+        _TEXT_MATCH_IMPL="perl"
     else
         # No tool available; define a failing function
         text_grep() {
             echo "[ERROR] text_grep: no matching tool available (need grep or perl)" >&2
             return 1
         }
+        _TEXT_MATCH_IMPL="none"
     fi
     
     # Call the now-replaced function
@@ -171,13 +183,16 @@ text_contains() {
     # First call: decide which implementation to use
     if deps_has "grep"; then
         source "${_TEXT_IMPL_DIR}/grep_match.sh"
+        _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
         source "${_TEXT_IMPL_DIR}/perl_match.sh"
+        _TEXT_MATCH_IMPL="perl"
     else
         text_contains() {
             echo "[ERROR] text_contains: no matching tool available" >&2
             return 1
         }
+        _TEXT_MATCH_IMPL="none"
     fi
     
     text_contains "$@"
@@ -190,13 +205,16 @@ text_count_matches() {
     # First call: decide which implementation to use
     if deps_has "grep"; then
         source "${_TEXT_IMPL_DIR}/grep_match.sh"
+        _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
         source "${_TEXT_IMPL_DIR}/perl_match.sh"
+        _TEXT_MATCH_IMPL="perl"
     else
         text_count_matches() {
             echo "0"
             return 1
         }
+        _TEXT_MATCH_IMPL="none"
     fi
     
     text_count_matches "$@"
@@ -209,34 +227,134 @@ text_count_matches() {
 # @@PUBLIC_API@@
 # Replace pattern in file (in-place)
 # Usage: text_replace "pattern" "replacement" "file"
+# 
+# Implementation selection:
+#   1. grep+sed combo (optimized: skips sed if pattern not found)
+#   2. sed alone
+#   3. perl
+#   4. awk (slowest, uses temp file)
 text_replace() {
     # First call: decide which implementation to use based on available tools
-    # and their variants
     local impl=""
     
-    if deps_has "sed"; then
-        # sed is preferred for simple replacements
-        impl="sed_replace.sh"
+    # Prefer combo when both grep and sed are available
+    # The combo checks if pattern exists before invoking sed (optimization)
+    if deps_has_all "grep" "sed"; then
+        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+        _TEXT_REPLACE_IMPL="grep_sed"
+    elif deps_has "sed"; then
+        source "${_TEXT_IMPL_DIR}/sed_replace.sh"
+        _TEXT_REPLACE_IMPL="sed"
     elif deps_has "perl"; then
-        # perl works consistently across platforms
-        impl="perl_replace.sh"
+        source "${_TEXT_IMPL_DIR}/perl_replace.sh"
+        _TEXT_REPLACE_IMPL="perl"
     elif deps_has "awk"; then
-        # awk as last resort (requires temp file)
-        impl="awk_replace.sh"
-    fi
-    
-    if [[ -n "$impl" ]]; then
-        source "${_TEXT_IMPL_DIR}/${impl}"
+        source "${_TEXT_IMPL_DIR}/awk_replace.sh"
+        _TEXT_REPLACE_IMPL="awk"
     else
         # No tool available
         text_replace() {
             echo "[ERROR] text_replace: no tool available (need sed, perl, or awk)" >&2
             return 1
         }
+        _TEXT_REPLACE_IMPL="none"
     fi
     
     # Call the now-replaced function
     text_replace "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Combo operations - LAZY INIT STUBS
+# These provide additional functionality when multiple tools are available
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Replace pattern only in lines matching a filter
+# Usage: text_filtered_replace "filter_regex" "search" "replace" "file"
+# 
+# More efficient than sed alone when only a subset of lines need changes.
+# Falls back to sed-only if grep is not available.
+text_filtered_replace() {
+    if deps_has_all "grep" "sed"; then
+        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+    else
+        # Fallback: just do a regular replace (filter is ignored)
+        # This is less efficient but still works
+        text_filtered_replace() {
+            local filter="${1:-}"
+            local search="${2:-}"
+            local replace="${3:-}"
+            local file="${4:-}"
+            # Ignore filter, just do global replace
+            text_replace "$search" "$replace" "$file"
+        }
+    fi
+    
+    text_filtered_replace "$@"
+}
+
+# @@PUBLIC_API@@
+# Extract matching lines and transform them (non-destructive)
+# Usage: text_extract_transform "pattern" "search" "replace" "file" -> prints transformed lines
+# 
+# Useful for extracting and reformatting specific lines without modifying the file.
+text_extract_transform() {
+    if deps_has_all "grep" "sed"; then
+        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+    else
+        # Fallback using separate grep and sed calls
+        text_extract_transform() {
+            local pattern="${1:-}"
+            local search="${2:-}"
+            local replace="${3:-}"
+            local file="${4:-}"
+            
+            [[ ! -f "$file" ]] && return 1
+            
+            if deps_has "grep" && deps_has "sed"; then
+                "${_TOOL_PATH[grep]}" -E "$pattern" "$file" 2>/dev/null | \
+                    "${_TOOL_PATH[sed]}" "s/${search}/${replace}/g"
+            elif deps_has "perl"; then
+                "${_TOOL_PATH[perl]}" -ne "print if /${pattern}/" "$file" | \
+                    "${_TOOL_PATH[perl]}" -pe "s/${search}/${replace}/g"
+            else
+                return 1
+            fi
+        }
+    fi
+    
+    text_extract_transform "$@"
+}
+
+# @@PUBLIC_API@@
+# Count occurrences of secondary pattern within lines matching primary pattern
+# Usage: text_count_in_matches "filter" "count_pattern" "file" -> "5"
+# 
+# Useful for scoped counting, e.g., count TODOs only in comment lines.
+text_count_in_matches() {
+    if deps_has_all "grep" "sed"; then
+        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+    else
+        # Fallback
+        text_count_in_matches() {
+            local filter="${1:-}"
+            local count_pattern="${2:-}"
+            local file="${3:-}"
+            
+            [[ ! -f "$file" ]] && { echo "0"; return 1; }
+            
+            if deps_has "grep"; then
+                "${_TOOL_PATH[grep]}" -E "$filter" "$file" 2>/dev/null | \
+                    "${_TOOL_PATH[grep]}" -c "$count_pattern" 2>/dev/null || echo "0"
+            else
+                echo "0"
+                return 1
+            fi
+        }
+    fi
+    
+    text_count_in_matches "$@"
 }
 
 # -----------------------------------------------------------------------------
@@ -333,7 +451,7 @@ text_remove_comments() {
 }
 
 # -----------------------------------------------------------------------------
-# Module readiness check
+# Module readiness and introspection
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
@@ -348,4 +466,20 @@ text_ready() {
 # Usage: text_error -> prints error message
 text_error() {
     echo "$_TEXT_ERROR"
+}
+
+# @@PUBLIC_API@@
+# Get which implementation was selected for text_replace
+# Usage: text_replace_impl -> "grep_sed" | "sed" | "perl" | "awk" | "none" | ""
+# Returns empty string if text_replace hasn't been called yet (stub not resolved)
+text_replace_impl() {
+    echo "$_TEXT_REPLACE_IMPL"
+}
+
+# @@PUBLIC_API@@
+# Get which implementation was selected for matching functions
+# Usage: text_match_impl -> "grep" | "perl" | "none" | ""
+# Returns empty string if matching functions haven't been called yet
+text_match_impl() {
+    echo "$_TEXT_MATCH_IMPL"
 }

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run_all.sh - Main Test Runner for Code Quality Tests
+# run_builtins.sh - Built-in QA Checks Runner
 # =============================================================================
-# Executes all code quality tests and provides clean, tree-structured output.
+# Executes all built-in nutshell QA checks with tree-structured output.
 #
-# Usage: ./tests/run_all.sh [options]
+# Usage: ./examples/checks/run_builtins.sh [options]
 #
 # Options:
 #   --stop-on-failure   Stop immediately on first test failure
@@ -19,7 +19,14 @@
 
 set -uo pipefail
 
+# Get our script directory for finding sibling check scripts
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bootstrap nutshell (this is an entry point script)
+. "${SCRIPT_DIR}/../../init"
+
+# Load nutshell modules
+use os color
 
 # =============================================================================
 # OPTIONS
@@ -306,12 +313,13 @@ main() {
     echo -e "${BOLD}nutshell QA${NC}"
     echo ""
     
-    run_test "Config Schema" "$SCRIPT_DIR/test_config_schema.sh"
-    run_test "Syntax" "$SCRIPT_DIR/test_syntax.sh"
-    run_test "File Size" "$SCRIPT_DIR/test_file_size.sh"
-    run_test "Duplication" "$SCRIPT_DIR/test_function_duplication.sh"
-    run_test "Trivial Wrappers" "$SCRIPT_DIR/test_trivial_wrappers.sh"
-    run_test "Cruft" "$SCRIPT_DIR/test_no_cruft.sh"
+    run_test "Config Schema" "$SCRIPT_DIR/check_config_schema.sh"
+    run_test "Syntax" "$SCRIPT_DIR/check_syntax.sh"
+    run_test "File Size" "$SCRIPT_DIR/check_file_size.sh"
+    run_test "Duplication" "$SCRIPT_DIR/check_function_duplication.sh"
+    run_test "Trivial Wrappers" "$SCRIPT_DIR/check_trivial_wrappers.sh"
+    run_test "Cruft" "$SCRIPT_DIR/check_no_cruft.sh"
+    run_test "Public API Docs" "$SCRIPT_DIR/check_public_api_docs.sh"
     
     print_diagnostics
     print_summary

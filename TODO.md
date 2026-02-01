@@ -1,64 +1,91 @@
 # nutshell TODO
 
-## ✅ Completed
+## Completed
 
 ### Config-Driven QA Test Suite
 - [x] Rewrite `test_trivial_wrappers.sh` to be fully config-driven
-  - All thresholds loaded from `nut.toml` via `cfg_get`
-  - Test enable/disable controlled by `cfg_is_true "tests.trivial_wrappers"`
-  - Annotation patterns read from config, not hardcoded
-- [x] Framework properly loads canonical defaults from `templates/empty.nut.toml`
+- [x] Framework loads canonical defaults from `templates/empty.nut.toml`
 - [x] User `nut.toml` overrides defaults correctly
 
 ### Annotation System Cleanup
 - [x] Remove ambiguous `#@@ALLOW_TRIVIAL_WRAPPER@@` pattern
-- [x] Establish semantic annotations:
-  - `@@PUBLIC_API@@` - function is part of public interface, must be documented
-  - `@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@` - intentional thin wrapper for API consistency
-  - `@@ALLOW_LOC_NNN@@` - file allowed to exceed size limit with explicit justification
-- [x] Update `core/os.sh` with proper annotations
-- [x] Update `core/xdg.sh` with proper annotations
-- [x] Update `core/validate.sh` with proper annotations
+- [x] Establish semantic annotations (`@@PUBLIC_API@@`, `@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@`)
+- [x] Update core modules with proper annotations
 
 ### Repository Setup
 - [x] Create nutshell repository on GitHub
 - [x] Create the-whole-shebang repository on GitHub
 - [x] Add both repos to `.control-center/worktree/@orgrinrt/inventory.toml`
-- [x] Initialize `.repos/` structure
-- [x] Move nutshell to `.repos/@orgrinrt/shell-libs/nutshell`
-- [x] Clone the-whole-shebang to `.repos/@orgrinrt/shell-libs/the-whole-shebang`
+
+### Architecture Design
+- [x] Design lazy-init stub pattern (see DESIGN.md)
+- [x] Design environment detection system (see DESIGN.md)
+- [x] Document tool combo support (see DESIGN.md)
 
 ## High Priority
 
+### Implement Lazy-Init Stub Architecture
+
+#### deps.sh - Environment Detection
+- [ ] Refactor to collect available tools without deciding "best"
+- [ ] Implement path resolution:
+  - [ ] Check user config for explicit paths first
+  - [ ] Use `which` if available
+  - [ ] Fall back to checking common locations (`/usr/bin`, `/bin`, `/usr/local/bin`, `/opt/homebrew/bin`)
+  - [ ] Verify binary exists and is executable before accepting
+- [ ] Implement `_TOOLS_AVAILABLE` detection
+- [ ] Implement `_TOOL_PATH` associative array
+- [ ] Implement `_TOOL_VARIANT` detection (gnu/bsd/gawk/mawk/etc.)
+- [ ] Implement `_TOOL_CAN` capability flags:
+  - [ ] `sed_inplace` - can sed do -i properly?
+  - [ ] `sed_extended` - does sed support -E?
+  - [ ] `grep_pcre` - does grep support -P?
+  - [ ] `grep_extended` - does grep support -E?
+  - [ ] `stat_format` - does stat support format strings?
+- [ ] Cache all info in readonly vars on first source
+- [ ] Add user preference overrides from `nut.toml` `[deps]` section
+
+#### text.sh - Stub + Impl Refactor
+- [ ] Create `text/impl/` directory structure
+- [ ] Implement self-replacing stub for `text_replace`:
+  - [ ] `sed_replace.sh` (handles GNU/BSD variants)
+  - [ ] `perl_replace.sh`
+  - [ ] `awk_replace.sh`
+- [ ] Implement self-replacing stub for `text_grep`:
+  - [ ] `grep_match.sh`
+  - [ ] `perl_match.sh`
+  - [ ] `awk_match.sh`
+- [ ] Implement self-replacing stub for `text_contains`
+- [ ] Implement self-replacing stub for `text_count_matches`
+- [ ] Implement combo impls:
+  - [ ] `combo/grep_sed.sh` for search-and-transform operations
+- [ ] Add module status vars: `_TEXT_READY`, `_TEXT_ERROR`
+
+#### fs.sh - Stub + Impl Refactor
+- [ ] Create `fs/impl/` directory structure
+- [ ] Implement self-replacing stub for `fs_size`:
+  - [ ] `stat_gnu.sh`
+  - [ ] `stat_bsd.sh`
+  - [ ] `perl_stat.sh` (fallback)
+- [ ] Implement self-replacing stub for `fs_mtime`
+- [ ] Add module status vars: `_FS_READY`, `_FS_ERROR`
+
+#### Impl File Standards
+- [ ] Each impl works both sourced and standalone
+- [ ] Impl overwrites public function when sourced
+- [ ] Impl reads environment vars directly (no deps API calls)
+- [ ] Document impl file contract
+
 ### Remaining Config-Driven QA Tests
-- [ ] Update `test_syntax.sh` to be fully config-driven
+- [ ] Update `test_syntax.sh` to check enable flag
 - [ ] Update `test_file_size.sh` to be fully config-driven
 - [ ] Update `test_function_duplication.sh` to be fully config-driven
 - [ ] Update `test_no_cruft.sh` to be fully config-driven
-- [ ] Add new `test_public_api_docs.sh` - verify all `@@PUBLIC_API@@` functions have `Usage:` docs
-
-### Dependency System Redesign (`core/deps.sh`)
-- [ ] Implement capability-based approach instead of tool-specific
-- [ ] Define capability groups:
-  - `stream_edit` - sed, perl, awk (in preference order)
-  - `pattern_match` - grep, perl, awk
-  - `text_process` - awk, perl, sed
-  - `file_stat` - stat, perl, ls -l
-  - `json_parse` - jq, python, perl (for future use)
-- [ ] For each capability, detect what's available and pick best option
-- [ ] Provide portable functions that abstract tool differences:
-  - `deps_stream_edit "pattern" input.txt > output.txt`
-  - `deps_stream_edit_inplace "pattern" file.txt`
-  - `deps_grep "pattern" file.txt`
-  - `deps_file_size file.txt`
-  - `deps_file_mtime file.txt`
-- [ ] All modules (fs.sh, text.sh, etc.) should use deps.sh capabilities
-- [ ] Make fallback selection configurable via `nut.toml`
+- [ ] Add new `test_public_api_docs.sh`
 
 ### Annotations Coverage
-- [ ] Audit all public functions and add `@@PUBLIC_API@@` where missing
-- [ ] Ensure all `@@PUBLIC_API@@` functions have proper `Usage:` documentation
-- [ ] Add documentation generation script that extracts from annotations
+- [ ] Audit all public functions for `@@PUBLIC_API@@`
+- [ ] Ensure all `@@PUBLIC_API@@` functions have `Usage:` docs
 
 ## Medium Priority
 
@@ -66,53 +93,55 @@
 - [ ] Create initial repo structure with README, LICENSE (MPL-2.0)
 - [ ] Add nutshell as git submodule
 - [ ] Port infra modules from explore.ikiuni.dev:
-  - [ ] `template.sh` - template processing
-  - [ ] `ui.sh` - user interface primitives
-  - [ ] `cache.sh` - caching layer (make generic, remove hardcoded app name)
-  - [ ] `state.sh` - state management (make generic, remove hardcoded app name)
+  - [ ] `template.sh`
+  - [ ] `ui.sh`
+  - [ ] `cache.sh` (make generic)
+  - [ ] `state.sh` (make generic)
 - [ ] Port service modules:
-  - [ ] `git.sh` - git operations
-  - [ ] `docker.sh` - docker operations
-- [ ] Create entry point `the-whole-shebang.sh`
-- [ ] Add QA config (`nut.toml`) using tough template
+  - [ ] `git.sh`
+  - [ ] `docker.sh`
+- [ ] Add QA config using tough template
 
 ### Agent Skill File
-- [ ] Create skill file for agents documenting nutshell/the-whole-shebang
+- [ ] Create skill file documenting nutshell/the-whole-shebang
 - [ ] Document submodule workflow
-- [ ] Document contribution workflow (branch, PR, pin commit)
+- [ ] Document contribution workflow
 - [ ] Include API quick reference
 - [ ] Place in `.control-center/shared/skills/shell-libs.md`
 
 ### Control Center Migration
 - [ ] Add the-whole-shebang as submodule to `.control-center`
-- [ ] Rewrite `test_toml_assembly.py` in bash using the-whole-shebang
-- [ ] Update `assemble_agent_rules.sh` to use library functions
-- [ ] Update other control-center scripts to use library
+- [ ] Update control-center scripts to use library
 
 ## Low Priority
 
 ### Documentation
-- [ ] Add `examples/` directory with usage examples
+- [ ] Add `examples/` directory
 - [ ] Add `CONTRIBUTING.md`
-- [ ] Generate API docs from `@@PUBLIC_API@@` annotations
+- [ ] Generate API docs from annotations
 
-### Testing
+### Testing and CI
 - [ ] Add unit tests for each core module
 - [ ] Add integration tests
 - [ ] CI/CD setup (GitHub Actions)
 - [ ] Pre-commit hooks using QA tests
 
-### Future Modules
-- [ ] `http.sh` - curl/wget abstraction with retry, timeout, auth
-- [ ] `json.sh` - jq/python/perl abstraction for JSON parsing
-- [ ] `yaml.sh` - yq abstraction for YAML (or recommend TOML)
-- [ ] `semver.sh` - semantic version parsing and comparison
+### Benchmark Suite
+- [ ] Create `benchmarks/` directory
+- [ ] Benchmark sed vs perl vs awk for common operations
+- [ ] Benchmark tool combos vs single-tool approaches
+- [ ] Use results to inform default tool selection in stubs
 
-## Design Decisions Documented
+### Future Modules
+- [ ] `http.sh` - curl/wget abstraction
+- [ ] `json.sh` - jq/python/perl abstraction
+- [ ] `semver.sh` - semantic version parsing
+
+## Design Decisions
 
 See `DESIGN.md` for:
-- Layered architecture (Layer -1 Foundation, Layer 0 Core)
-- `ensure_*` vs `require_*` semantics
-- Capability-based dependency system design
-- Annotation system rationale
-- QA philosophy (config-first, no hardcoded values)
+- Lazy-init stub pattern (self-replacing functions)
+- Environment detection and path resolution
+- Tool combo support
+- Module status tracking
+- Performance considerations

@@ -11,7 +11,7 @@
 - [x] QA system with built-in checks
 - [x] Config-driven via nut.toml
 - [x] README with clear usage documentation
-- [ ] Test the full workflow end-to-end
+- [x] Test the full workflow end-to-end
 - [ ] Tag v0.1.0 release
 - [ ] Create GitHub release with tarball
 

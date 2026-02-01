@@ -18,21 +18,21 @@
 ## High Priority
 
 ### Documentation
-- [ ] Add `os_type` alias for `os_name` (consistency with docs)
-- [ ] Update DESIGN.md to reflect new structure
-- [ ] Add CHANGELOG.md
-- [ ] Add CONTRIBUTING.md
+- [x] Add `os_type` alias for `os_name` (consistency with docs)
+- [x] Update DESIGN.md to reflect new structure
+- [x] Add CHANGELOG.md
+- [x] Add CONTRIBUTING.md
 
 ### QA System
-- [ ] Fix qa/check_*.sh scripts to use new paths (lib/ not core/)
-- [ ] Fix qa/run_builtins.sh to work with new structure
-- [ ] Ensure check.sh runs correctly from project root
+- [x] Fix qa/check_*.sh scripts to use new paths (lib/ not core/)
+- [x] Fix qa/run_builtins.sh to work with new structure
+- [x] Ensure check.sh runs correctly from project root
 - [ ] Add custom_checks support testing
 
 ### Testing
-- [ ] Add integration tests for the init/use workflow
-- [ ] Test shebang pattern (#!/usr/bin/env nutshell)
-- [ ] Test from different CWD scenarios
+- [x] Add integration tests for the init/use workflow
+- [x] Test shebang pattern (#!/usr/bin/env nutshell)
+- [x] Test from different CWD scenarios
 - [ ] Test with task runners (deno, npm, make)
 
 ## Medium Priority

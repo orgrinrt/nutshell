@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/text/impl/perl_match.sh - perl implementation for text matching
+# nutshell/lib/text/impl/perl_match.sh - perl implementation for text matching
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

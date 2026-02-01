@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/color.sh - Terminal colors and formatting
+# nutshell/lib/color.sh - Terminal colors and formatting
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

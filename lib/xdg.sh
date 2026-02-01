@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/xdg.sh - XDG Base Directory Specification
+# nutshell/lib/xdg.sh - XDG Base Directory Specification
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/http.sh - HTTP request handling
+# nutshell/lib/http.sh - HTTP request handling
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/fs/impl/stat_gnu.sh - GNU stat implementation for fs operations
+# nutshell/lib/fs/impl/stat_gnu.sh - GNU stat implementation for fs operations
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

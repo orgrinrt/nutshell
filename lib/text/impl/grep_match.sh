@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/text/impl/grep_match.sh - grep implementation for text matching
+# nutshell/lib/text/impl/grep_match.sh - grep implementation for text matching
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

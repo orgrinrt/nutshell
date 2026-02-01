@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/fs/impl/perl_stat.sh - perl fallback for fs stat operations
+# nutshell/lib/fs/impl/perl_stat.sh - perl fallback for fs stat operations
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

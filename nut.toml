@@ -1,0 +1,205 @@
+# =============================================================================
+# nutshell QA Configuration - Tough
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# This is the TOUGH template - strict conventions for high-quality codebases.
+# No compromises. No technical debt. No cutting corners.
+#
+# Use this if you believe in:
+#   - Code quality over velocity
+#   - Preventing problems over fixing them
+#   - Self-documenting code
+#   - Small, focused modules
+#
+# For gentler defaults, see: default.nut.toml
+# For all options documented: empty.nut.toml
+# =============================================================================
+
+[meta]
+version = "1.0.0"
+name = "Tough Configuration"
+description = "Strict conventions. No compromises. No technical debt."
+
+# -----------------------------------------------------------------------------
+# Paths
+# -----------------------------------------------------------------------------
+[paths]
+lib_dir = "core"
+exclude = [".git", ".legacy", "node_modules", "vendor", "target", "dist", "build", "templates"]
+include = ["*.sh"]
+
+# -----------------------------------------------------------------------------
+# Annotations - Semantic markers that explain WHY exceptions exist
+# -----------------------------------------------------------------------------
+[annotations]
+# Public API - intentional interface, must be documented
+public_api = "@@PUBLIC_API@@"
+
+# Trivial wrapper kept for API ergonomics/consistency
+allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+
+# File exceeds normal size limit with explicit justification
+allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
+
+# -----------------------------------------------------------------------------
+# Test Enable/Disable - ALL ON
+# -----------------------------------------------------------------------------
+[tests]
+syntax = true
+trivial_wrappers = true
+file_size = true
+function_duplication = true
+cruft = true
+public_api_docs = true
+
+# -----------------------------------------------------------------------------
+# Syntax Validation - Strict
+# -----------------------------------------------------------------------------
+[tests.syntax]
+shell = "bash"
+fail_on_error = true
+
+# -----------------------------------------------------------------------------
+# Trivial Wrappers - Strict
+# Every function must justify its existence
+# -----------------------------------------------------------------------------
+[tests.trivial_wrappers]
+# 1-2 line functions are suspicious
+max_lines = 2
+
+# Must be used at least 4 times locally to justify existence
+local_usage_threshold = 4
+
+# Or 6 times globally across the codebase
+global_usage_threshold = 6
+
+# Using 2+ variables provides ergonomic value
+min_vars_for_ergonomic = 2
+
+# Token complexity thresholds
+token_complexity_warn = 3
+token_complexity_pass = 4
+
+# Zero tolerance - warn on first, fail on many
+warn_threshold = 5
+fail_threshold = 20
+
+# Only these explicit annotations can exempt a function
+exempt_annotations = [
+    "@@PUBLIC_API@@",
+    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@",
+]
+
+# -----------------------------------------------------------------------------
+# File Size - Small, focused modules
+# -----------------------------------------------------------------------------
+[tests.file_size]
+# 300 lines of actual code max - forces decomposition
+max_loc = 300
+
+# 500 total lines including docs - keeps files reviewable
+max_total_lines = 500
+
+# Per-file exemption requires explicit annotation with justification
+exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
+
+# No blanket exemptions
+exempt_patterns = []
+
+# -----------------------------------------------------------------------------
+# Function Duplication - DRY or die
+# -----------------------------------------------------------------------------
+[tests.function_duplication]
+# 85% similar = probably copy-pasted
+similarity_threshold = 0.85
+
+# Check functions with 3+ lines
+min_lines_to_check = 3
+
+# Even private functions should not be duplicated
+ignore_name_patterns = []
+
+# -----------------------------------------------------------------------------
+# Cruft Detection - Clean code only
+# -----------------------------------------------------------------------------
+[tests.cruft]
+# Debug code patterns - these should NEVER be committed
+debug_patterns = [
+    "echo.*DEBUG",
+    "echo.*TODO",
+    "echo.*FIXME",
+    "echo.*XXX",
+    "set -x",
+    "PS4=",
+    "BASH_XTRACEFD",
+    "# DEBUG",
+    "# TEMP",
+    "# TEMPORARY",
+    "# REMOVE",
+    "# DELETE",
+]
+
+# TODO patterns - tracked but limited
+todo_patterns = [
+    "TODO:",
+    "TODO\\(",
+    "FIXME:",
+    "FIXME\\(",
+    "XXX:",
+    "XXX\\(",
+    "HACK:",
+    "HACK\\(",
+    "BUG:",
+    "BUG\\(",
+    "BROKEN:",
+    "REFACTOR:",
+]
+
+# Debug code = instant fail
+fail_on_debug = true
+
+# TODOs are warnings, but we limit them
+fail_on_todo = false
+
+# Max 10 TODOs per repo - forces resolution
+max_todos = 10
+
+# -----------------------------------------------------------------------------
+# Public API Documentation - All public functions must be documented
+# -----------------------------------------------------------------------------
+[tests.public_api_docs]
+# This annotation marks functions as public API
+public_api_annotation = "@@PUBLIC_API@@"
+
+# Required: must have a usage example
+required_elements = [
+    "Usage:",
+]
+
+# Recommended: should describe return value
+recommended_elements = [
+    "->",
+    "Returns",
+    "returns",
+    "Prints",
+    "prints",
+]
+
+# At least 1 line of documentation
+min_doc_lines = 1
+
+# -----------------------------------------------------------------------------
+# Output - Clear, actionable
+# -----------------------------------------------------------------------------
+[output]
+color = "auto"
+verbosity = "normal"
+format = "human"
+
+# Don't show passing tests - focus on what needs fixing
+show_passing = false
+
+# Always show summary
+show_summary = true

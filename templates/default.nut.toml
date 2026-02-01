@@ -1,0 +1,120 @@
+# =============================================================================
+# nutshell QA Configuration - Default
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# This is the DEFAULT template - sensible defaults that catch obvious issues
+# without being overly strict. Good starting point for most projects.
+#
+# For stricter conventions, see: tough.nut.toml
+# For all options documented: empty.nut.toml
+# =============================================================================
+
+[meta]
+version = "1.0.0"
+name = "Default Configuration"
+description = "Sensible defaults for general use. Catches obvious issues."
+
+# -----------------------------------------------------------------------------
+# Paths
+# -----------------------------------------------------------------------------
+[paths]
+lib_dir = "."
+exclude = [".git", ".legacy", "node_modules", "vendor", "target", "dist", "build"]
+include = ["*.sh"]
+
+# -----------------------------------------------------------------------------
+# Annotations
+# -----------------------------------------------------------------------------
+[annotations]
+public_api = "@@PUBLIC_API@@"
+allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
+
+# -----------------------------------------------------------------------------
+# Test Enable/Disable
+# -----------------------------------------------------------------------------
+[tests]
+syntax = true
+trivial_wrappers = false  # Off by default - opt-in for stricter projects
+file_size = true
+function_duplication = false  # Off by default - can be noisy
+cruft = true
+public_api_docs = false  # Off by default - opt-in for library projects
+
+# -----------------------------------------------------------------------------
+# Syntax Validation
+# -----------------------------------------------------------------------------
+[tests.syntax]
+shell = "bash"
+fail_on_error = true
+
+# -----------------------------------------------------------------------------
+# Trivial Wrappers (disabled by default, but configured if enabled)
+# -----------------------------------------------------------------------------
+[tests.trivial_wrappers]
+max_lines = 2
+local_usage_threshold = 3
+global_usage_threshold = 5
+min_vars_for_ergonomic = 2
+token_complexity_warn = 3
+token_complexity_pass = 4
+warn_threshold = 10
+fail_threshold = 50
+exempt_annotations = [
+    "@@PUBLIC_API@@",
+    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@",
+]
+
+# -----------------------------------------------------------------------------
+# File Size - Generous limits
+# -----------------------------------------------------------------------------
+[tests.file_size]
+max_loc = 500
+max_total_lines = 800
+exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
+exempt_patterns = []
+
+# -----------------------------------------------------------------------------
+# Function Duplication (disabled by default, but configured if enabled)
+# -----------------------------------------------------------------------------
+[tests.function_duplication]
+similarity_threshold = 0.90
+min_lines_to_check = 5
+ignore_name_patterns = ["^_.*"]
+
+# -----------------------------------------------------------------------------
+# Cruft Detection - Only catch obvious debug leftovers
+# -----------------------------------------------------------------------------
+[tests.cruft]
+debug_patterns = [
+    "echo.*DEBUG",
+    "set -x",
+]
+todo_patterns = [
+    "TODO:",
+    "FIXME:",
+]
+fail_on_debug = true
+fail_on_todo = false
+max_todos = 0  # Unlimited TODOs allowed
+
+# -----------------------------------------------------------------------------
+# Public API Docs (disabled by default, but configured if enabled)
+# -----------------------------------------------------------------------------
+[tests.public_api_docs]
+public_api_annotation = "@@PUBLIC_API@@"
+required_elements = ["Usage:"]
+recommended_elements = ["->"]
+min_doc_lines = 1
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+[output]
+color = "auto"
+verbosity = "normal"
+format = "human"
+show_passing = false  # Only show failures for cleaner output
+show_summary = true

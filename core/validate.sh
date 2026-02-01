@@ -43,6 +43,8 @@ is_empty() {
 # Command availability checks
 # -----------------------------------------------------------------------------
 
+# @@PUBLIC_API@@
+# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
 # Check if a command is available
 # Usage: has_command "git" -> returns 0 (true) or 1 (false)
 has_command() {

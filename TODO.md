@@ -6,6 +6,8 @@
 - [x] Rewrite `test_trivial_wrappers.sh` to be fully config-driven
 - [x] Framework loads canonical defaults from `templates/empty.nut.toml`
 - [x] User `nut.toml` overrides defaults correctly
+- [x] Clean tree-structured diagnostic output in `run_all.sh`
+- [x] Output level filtering (error, warn, info, debug)
 
 ### Annotation System Cleanup
 - [x] Remove ambiguous `#@@ALLOW_TRIVIAL_WRAPPER@@` pattern
@@ -22,59 +24,61 @@
 - [x] Design environment detection system (see DESIGN.md)
 - [x] Document tool combo support (see DESIGN.md)
 
+### deps.sh - Environment Detection
+- [x] Refactor to collect available tools without deciding "best"
+- [x] Implement path resolution:
+  - [x] Check user config for explicit paths first
+  - [x] Use `which` if available
+  - [x] Fall back to checking common locations (`/usr/bin`, `/bin`, `/usr/local/bin`, `/opt/homebrew/bin`)
+  - [x] Verify binary exists and is executable before accepting
+- [x] Implement `_TOOLS_AVAILABLE` detection
+- [x] Implement `_TOOL_PATH` associative array
+- [x] Implement `_TOOL_VARIANT` detection (gnu/bsd/gawk/mawk/etc.)
+- [x] Implement `_TOOL_CAN` capability flags:
+  - [x] `sed_inplace`, `sed_extended`, `sed_regex_r`
+  - [x] `grep_pcre`, `grep_extended`, `grep_include`, `grep_only_matching`
+  - [x] `awk_regex`, `awk_nextfile`, `awk_strftime`, `awk_gensub`
+  - [x] `stat_format`
+  - [x] `perl_regex`, `perl_inplace`, `perl_json`
+  - [x] `find_maxdepth`, `find_printf`
+- [x] Cache all info in readonly vars on first source
+- [x] Add user preference overrides from `nut.toml` `[deps.paths]` section
+
+### text.sh - Stub + Impl Refactor
+- [x] Create `text/impl/` directory structure
+- [x] Implement self-replacing stub for `text_replace`:
+  - [x] `sed_replace.sh` (handles GNU/BSD variants)
+  - [x] `perl_replace.sh`
+  - [x] `awk_replace.sh`
+- [x] Implement self-replacing stub for `text_grep`:
+  - [x] `grep_match.sh`
+  - [x] `perl_match.sh`
+- [x] Implement self-replacing stub for `text_contains`
+- [x] Implement self-replacing stub for `text_count_matches`
+- [x] Add module status vars: `_TEXT_READY`, `_TEXT_ERROR`
+- [x] Add `text_ready()` and `text_error()` functions
+
+### fs.sh - Stub + Impl Refactor
+- [x] Create `fs/impl/` directory structure
+- [x] Implement self-replacing stub for `fs_size`:
+  - [x] `stat_gnu.sh`
+  - [x] `stat_bsd.sh`
+  - [x] `perl_stat.sh` (fallback)
+- [x] Implement self-replacing stub for `fs_mtime`
+- [x] Add module status vars: `_FS_READY`, `_FS_ERROR`
+- [x] Add `fs_ready()` and `fs_error()` functions
+
+### Impl File Standards
+- [x] Each impl works both sourced and standalone
+- [x] Impl overwrites public function when sourced
+- [x] Impl reads environment vars directly (no deps API calls)
+
 ## High Priority
 
-### Implement Lazy-Init Stub Architecture
-
-#### deps.sh - Environment Detection
-- [ ] Refactor to collect available tools without deciding "best"
-- [ ] Implement path resolution:
-  - [ ] Check user config for explicit paths first
-  - [ ] Use `which` if available
-  - [ ] Fall back to checking common locations (`/usr/bin`, `/bin`, `/usr/local/bin`, `/opt/homebrew/bin`)
-  - [ ] Verify binary exists and is executable before accepting
-- [ ] Implement `_TOOLS_AVAILABLE` detection
-- [ ] Implement `_TOOL_PATH` associative array
-- [ ] Implement `_TOOL_VARIANT` detection (gnu/bsd/gawk/mawk/etc.)
-- [ ] Implement `_TOOL_CAN` capability flags:
-  - [ ] `sed_inplace` - can sed do -i properly?
-  - [ ] `sed_extended` - does sed support -E?
-  - [ ] `grep_pcre` - does grep support -P?
-  - [ ] `grep_extended` - does grep support -E?
-  - [ ] `stat_format` - does stat support format strings?
-- [ ] Cache all info in readonly vars on first source
-- [ ] Add user preference overrides from `nut.toml` `[deps]` section
-
-#### text.sh - Stub + Impl Refactor
-- [ ] Create `text/impl/` directory structure
-- [ ] Implement self-replacing stub for `text_replace`:
-  - [ ] `sed_replace.sh` (handles GNU/BSD variants)
-  - [ ] `perl_replace.sh`
-  - [ ] `awk_replace.sh`
-- [ ] Implement self-replacing stub for `text_grep`:
-  - [ ] `grep_match.sh`
-  - [ ] `perl_match.sh`
-  - [ ] `awk_match.sh`
-- [ ] Implement self-replacing stub for `text_contains`
-- [ ] Implement self-replacing stub for `text_count_matches`
+### Impl Combo Support
 - [ ] Implement combo impls:
   - [ ] `combo/grep_sed.sh` for search-and-transform operations
-- [ ] Add module status vars: `_TEXT_READY`, `_TEXT_ERROR`
-
-#### fs.sh - Stub + Impl Refactor
-- [ ] Create `fs/impl/` directory structure
-- [ ] Implement self-replacing stub for `fs_size`:
-  - [ ] `stat_gnu.sh`
-  - [ ] `stat_bsd.sh`
-  - [ ] `perl_stat.sh` (fallback)
-- [ ] Implement self-replacing stub for `fs_mtime`
-- [ ] Add module status vars: `_FS_READY`, `_FS_ERROR`
-
-#### Impl File Standards
-- [ ] Each impl works both sourced and standalone
-- [ ] Impl overwrites public function when sourced
-- [ ] Impl reads environment vars directly (no deps API calls)
-- [ ] Document impl file contract
+- [ ] Document impl file contract in DESIGN.md
 
 ### Remaining Config-Driven QA Tests
 - [ ] Update `test_syntax.sh` to check enable flag

@@ -1,39 +1,30 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/deps.sh - Dependency checking and variant detection
+# nutshell/core/deps.sh - Environment detection and tool availability
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
+# @@ALLOW_LOC_450@@
 # Layer -1 (Foundation): Depends only on os.sh
 #
-# Nutshell requires certain external tools that are typically pre-installed
-# on Unix systems but may vary in their implementation (BSD vs GNU).
-# This module detects what's available and provides abstraction.
+# This module detects what external tools are available and collects
+# information about them (paths, variants, capabilities). It does NOT
+# decide which tool is "best" for any operation; that's the job of
+# the module that actually uses the tool.
 #
-# Required tools:
-#   - sed      (stream editor)
-#   - awk      (text processing)
-#   - grep     (pattern matching)
-#   - stat     (file information)
-#   - mktemp   (temporary files)
-#   - find     (file discovery)
-#   - sort     (sorting)
-#   - wc       (word/line count)
-#   - tr       (character translation)
-#   - head     (first lines)
-#   - tail     (last lines)
-#   - dirname  (directory portion of path)
-#   - basename (filename portion of path)
-#   - uname    (system information)
+# Detection runs once when this file is sourced. Results are cached
+# in readonly variables for fast access.
 #
-# Environment variables for custom paths:
-#   NUTSHELL_SED      - Path to sed
-#   NUTSHELL_AWK      - Path to awk
-#   NUTSHELL_GREP     - Path to grep
-#   NUTSHELL_STAT     - Path to stat
-#   NUTSHELL_MKTEMP   - Path to mktemp
-#   NUTSHELL_FIND     - Path to find
+# Tools detected:
+#   sed, awk, grep, perl, stat, mktemp, find, sort, wc, tr,
+#   head, tail, dirname, basename, uname, cut, tee, xargs
+#
+# Configuration:
+#   Tool paths can be overridden in nut.toml under [deps.paths]:
+#     [deps.paths]
+#     sed = "/opt/gnu/bin/sed"
+#     awk = "/usr/local/bin/gawk"
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -45,55 +36,143 @@ readonly _NUTSHELL_CORE_DEPS_SH=1
 # -----------------------------------------------------------------------------
 
 _NUTSHELL_DEPS_DIR="${BASH_SOURCE[0]%/*}"
+# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
+[[ "$_NUTSHELL_DEPS_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_DEPS_DIR="."
 source "${_NUTSHELL_DEPS_DIR}/os.sh"
 
 # -----------------------------------------------------------------------------
-# Tool paths (resolved once at load time)
+# Configuration file location
 # -----------------------------------------------------------------------------
 
-# These can be overridden via environment variables
-NUTSHELL_SED="${NUTSHELL_SED:-}"
-NUTSHELL_AWK="${NUTSHELL_AWK:-}"
-NUTSHELL_GREP="${NUTSHELL_GREP:-}"
-NUTSHELL_STAT="${NUTSHELL_STAT:-}"
-NUTSHELL_MKTEMP="${NUTSHELL_MKTEMP:-}"
-NUTSHELL_FIND="${NUTSHELL_FIND:-}"
-
-# Detected variants (gnu/bsd/unknown)
-_NUTSHELL_SED_VARIANT=""
-_NUTSHELL_AWK_VARIANT=""
-_NUTSHELL_GREP_VARIANT=""
-_NUTSHELL_STAT_VARIANT=""
-
-# -----------------------------------------------------------------------------
-# Internal: Tool detection
-# -----------------------------------------------------------------------------
-
-# Find a command, preferring custom path, then common locations
-_deps_find_cmd() {
-    local name="$1"
-    local custom_var="$2"
-    local custom_path="${!custom_var:-}"
+# Find nut.toml - check current dir, then repo root, then nutshell dir
+_deps_find_config() {
+    local check_paths=(
+        "${PWD}/nut.toml"
+        "${_NUTSHELL_DEPS_DIR}/../nut.toml"
+    )
     
-    # Custom path takes precedence
-    if [[ -n "$custom_path" ]] && [[ -x "$custom_path" ]]; then
-        echo "$custom_path"
-        return 0
+    for path in "${check_paths[@]}"; do
+        if [[ -f "$path" ]]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# Simple TOML value extraction (no toml.sh dependency to avoid circular deps)
+# Only handles simple key = "value" or key = value cases
+_deps_toml_get() {
+    local file="$1"
+    local section="$2"
+    local key="$3"
+    
+    [[ ! -f "$file" ]] && return 1
+    
+    local in_section=0
+    local current_section=""
+    local line
+    
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+        
+        # Section header
+        if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+            current_section="${BASH_REMATCH[1]}"
+            if [[ "$current_section" == "$section" ]]; then
+                in_section=1
+            else
+                in_section=0
+            fi
+            continue
+        fi
+        
+        # Skip if not in the right section
+        [[ $in_section -eq 0 ]] && continue
+        
+        # Key = value
+        if [[ "$line" =~ ^[[:space:]]*([^=]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+            local k="${BASH_REMATCH[1]}"
+            local v="${BASH_REMATCH[2]}"
+            # Trim whitespace
+            k="${k#"${k%%[![:space:]]*}"}"
+            k="${k%"${k##*[![:space:]]}"}"
+            v="${v#"${v%%[![:space:]]*}"}"
+            v="${v%"${v##*[![:space:]]}"}"
+            # Remove quotes
+            v="${v#\"}"
+            v="${v%\"}"
+            v="${v#\'}"
+            v="${v%\'}"
+            
+            if [[ "$k" == "$key" ]]; then
+                echo "$v"
+                return 0
+            fi
+        fi
+    done < "$file"
+    
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# Global state - populated by _deps_init
+# -----------------------------------------------------------------------------
+
+# Space-separated list of available tools
+declare _TOOLS_AVAILABLE=""
+
+# Associative array: tool name -> path
+declare -A _TOOL_PATH=()
+
+# Associative array: tool name -> variant (gnu/bsd/gawk/mawk/nawk/unknown)
+declare -A _TOOL_VARIANT=()
+
+# Associative array: capability -> 1 (present) or 0 (absent)
+# Capabilities are named as tool_capability, e.g., sed_inplace, grep_pcre
+declare -A _TOOL_CAN=()
+
+# -----------------------------------------------------------------------------
+# Internal: Path resolution
+# -----------------------------------------------------------------------------
+
+# Find tool path using resolution order:
+# 1. User config (nut.toml [deps.paths])
+# 2. which (if available)
+# 3. Common locations, verified for executability
+_deps_find_tool() {
+    local tool="$1"
+    local config_file="$2"
+    
+    # 1. Check user config first
+    if [[ -n "$config_file" ]]; then
+        local user_path
+        user_path="$(_deps_toml_get "$config_file" "deps.paths" "$tool")"
+        if [[ -n "$user_path" ]] && [[ -x "$user_path" ]]; then
+            echo "$user_path"
+            return 0
+        fi
     fi
     
-    # Try command -v (standard lookup)
-    local found
-    if found="$(command -v "$name" 2>/dev/null)"; then
-        echo "$found"
-        return 0
+    # 2. Try which if available (using command -v to check for which itself)
+    if command -v which &>/dev/null; then
+        local found
+        found="$(which "$tool" 2>/dev/null)"
+        if [[ -n "$found" ]] && [[ -x "$found" ]]; then
+            echo "$found"
+            return 0
+        fi
     fi
     
-    # Try common locations
+    # 3. Check common locations
     local locations=(
-        "/usr/bin/$name"
-        "/bin/$name"
-        "/usr/local/bin/$name"
-        "/opt/homebrew/bin/$name"
+        "/usr/bin/${tool}"
+        "/bin/${tool}"
+        "/usr/local/bin/${tool}"
+        "/opt/homebrew/bin/${tool}"
     )
     
     for loc in "${locations[@]}"; do
@@ -103,60 +182,220 @@ _deps_find_cmd() {
         fi
     done
     
+    # Not found
     return 1
 }
 
-# Detect sed variant (gnu/bsd)
+# -----------------------------------------------------------------------------
+# Internal: Variant detection
+# -----------------------------------------------------------------------------
+
 _deps_detect_sed_variant() {
-    local sed_cmd="$1"
+    local cmd="$1"
     
-    # GNU sed has --version, BSD sed does not
-    if "$sed_cmd" --version 2>/dev/null | grep -q "GNU"; then
+    # GNU sed has --version
+    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
-    elif "$sed_cmd" --version 2>&1 | grep -q "illegal option"; then
-        echo "bsd"
-    else
-        echo "unknown"
+        return
     fi
+    
+    # BSD sed errors on --version
+    if "$cmd" --version 2>&1 | grep -qE "(illegal|invalid) option"; then
+        echo "bsd"
+        return
+    fi
+    
+    echo "unknown"
 }
 
-# Detect awk variant (gawk/mawk/nawk/bsd)
 _deps_detect_awk_variant() {
-    local awk_cmd="$1"
+    local cmd="$1"
     
-    if "$awk_cmd" --version 2>/dev/null | grep -qi "GNU Awk"; then
+    # GNU awk (gawk)
+    if "$cmd" --version 2>/dev/null | grep -qi "GNU Awk"; then
         echo "gawk"
-    elif "$awk_cmd" -W version 2>/dev/null | grep -qi "mawk"; then
+        return
+    fi
+    
+    # mawk
+    if "$cmd" -W version 2>/dev/null | grep -qi "mawk"; then
         echo "mawk"
-    elif [[ "$(basename "$awk_cmd")" == "nawk" ]]; then
+        return
+    fi
+    
+    # nawk (check binary name as fallback)
+    if [[ "$(basename "$cmd")" == "nawk" ]]; then
         echo "nawk"
-    else
-        echo "bsd"
+        return
     fi
+    
+    # Assume BSD/POSIX awk
+    echo "bsd"
 }
 
-# Detect grep variant (gnu/bsd)
 _deps_detect_grep_variant() {
-    local grep_cmd="$1"
+    local cmd="$1"
     
-    if "$grep_cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
-    else
-        echo "bsd"
+        return
     fi
+    
+    echo "bsd"
 }
 
-# Detect stat variant (gnu/bsd)
 _deps_detect_stat_variant() {
-    local stat_cmd="$1"
+    local cmd="$1"
     
-    # GNU stat uses -c for format, BSD uses -f
-    if "$stat_cmd" --version 2>/dev/null | grep -q "GNU"; then
+    # GNU stat has --version
+    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
-    elif "$stat_cmd" -f%z / 2>/dev/null >/dev/null; then
+        return
+    fi
+    
+    # BSD stat uses -f for format
+    if "$cmd" -f%z / 2>/dev/null >/dev/null; then
         echo "bsd"
-    else
-        echo "unknown"
+        return
+    fi
+    
+    echo "unknown"
+}
+
+_deps_detect_find_variant() {
+    local cmd="$1"
+    
+    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+        echo "gnu"
+        return
+    fi
+    
+    echo "bsd"
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Capability detection
+# -----------------------------------------------------------------------------
+
+_deps_detect_capabilities() {
+    # sed capabilities
+    if [[ -n "${_TOOL_PATH[sed]:-}" ]]; then
+        local sed_cmd="${_TOOL_PATH[sed]}"
+        local variant="${_TOOL_VARIANT[sed]:-unknown}"
+        
+        # In-place editing
+        # GNU: sed -i 'cmd' file
+        # BSD: sed -i '' 'cmd' file
+        _TOOL_CAN[sed_inplace]=1
+        
+        # Extended regex (-E)
+        # Both GNU and BSD support -E now
+        if "$sed_cmd" -E 's/a/b/' /dev/null 2>/dev/null; then
+            _TOOL_CAN[sed_extended]=1
+        else
+            _TOOL_CAN[sed_extended]=0
+        fi
+        
+        # GNU-specific -r (same as -E but older)
+        if [[ "$variant" == "gnu" ]]; then
+            _TOOL_CAN[sed_regex_r]=1
+        else
+            _TOOL_CAN[sed_regex_r]=0
+        fi
+    fi
+    
+    # grep capabilities
+    if [[ -n "${_TOOL_PATH[grep]:-}" ]]; then
+        local grep_cmd="${_TOOL_PATH[grep]}"
+        
+        # Extended regex (-E)
+        _TOOL_CAN[grep_extended]=1
+        
+        # PCRE (-P) - mainly GNU grep
+        if echo "test" | "$grep_cmd" -P "t.st" &>/dev/null; then
+            _TOOL_CAN[grep_pcre]=1
+        else
+            _TOOL_CAN[grep_pcre]=0
+        fi
+        
+        # --include/--exclude for recursive searches
+        if "$grep_cmd" --help 2>&1 | grep -q -- '--include'; then
+            _TOOL_CAN[grep_include]=1
+        else
+            _TOOL_CAN[grep_include]=0
+        fi
+        
+        # -o (only matching)
+        if echo "test" | "$grep_cmd" -o "es" &>/dev/null; then
+            _TOOL_CAN[grep_only_matching]=1
+        else
+            _TOOL_CAN[grep_only_matching]=0
+        fi
+    fi
+    
+    # awk capabilities
+    if [[ -n "${_TOOL_PATH[awk]:-}" ]]; then
+        local awk_cmd="${_TOOL_PATH[awk]}"
+        local variant="${_TOOL_VARIANT[awk]:-unknown}"
+        
+        # Regex matching (all awks have this)
+        _TOOL_CAN[awk_regex]=1
+        
+        # gawk-specific features
+        if [[ "$variant" == "gawk" ]]; then
+            _TOOL_CAN[awk_nextfile]=1
+            _TOOL_CAN[awk_strftime]=1
+            _TOOL_CAN[awk_gensub]=1
+        else
+            _TOOL_CAN[awk_nextfile]=0
+            _TOOL_CAN[awk_strftime]=0
+            _TOOL_CAN[awk_gensub]=0
+        fi
+    fi
+    
+    # stat capabilities
+    if [[ -n "${_TOOL_PATH[stat]:-}" ]]; then
+        local stat_cmd="${_TOOL_PATH[stat]}"
+        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+        
+        # Format strings
+        if [[ "$variant" == "gnu" ]] || [[ "$variant" == "bsd" ]]; then
+            _TOOL_CAN[stat_format]=1
+        else
+            _TOOL_CAN[stat_format]=0
+        fi
+    fi
+    
+    # perl capabilities
+    if [[ -n "${_TOOL_PATH[perl]:-}" ]]; then
+        local perl_cmd="${_TOOL_PATH[perl]}"
+        
+        # Basic perl is always capable
+        _TOOL_CAN[perl_regex]=1
+        _TOOL_CAN[perl_inplace]=1
+        
+        # Check for common modules (optional)
+        if "$perl_cmd" -MJSON -e '1' 2>/dev/null; then
+            _TOOL_CAN[perl_json]=1
+        else
+            _TOOL_CAN[perl_json]=0
+        fi
+    fi
+    
+    # find capabilities
+    if [[ -n "${_TOOL_PATH[find]:-}" ]]; then
+        local find_cmd="${_TOOL_PATH[find]}"
+        local variant="${_TOOL_VARIANT[find]:-unknown}"
+        
+        # -maxdepth (both have it now)
+        _TOOL_CAN[find_maxdepth]=1
+        
+        # -printf (GNU only)
+        if [[ "$variant" == "gnu" ]]; then
+            _TOOL_CAN[find_printf]=1
+        else
+            _TOOL_CAN[find_printf]=0
+        fi
     fi
 }
 
@@ -165,148 +404,175 @@ _deps_detect_stat_variant() {
 # -----------------------------------------------------------------------------
 
 _deps_init() {
-    # Find tools
-    NUTSHELL_SED="$(_deps_find_cmd "sed" "NUTSHELL_SED")" || NUTSHELL_SED=""
-    NUTSHELL_AWK="$(_deps_find_cmd "awk" "NUTSHELL_AWK")" || NUTSHELL_AWK=""
-    NUTSHELL_GREP="$(_deps_find_cmd "grep" "NUTSHELL_GREP")" || NUTSHELL_GREP=""
-    NUTSHELL_STAT="$(_deps_find_cmd "stat" "NUTSHELL_STAT")" || NUTSHELL_STAT=""
-    NUTSHELL_MKTEMP="$(_deps_find_cmd "mktemp" "NUTSHELL_MKTEMP")" || NUTSHELL_MKTEMP=""
-    NUTSHELL_FIND="$(_deps_find_cmd "find" "NUTSHELL_FIND")" || NUTSHELL_FIND=""
+    local config_file
+    config_file="$(_deps_find_config)" || config_file=""
     
-    # Detect variants
-    [[ -n "$NUTSHELL_SED" ]] && _NUTSHELL_SED_VARIANT="$(_deps_detect_sed_variant "$NUTSHELL_SED")"
-    [[ -n "$NUTSHELL_AWK" ]] && _NUTSHELL_AWK_VARIANT="$(_deps_detect_awk_variant "$NUTSHELL_AWK")"
-    [[ -n "$NUTSHELL_GREP" ]] && _NUTSHELL_GREP_VARIANT="$(_deps_detect_grep_variant "$NUTSHELL_GREP")"
-    [[ -n "$NUTSHELL_STAT" ]] && _NUTSHELL_STAT_VARIANT="$(_deps_detect_stat_variant "$NUTSHELL_STAT")"
-}
-
-# Run initialization
-_deps_init
-
-# -----------------------------------------------------------------------------
-# Public API
-# -----------------------------------------------------------------------------
-
-# @@PUBLIC_API@@
-# Check if a required tool is available
-# Usage: deps_has "toolname" -> returns 0 (true) or 1 (false)
-deps_has() {
-    local tool="$1"
+    # List of tools to detect
+    local tools=(
+        sed awk grep perl stat mktemp find sort wc tr
+        head tail dirname basename uname cut tee xargs
+    )
     
-    case "$tool" in
-        sed)    [[ -n "$NUTSHELL_SED" ]] ;;
-        awk)    [[ -n "$NUTSHELL_AWK" ]] ;;
-        grep)   [[ -n "$NUTSHELL_GREP" ]] ;;
-        stat)   [[ -n "$NUTSHELL_STAT" ]] ;;
-        mktemp) [[ -n "$NUTSHELL_MKTEMP" ]] ;;
-        find)   [[ -n "$NUTSHELL_FIND" ]] ;;
-        *)      command -v "$tool" &>/dev/null ;;
-    esac
-}
-
-# @@PUBLIC_API@@
-# Get the path to a tool
-# Usage: deps_path "toolname" -> prints path or returns 1
-deps_path() {
-    local tool="$1"
-    
-    case "$tool" in
-        sed)    [[ -n "$NUTSHELL_SED" ]] && echo "$NUTSHELL_SED" ;;
-        awk)    [[ -n "$NUTSHELL_AWK" ]] && echo "$NUTSHELL_AWK" ;;
-        grep)   [[ -n "$NUTSHELL_GREP" ]] && echo "$NUTSHELL_GREP" ;;
-        stat)   [[ -n "$NUTSHELL_STAT" ]] && echo "$NUTSHELL_STAT" ;;
-        mktemp) [[ -n "$NUTSHELL_MKTEMP" ]] && echo "$NUTSHELL_MKTEMP" ;;
-        find)   [[ -n "$NUTSHELL_FIND" ]] && echo "$NUTSHELL_FIND" ;;
-        *)      command -v "$tool" 2>/dev/null ;;
-    esac
-}
-
-# @@PUBLIC_API@@
-# Get the variant of a tool (gnu/bsd/gawk/mawk/etc)
-# Usage: deps_variant "toolname" -> prints variant or "unknown"
-deps_variant() {
-    local tool="$1"
-    
-    case "$tool" in
-        sed)  echo "${_NUTSHELL_SED_VARIANT:-unknown}" ;;
-        awk)  echo "${_NUTSHELL_AWK_VARIANT:-unknown}" ;;
-        grep) echo "${_NUTSHELL_GREP_VARIANT:-unknown}" ;;
-        stat) echo "${_NUTSHELL_STAT_VARIANT:-unknown}" ;;
-        *)    echo "unknown" ;;
-    esac
-}
-
-# @@PUBLIC_API@@
-# Check if a tool is the GNU variant
-# Usage: deps_is_gnu "toolname" -> returns 0 (true) or 1 (false)
-deps_is_gnu() {
-    local tool="$1"
-    local variant
-    variant="$(deps_variant "$tool")"
-    [[ "$variant" == "gnu" ]] || [[ "$variant" == "gawk" ]]
-}
-
-# @@PUBLIC_API@@
-# Check if a tool is the BSD variant
-# Usage: deps_is_bsd "toolname" -> returns 0 (true) or 1 (false)
-deps_is_bsd() {
-    local tool="$1"
-    local variant
-    variant="$(deps_variant "$tool")"
-    [[ "$variant" == "bsd" ]]
-}
-
-# @@PUBLIC_API@@
-# Check all required dependencies and report missing ones
-# Usage: deps_check_all -> returns 0 if all present, 1 if any missing
-deps_check_all() {
-    local missing=()
-    local tools=("sed" "awk" "grep" "stat" "mktemp" "find" "sort" "wc" "tr" "head" "tail" "dirname" "basename" "uname")
+    local available=()
+    local tool path variant
     
     for tool in "${tools[@]}"; do
-        if ! deps_has "$tool"; then
-            missing+=("$tool")
+        if path="$(_deps_find_tool "$tool" "$config_file")"; then
+            _TOOL_PATH[$tool]="$path"
+            available+=("$tool")
+            
+            # Detect variant for tools that have meaningful variants
+            case "$tool" in
+                sed)  _TOOL_VARIANT[$tool]="$(_deps_detect_sed_variant "$path")" ;;
+                awk)  _TOOL_VARIANT[$tool]="$(_deps_detect_awk_variant "$path")" ;;
+                grep) _TOOL_VARIANT[$tool]="$(_deps_detect_grep_variant "$path")" ;;
+                stat) _TOOL_VARIANT[$tool]="$(_deps_detect_stat_variant "$path")" ;;
+                find) _TOOL_VARIANT[$tool]="$(_deps_detect_find_variant "$path")" ;;
+                *)    _TOOL_VARIANT[$tool]="standard" ;;
+            esac
         fi
     done
     
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "Missing required tools: ${missing[*]}" >&2
-        return 1
-    fi
+    # Build space-separated available list
+    _TOOLS_AVAILABLE="${available[*]}"
     
+    # Detect capabilities based on what we found
+    _deps_detect_capabilities
+}
+
+# Run initialization immediately
+_deps_init
+
+# Make arrays readonly after init (bash 4.2+)
+# Note: associative arrays can't be made readonly in all bash versions,
+# but we document that these should not be modified
+declare -r _TOOLS_AVAILABLE
+
+# -----------------------------------------------------------------------------
+# Public API - Availability checks
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Check if a tool is available
+# Usage: deps_has "sed" -> returns 0 (true) or 1 (false)
+deps_has() {
+    local tool="${1:-}"
+    [[ -n "${_TOOL_PATH[$tool]:-}" ]]
+}
+
+# @@PUBLIC_API@@
+# Check if multiple tools are all available
+# Usage: deps_has_all "sed" "awk" "grep" -> returns 0 if all present
+deps_has_all() {
+    local tool
+    for tool in "$@"; do
+        [[ -z "${_TOOL_PATH[$tool]:-}" ]] && return 1
+    done
     return 0
 }
 
 # @@PUBLIC_API@@
-# Print dependency information for debugging
-# Usage: deps_info -> prints tool paths and variants
-deps_info() {
-    echo "nutshell dependency information:"
-    echo "================================"
-    echo ""
-    echo "Tool paths:"
-    echo "  sed:    ${NUTSHELL_SED:-NOT FOUND}"
-    echo "  awk:    ${NUTSHELL_AWK:-NOT FOUND}"
-    echo "  grep:   ${NUTSHELL_GREP:-NOT FOUND}"
-    echo "  stat:   ${NUTSHELL_STAT:-NOT FOUND}"
-    echo "  mktemp: ${NUTSHELL_MKTEMP:-NOT FOUND}"
-    echo "  find:   ${NUTSHELL_FIND:-NOT FOUND}"
-    echo ""
-    echo "Variants:"
-    echo "  sed:    ${_NUTSHELL_SED_VARIANT:-unknown}"
-    echo "  awk:    ${_NUTSHELL_AWK_VARIANT:-unknown}"
-    echo "  grep:   ${_NUTSHELL_GREP_VARIANT:-unknown}"
-    echo "  stat:   ${_NUTSHELL_STAT_VARIANT:-unknown}"
-    echo ""
-    echo "Operating system: $(os_name)"
-    echo "Architecture:     $(os_arch)"
+# Check if at least one of the tools is available
+# Usage: deps_has_any "perl" "sed" -> returns 0 if any present
+deps_has_any() {
+    local tool
+    for tool in "$@"; do
+        [[ -n "${_TOOL_PATH[$tool]:-}" ]] && return 0
+    done
+    return 1
 }
 
 # @@PUBLIC_API@@
-# Require a tool to be present, exit if not
-# Usage: deps_require "toolname" ["error message"]
+# Get the list of available tools (space-separated)
+# Usage: deps_available -> "sed awk grep perl stat..."
+deps_available() {
+    echo "$_TOOLS_AVAILABLE"
+}
+
+# -----------------------------------------------------------------------------
+# Public API - Path and variant access
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Get the path to a tool
+# Usage: deps_path "sed" -> "/usr/bin/sed"
+deps_path() {
+    local tool="${1:-}"
+    local path="${_TOOL_PATH[$tool]:-}"
+    
+    if [[ -n "$path" ]]; then
+        echo "$path"
+        return 0
+    fi
+    
+    return 1
+}
+
+# @@PUBLIC_API@@
+# Get the variant of a tool
+# Usage: deps_variant "sed" -> "gnu" or "bsd"
+deps_variant() {
+    local tool="${1:-}"
+    echo "${_TOOL_VARIANT[$tool]:-unknown}"
+}
+
+# @@PUBLIC_API@@
+# Check if tool is GNU variant
+# Usage: deps_is_gnu "sed" -> returns 0 or 1
+deps_is_gnu() {
+    local tool="${1:-}"
+    local variant="${_TOOL_VARIANT[$tool]:-}"
+    [[ "$variant" == "gnu" ]] || [[ "$variant" == "gawk" ]]
+}
+
+# @@PUBLIC_API@@
+# Check if tool is BSD variant
+# Usage: deps_is_bsd "sed" -> returns 0 or 1
+deps_is_bsd() {
+    local tool="${1:-}"
+    local variant="${_TOOL_VARIANT[$tool]:-}"
+    [[ "$variant" == "bsd" ]]
+}
+
+# -----------------------------------------------------------------------------
+# Public API - Capability checks
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Check if a capability is available
+# Usage: deps_can "grep_pcre" -> returns 0 or 1
+deps_can() {
+    local cap="${1:-}"
+    [[ "${_TOOL_CAN[$cap]:-0}" == "1" ]]
+}
+
+# @@PUBLIC_API@@
+# Get capability value (1 or 0)
+# Usage: deps_cap "grep_pcre" -> "1" or "0"
+deps_cap() {
+    local cap="${1:-}"
+    echo "${_TOOL_CAN[$cap]:-0}"
+}
+
+# @@PUBLIC_API@@
+# List all capabilities (one per line: cap=value)
+# Usage: deps_caps -> "sed_inplace=1\ngrep_pcre=1\n..."
+deps_caps() {
+    local cap
+    for cap in "${!_TOOL_CAN[@]}"; do
+        echo "${cap}=${_TOOL_CAN[$cap]}"
+    done | sort
+}
+
+# -----------------------------------------------------------------------------
+# Public API - Requirement enforcement
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Require a tool to be present; exit if not
+# Usage: deps_require "sed" ["Custom error message"]
 deps_require() {
-    local tool="$1"
+    local tool="${1:-}"
     local msg="${2:-Required tool '$tool' not found}"
     
     if ! deps_has "$tool"; then
@@ -316,57 +582,158 @@ deps_require() {
 }
 
 # @@PUBLIC_API@@
-# Require all standard tools to be present
-# Usage: deps_require_all -> exits if any missing
+# Require multiple tools; exit if any missing
+# Usage: deps_require_all "sed" "awk" "grep"
 deps_require_all() {
-    if ! deps_check_all; then
-        echo "[FATAL] Cannot continue without required tools." >&2
+    local missing=()
+    local tool
+    
+    for tool in "$@"; do
+        deps_has "$tool" || missing+=("$tool")
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "[FATAL] Required tools not found: ${missing[*]}" >&2
+        exit 1
+    fi
+}
+
+# @@PUBLIC_API@@
+# Require a capability; exit if not available
+# Usage: deps_require_cap "grep_pcre" ["Custom error message"]
+deps_require_cap() {
+    local cap="${1:-}"
+    local msg="${2:-Required capability '$cap' not available}"
+    
+    if ! deps_can "$cap"; then
+        echo "[FATAL] $msg" >&2
         exit 1
     fi
 }
 
 # -----------------------------------------------------------------------------
-# Portable wrappers for tools with BSD/GNU differences
+# Public API - Diagnostics
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
-# Portable sed in-place edit (handles BSD vs GNU difference)
-# Usage: deps_sed_inplace "pattern" "file"
+# Print dependency information for debugging
+# Usage: deps_info -> prints formatted tool info
+deps_info() {
+    echo "nutshell dependency information"
+    echo "================================"
+    echo ""
+    echo "Operating system: $(os_name)"
+    echo "Architecture:     $(os_arch)"
+    echo ""
+    echo "Tool paths and variants:"
+    
+    local tool path variant
+    for tool in sed awk grep perl stat mktemp find sort wc tr head tail cut tee xargs; do
+        path="${_TOOL_PATH[$tool]:-}"
+        variant="${_TOOL_VARIANT[$tool]:-}"
+        
+        if [[ -n "$path" ]]; then
+            printf "  %-10s %s" "$tool:" "$path"
+            [[ -n "$variant" && "$variant" != "standard" ]] && printf " (%s)" "$variant"
+            echo ""
+        else
+            printf "  %-10s NOT FOUND\n" "$tool:"
+        fi
+    done
+    
+    echo ""
+    echo "Capabilities:"
+    local cap val
+    for cap in $(deps_caps | sort); do
+        echo "  $cap"
+    done
+}
+
+# @@PUBLIC_API@@
+# Check all common tools and report status
+# Usage: deps_check -> returns 0 if all basic tools present
+deps_check() {
+    local required=(sed awk grep stat mktemp find sort wc tr head tail)
+    local missing=()
+    local tool
+    
+    for tool in "${required[@]}"; do
+        deps_has "$tool" || missing+=("$tool")
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "Missing tools: ${missing[*]}" >&2
+        return 1
+    fi
+    
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Convenience: Direct tool execution with resolved path
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Run a tool using its detected path
+# Usage: deps_run "sed" -i 's/a/b/' file.txt
+deps_run() {
+    local tool="${1:-}"
+    shift
+    
+    local path="${_TOOL_PATH[$tool]:-}"
+    if [[ -z "$path" ]]; then
+        echo "[ERROR] Tool '$tool' not available" >&2
+        return 1
+    fi
+    
+    "$path" "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Portable wrappers for common operations with BSD/GNU differences
+# These are convenience functions; modules can also access _TOOL_PATH directly
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Portable sed in-place edit
+# Usage: deps_sed_inplace "s/old/new/g" "file.txt"
 deps_sed_inplace() {
     local pattern="$1"
     local file="$2"
+    local sed_path="${_TOOL_PATH[sed]:-sed}"
     
     if deps_is_gnu "sed"; then
-        "$NUTSHELL_SED" -i "$pattern" "$file"
+        "$sed_path" -i "$pattern" "$file"
     else
-        # BSD sed requires an argument after -i (backup extension)
-        # Empty string means no backup
-        "$NUTSHELL_SED" -i '' "$pattern" "$file"
+        # BSD sed requires argument after -i (backup extension; '' means no backup)
+        "$sed_path" -i '' "$pattern" "$file"
     fi
 }
 
 # @@PUBLIC_API@@
 # Portable stat for file size in bytes
-# Usage: deps_stat_size "file" -> prints size in bytes
+# Usage: deps_stat_size "file" -> "12345"
 deps_stat_size() {
     local file="$1"
+    local stat_path="${_TOOL_PATH[stat]:-stat}"
     
     if deps_is_gnu "stat"; then
-        "$NUTSHELL_STAT" -c%s "$file"
+        "$stat_path" -c%s "$file"
     else
-        "$NUTSHELL_STAT" -f%z "$file"
+        "$stat_path" -f%z "$file"
     fi
 }
 
 # @@PUBLIC_API@@
 # Portable stat for modification time (epoch seconds)
-# Usage: deps_stat_mtime "file" -> prints mtime as epoch seconds
+# Usage: deps_stat_mtime "file" -> "1234567890"
 deps_stat_mtime() {
     local file="$1"
+    local stat_path="${_TOOL_PATH[stat]:-stat}"
     
     if deps_is_gnu "stat"; then
-        "$NUTSHELL_STAT" -c%Y "$file"
+        "$stat_path" -c%Y "$file"
     else
-        "$NUTSHELL_STAT" -f%m "$file"
+        "$stat_path" -f%m "$file"
     fi
 }

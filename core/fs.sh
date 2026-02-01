@@ -5,7 +5,11 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Layer 0 (Core): No dependencies on other modules
+# Layer 0 (Core): Depends on deps.sh for tool detection
+#
+# This module provides filesystem operations. Functions that require
+# external tools with variant differences (like stat) use lazy-init stubs
+# that, on first call, select and source the appropriate implementation.
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -13,7 +17,33 @@
 readonly _NUTSHELL_CORE_FS_SH=1
 
 # -----------------------------------------------------------------------------
-# Existence checks
+# Dependencies
+# -----------------------------------------------------------------------------
+
+_NUTSHELL_FS_DIR="${BASH_SOURCE[0]%/*}"
+# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
+[[ "$_NUTSHELL_FS_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_FS_DIR="."
+source "${_NUTSHELL_FS_DIR}/deps.sh"
+
+# Path to impl directory
+readonly _FS_IMPL_DIR="${_NUTSHELL_FS_DIR}/fs/impl"
+
+# -----------------------------------------------------------------------------
+# Module status
+# -----------------------------------------------------------------------------
+
+_FS_READY=0
+_FS_ERROR=""
+
+# Check that we have basic filesystem tools
+if deps_has_any "stat" "perl"; then
+    _FS_READY=1
+else
+    _FS_ERROR="No stat tool available (need stat or perl)"
+fi
+
+# -----------------------------------------------------------------------------
+# Existence checks (pure bash; no external tools needed)
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
@@ -81,7 +111,7 @@ fs_is_nonempty() {
 }
 
 # -----------------------------------------------------------------------------
-# Directory operations
+# Directory operations (standard tools)
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
@@ -95,7 +125,7 @@ fs_mkdir() {
 }
 
 # -----------------------------------------------------------------------------
-# File operations
+# File operations (standard tools)
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
@@ -131,7 +161,7 @@ fs_mv() {
 }
 
 # -----------------------------------------------------------------------------
-# Path manipulation
+# Path manipulation (pure bash + standard tools)
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
@@ -210,39 +240,95 @@ fs_basename_no_ext() {
 }
 
 # -----------------------------------------------------------------------------
-# File information
+# File information - LAZY INIT STUBS
+# These stubs select and source the best implementation on first call
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
 # Get file size in bytes
 # Usage: fs_size "/path/to/file" -> "12345"
 fs_size() {
-    local path="${1:-}"
-    [[ ! -f "$path" ]] && return 1
+    # First call: decide which implementation to use
+    local impl=""
     
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        stat -f%z "$path"
-    else
-        stat -c%s "$path"
+    if deps_has "stat"; then
+        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+        case "$variant" in
+            gnu)     impl="stat_gnu.sh" ;;
+            bsd)     impl="stat_bsd.sh" ;;
+            *)
+                # Unknown variant; try perl if available
+                if deps_has "perl"; then
+                    impl="perl_stat.sh"
+                else
+                    # Guess based on OS
+                    case "$(uname -s)" in
+                        Darwin*) impl="stat_bsd.sh" ;;
+                        *)       impl="stat_gnu.sh" ;;
+                    esac
+                fi
+                ;;
+        esac
+    elif deps_has "perl"; then
+        impl="perl_stat.sh"
     fi
+    
+    if [[ -n "$impl" ]]; then
+        source "${_FS_IMPL_DIR}/${impl}"
+    else
+        # No tool available
+        fs_size() {
+            echo "[ERROR] fs_size: no stat tool available" >&2
+            return 1
+        }
+    fi
+    
+    # Call the now-replaced function
+    fs_size "$@"
 }
 
 # @@PUBLIC_API@@
 # Get file modification time (epoch seconds)
 # Usage: fs_mtime "/path/to/file" -> "1234567890"
 fs_mtime() {
-    local path="${1:-}"
-    [[ ! -e "$path" ]] && return 1
+    # First call: decide which implementation to use
+    local impl=""
     
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        stat -f%m "$path"
-    else
-        stat -c%Y "$path"
+    if deps_has "stat"; then
+        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+        case "$variant" in
+            gnu)     impl="stat_gnu.sh" ;;
+            bsd)     impl="stat_bsd.sh" ;;
+            *)
+                if deps_has "perl"; then
+                    impl="perl_stat.sh"
+                else
+                    case "$(uname -s)" in
+                        Darwin*) impl="stat_bsd.sh" ;;
+                        *)       impl="stat_gnu.sh" ;;
+                    esac
+                fi
+                ;;
+        esac
+    elif deps_has "perl"; then
+        impl="perl_stat.sh"
     fi
+    
+    if [[ -n "$impl" ]]; then
+        source "${_FS_IMPL_DIR}/${impl}"
+    else
+        fs_mtime() {
+            echo "[ERROR] fs_mtime: no stat tool available" >&2
+            return 1
+        }
+    fi
+    
+    # Call the now-replaced function
+    fs_mtime "$@"
 }
 
 # -----------------------------------------------------------------------------
-# Temporary files
+# Temporary files (standard tools)
 # -----------------------------------------------------------------------------
 
 # @@PUBLIC_API@@
@@ -250,7 +336,14 @@ fs_mtime() {
 # Usage: fs_temp_file [prefix] -> "/tmp/prefix.XXXXXX"
 fs_temp_file() {
     local prefix="${1:-tmp}"
-    mktemp "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+    
+    if deps_has "mktemp"; then
+        "${_TOOL_PATH[mktemp]}" "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+    else
+        # Fallback using $$ and RANDOM
+        local path="${TMPDIR:-/tmp}/${prefix}.${$}.${RANDOM}"
+        touch "$path" && echo "$path"
+    fi
 }
 
 # @@PUBLIC_API@@
@@ -258,5 +351,30 @@ fs_temp_file() {
 # Usage: fs_temp_dir [prefix] -> "/tmp/prefix.XXXXXX"
 fs_temp_dir() {
     local prefix="${1:-tmp}"
-    mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+    
+    if deps_has "mktemp"; then
+        "${_TOOL_PATH[mktemp]}" -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+    else
+        # Fallback using $$ and RANDOM
+        local path="${TMPDIR:-/tmp}/${prefix}.${$}.${RANDOM}"
+        mkdir -p "$path" && echo "$path"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Module readiness check
+# -----------------------------------------------------------------------------
+
+# @@PUBLIC_API@@
+# Check if fs module is ready to use
+# Usage: fs_ready -> returns 0 if ready, 1 if not
+fs_ready() {
+    [[ "$_FS_READY" == "1" ]]
+}
+
+# @@PUBLIC_API@@
+# Get fs module error message (if not ready)
+# Usage: fs_error -> prints error message
+fs_error() {
+    echo "$_FS_ERROR"
 }

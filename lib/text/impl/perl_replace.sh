@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/text/impl/perl_replace.sh - perl implementation for text_replace
+# nutshell/lib/text/impl/perl_replace.sh - perl implementation for text_replace
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

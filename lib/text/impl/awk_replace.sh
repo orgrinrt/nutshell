@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/text/impl/awk_replace.sh - awk implementation for text_replace
+# nutshell/lib/text/impl/awk_replace.sh - awk implementation for text_replace
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

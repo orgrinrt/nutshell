@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/text/impl/combo/grep_sed.sh - grep+sed combo for text operations
+# nutshell/lib/text/impl/combo/grep_sed.sh - grep+sed combo for text operations
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell

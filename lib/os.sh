@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/core/os.sh - OS detection primitives
+# nutshell/lib/os.sh - OS detection primitives
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
@@ -24,6 +24,14 @@ os_name() {
         CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
         *)       echo "unknown" ;;
     esac
+}
+
+# @@PUBLIC_API@@
+# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+# Alias for os_name for consistency with documentation
+# Usage: os_type -> "linux" | "macos" | "windows" | "unknown"
+os_type() {
+    os_name
 }
 
 # Returns 0 (true) if running on Linux, 1 (false) otherwise

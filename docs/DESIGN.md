@@ -63,7 +63,7 @@ Layer 0 (Core): May depend on foundation, uses external tools
 ```
 nutshell/
   nutshell.sh              # Main entrypoint
-  core/
+  lib/
     deps.sh                # Environment detection
     os.sh
     log.sh
@@ -469,13 +469,13 @@ text_replace() {
     # Prefer combo when both grep and sed are available
     # The combo checks if pattern exists before invoking sed (optimization)
     if deps_has_all "grep" "sed"; then
-        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+        source "${NUTSHELL_ROOT}/lib/text/impl/combo/grep_sed.sh"
         _TEXT_REPLACE_IMPL="grep_sed"
     elif deps_has "sed"; then
-        source "${_TEXT_IMPL_DIR}/sed_replace.sh"
+        source "${NUTSHELL_ROOT}/lib/text/impl/sed_replace.sh"
         _TEXT_REPLACE_IMPL="sed"
     elif deps_has "perl"; then
-        source "${_TEXT_IMPL_DIR}/perl_replace.sh"
+        source "${NUTSHELL_ROOT}/lib/text/impl/perl_replace.sh"
         _TEXT_REPLACE_IMPL="perl"
     # ...
     fi

@@ -4,6 +4,8 @@
 
 nutshell is a minimal bash utility library providing core primitives for shell scripting. This document captures architectural decisions, rationale, and design principles.
 
+**Status**: The core architecture described here is fully implemented. See TODO.md for remaining work.
+
 ## Core Principles
 
 ### 1. No Magic, No Lies
@@ -143,7 +145,7 @@ _find_tool_path() {
 
 ```bash
 # Available tools (space-separated list)
-readonly _TOOLS_AVAILABLE="sed perl awk grep stat find mktemp"
+_TOOLS_AVAILABLE="sed perl awk grep stat find mktemp sort wc tr head tail cut tee xargs"
 
 # Tool paths (associative array)
 declare -A _TOOL_PATH=(
@@ -153,27 +155,75 @@ declare -A _TOOL_PATH=(
     [grep]="/usr/bin/grep"
     [stat]="/usr/bin/stat"
     [find]="/usr/bin/find"
+    # ... and more
 )
-readonly _TOOL_PATH
 
 # Tool variants (associative array)
 declare -A _TOOL_VARIANT=(
-    [sed]="gnu"       # "gnu" or "bsd"
-    [awk]="gawk"      # "gawk", "mawk", "nawk", or "bsd"
+    [sed]="bsd"       # "gnu" or "bsd"
+    [awk]="bsd"       # "gawk", "mawk", "nawk", or "bsd"
     [grep]="gnu"      # "gnu" or "bsd"
-    [stat]="gnu"      # "gnu" or "bsd"
+    [stat]="bsd"      # "gnu" or "bsd"
+    [find]="bsd"      # "gnu" or "bsd"
 )
-readonly _TOOL_VARIANT
 
-# Capability flags
+# Capability flags (1 = available, 0 = not available)
 declare -A _TOOL_CAN=(
-    [sed_inplace]=1       # Can sed do in-place editing?
-    [sed_extended]=1      # Does sed support -E for extended regex?
-    [grep_pcre]=1         # Does grep support -P for PCRE?
-    [grep_extended]=1     # Does grep support -E?
-    [stat_format]=1       # Does stat support format strings?
+    # sed capabilities
+    [sed_inplace]=1       # Can do in-place editing
+    [sed_extended]=1      # Supports -E for extended regex
+    [sed_regex_r]=0       # Supports -r (GNU only, same as -E)
+    
+    # grep capabilities
+    [grep_pcre]=0         # Supports -P for PCRE (GNU only)
+    [grep_extended]=1     # Supports -E
+    [grep_include]=0      # Supports --include/--exclude
+    [grep_only_matching]=1 # Supports -o
+    
+    # awk capabilities
+    [awk_regex]=1         # Basic regex (all awks)
+    [awk_nextfile]=0      # nextfile statement (gawk)
+    [awk_strftime]=0      # strftime function (gawk)
+    [awk_gensub]=0        # gensub function (gawk)
+    
+    # perl capabilities
+    [perl_regex]=1        # Perl regex
+    [perl_inplace]=1      # In-place editing with -i
+    [perl_json]=1         # JSON module available
+    
+    # stat capabilities
+    [stat_format]=1       # Format string support
+    
+    # find capabilities
+    [find_maxdepth]=1     # -maxdepth option
+    [find_printf]=0       # -printf option (GNU only)
 )
-readonly _TOOL_CAN
+```
+
+### Public API for Querying
+
+```bash
+# Check availability
+deps_has "sed"                  # -> 0/1
+deps_has_all "sed" "awk"        # -> 0/1
+deps_has_any "perl" "python"    # -> 0/1
+deps_available                  # -> "sed awk grep..."
+
+# Get info
+deps_path "sed"                 # -> "/usr/bin/sed"
+deps_variant "sed"              # -> "gnu" or "bsd"
+deps_is_gnu "grep"              # -> 0/1
+deps_is_bsd "stat"              # -> 0/1
+
+# Check capabilities
+deps_can "grep_pcre"            # -> 0/1
+deps_cap "grep_pcre"            # -> "1" or "0"
+deps_caps                       # -> "cap=value\n..."
+
+# Requirements
+deps_require "git"              # exits if missing
+deps_require_all "sed" "awk"    # exits if any missing
+deps_require_cap "grep_pcre"    # exits if capability missing
 ```
 
 ### Why Modules Decide
@@ -333,6 +383,78 @@ This enables:
 - Use as standalone scripts if needed
 - Normal sourced operation
 
+## Impl File Contract
+
+Every impl file in `*/impl/` directories must follow this contract:
+
+### Required Structure
+
+```bash
+#!/usr/bin/env bash
+# =============================================================================
+# module/impl/tool_operation.sh - Description
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# Describe what this impl does and when it's selected.
+# =============================================================================
+
+# 1. Internal implementation function (prefixed with _)
+_operation_tool_impl() {
+    local arg1="${1:-}"
+    # ... implementation using _TOOL_PATH and _TOOL_VARIANT
+}
+
+# 2. When sourced: redefine the public function
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    public_function() {
+        _operation_tool_impl "$@"
+    }
+}
+
+# 3. When executed directly: standalone mode
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Minimal setup if env vars not set
+    if [[ -z "${_TOOL_PATH[tool]:-}" ]]; then
+        declare -A _TOOL_PATH=()
+        declare -A _TOOL_VARIANT=()
+        _TOOL_PATH[tool]="$(command -v tool 2>/dev/null || echo "tool")"
+        # Detect variant...
+    fi
+    
+    _operation_tool_impl "$@"
+fi
+```
+
+### Rules
+
+1. **Naming**: File named `tool_operation.sh` (e.g., `sed_replace.sh`, `grep_match.sh`)
+2. **Internal function**: Named `_operation_tool_impl` (e.g., `_text_replace_sed_impl`)
+3. **Public function**: Must match the stub function name exactly
+4. **Environment access**: Read `_TOOL_PATH` and `_TOOL_VARIANT` directly
+5. **No deps.sh calls**: Impl files don't call `deps_*` functions; they use the cached arrays
+6. **Standalone fallback**: When run directly, set up minimal environment
+7. **Default values**: Use `${_TOOL_PATH[tool]:-tool}` for graceful fallback
+
+### Example: Multiple Functions in One Impl
+
+When one impl file provides multiple related functions:
+
+```bash
+# text/impl/grep_match.sh - provides text_grep, text_contains, text_count_matches
+
+_text_grep_grep_impl() { ... }
+_text_contains_grep_impl() { ... }
+_text_count_matches_grep_impl() { ... }
+
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    text_grep() { _text_grep_grep_impl "$@"; }
+    text_contains() { _text_contains_grep_impl "$@"; }
+    text_count_matches() { _text_count_matches_grep_impl "$@"; }
+fi
+```
+
 ## Tool Combos
 
 Some operations work best with multiple tools. The stub pattern handles this:
@@ -390,17 +512,38 @@ fi
 
 ### Defined Annotations
 
-| Annotation | Meaning |
-|------------|---------|
-| `@@PUBLIC_API@@` | Function is part of public interface. Must have documentation. |
-| `@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@` | Function is intentionally simple for API consistency. |
-| `@@ALLOW_LOC_NNN@@` | File allowed to exceed normal size limit (NNN lines). |
+| Annotation | Meaning | Example |
+|------------|---------|---------|
+| `@@PUBLIC_API@@` | Function is part of public interface | `# @@PUBLIC_API@@` |
+| `@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@` | Intentionally simple wrapper | `# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@` |
+| `@@ALLOW_LOC_NNN@@` | File size exemption | `# @@ALLOW_LOC_450@@` |
 
 ### Rules
 
 1. Every public function MUST have `@@PUBLIC_API@@`
 2. Every `@@PUBLIC_API@@` function MUST have `Usage:` in its comment block
-3. Trivial wrappers (1-2 line functions) MUST have appropriate annotation
+3. Trivial wrappers (1-2 line functions) need `@@PUBLIC_API@@` or `@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@`
+4. Files exceeding 300 LOC need `@@ALLOW_LOC_NNN@@` with the actual limit
+
+### Example
+
+```bash
+# @@PUBLIC_API@@
+# Check if a tool is available
+# Usage: deps_has "sed" -> returns 0 (true) or 1 (false)
+deps_has() {
+    local tool="${1:-}"
+    [[ -n "${_TOOL_PATH[$tool]:-}" ]]
+}
+
+# @@PUBLIC_API@@
+# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+# Check if path exists
+# Usage: fs_exists "path" -> returns 0 (true) or 1 (false)
+fs_exists() {
+    [[ -e "${1:-}" ]]
+}
+```
 
 ## QA System Design
 
@@ -434,6 +577,24 @@ ensure_command "git" "Git not found" || {
 
 # Hard: I absolutely need this, fail if missing
 require_command "git" "Git is required for this operation"
+```
+
+### Module Readiness
+
+Modules that depend on external tools expose readiness status:
+
+```bash
+# Check before using
+if text_ready; then
+    text_replace "foo" "bar" file.txt
+else
+    echo "Text module unavailable: $(text_error)" >&2
+fi
+
+# Or require it
+if ! text_ready; then
+    log_fatal "$(text_error)"
+fi
 ```
 
 ## Guard Variables
@@ -484,6 +645,31 @@ the-whole-shebang is "when you need the whole shebang" - full toolkit.
 
 The stub pattern is memoization; after first call, the decision is "cached" in the function definition itself. No lookup, no switch, just the implementation.
 
+## QA Test Output
+
+The test runner produces clean, tree-structured output:
+
+```
+nutshell QA
+
+  Syntax                         ✓
+  File Size                      ⚠
+  Duplication                    ✓
+  Trivial Wrappers               ✓
+  Cruft                          ✓
+
+Diagnostics:
+
+  core/
+    deps.sh
+      ⚠ 421 LOC
+        └─ consider splitting or add @@ALLOW_LOC_421@@
+
+PASSED (5/5 tests, 1 with warnings)
+```
+
+Output level controlled with `--level=error|warn|info|debug`.
+
 ## Future Considerations
 
 ### Potential New Modules
@@ -496,4 +682,4 @@ The stub pattern is memoization; after first call, the decision is "cached" in t
 
 - Shell completion generation from `@@PUBLIC_API@@` functions
 - Benchmark suite for tool selection optimization
-- Man page generation from documentation
+- Config schema validation (JSON Schema for nut.toml)

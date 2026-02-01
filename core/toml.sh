@@ -5,6 +5,7 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
+# @@ALLOW_LOC_400@@
 # Layer 0 (Core): Depends on fs.sh, string.sh, validate.sh
 #
 # Pure TOML parsing functions. No caching, no config semantics.
@@ -20,6 +21,8 @@ readonly _NUTSHELL_CORE_TOML_SH=1
 # -----------------------------------------------------------------------------
 
 _NUTSHELL_TOML_DIR="${BASH_SOURCE[0]%/*}"
+# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
+[[ "$_NUTSHELL_TOML_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_TOML_DIR="."
 source "${_NUTSHELL_TOML_DIR}/fs.sh"
 source "${_NUTSHELL_TOML_DIR}/string.sh"
 source "${_NUTSHELL_TOML_DIR}/validate.sh"
@@ -205,9 +208,12 @@ toml_keys() {
         
         [[ $in_section -eq 0 ]] && continue
         
-        # Key = value
-        if [[ "$clean_line" =~ ^([^=]+)= ]]; then
-            str_trim "${BASH_REMATCH[1]}"
+        # Skip lines that start with quotes (array elements, not keys)
+        [[ "$clean_line" =~ ^[\"\'] ]] && continue
+        
+        # Key = value (key must not start with quote)
+        if [[ "$clean_line" =~ ^([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*= ]]; then
+            echo "${BASH_REMATCH[1]}"
         fi
     done < "$file"
 }
@@ -273,6 +279,165 @@ toml_is_true() {
     value="$(toml_get "$file" "$key")" || return 1
     
     is_truthy "$value"
+}
+
+# @@PUBLIC_API@@
+# Convert a TOML file to JSON
+# Usage: toml_to_json "file.toml" -> prints JSON
+toml_to_json() {
+    local file="${1:-}"
+    [[ ! -f "$file" ]] && return 1
+    
+    local json="{"
+    local need_comma=0
+    local current_section=""
+    local section_stack=()
+    local line clean_line
+    
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        clean_line="$(_toml_clean_line "$line")"
+        [[ -z "$clean_line" ]] && continue
+        
+        # Section header [section] or [section.subsection]
+        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
+            local new_section="${BASH_REMATCH[1]}"
+            
+            # Close previous section(s) if any
+            while [[ ${#section_stack[@]} -gt 0 ]]; do
+                json+="}"
+                unset 'section_stack[-1]'
+            done
+            
+            # Start new section(s)
+            IFS='.' read -ra parts <<< "$new_section"
+            for part in "${parts[@]}"; do
+                [[ $need_comma -eq 1 ]] && json+=","
+                need_comma=0
+                json+="\"${part}\":{"
+                section_stack+=("$part")
+            done
+            
+            current_section="$new_section"
+            continue
+        fi
+        
+        # Key = value
+        if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
+            local key val
+            key="$(str_trim "${BASH_REMATCH[1]}")"
+            val="$(str_trim "${BASH_REMATCH[2]}")"
+            
+            [[ $need_comma -eq 1 ]] && json+=","
+            need_comma=1
+            
+            json+="\"${key}\":"
+            json+="$(_toml_value_to_json "$val")"
+        fi
+    done < "$file"
+    
+    # Close any open sections
+    while [[ ${#section_stack[@]} -gt 0 ]]; do
+        json+="}"
+        unset 'section_stack[-1]'
+    done
+    
+    json+="}"
+    echo "$json"
+}
+
+# Internal: Convert a TOML value to JSON
+_toml_value_to_json() {
+    local val="$1"
+    
+    # Boolean
+    if [[ "$val" == "true" ]]; then
+        echo "true"
+        return
+    fi
+    if [[ "$val" == "false" ]]; then
+        echo "false"
+        return
+    fi
+    
+    # Integer
+    if [[ "$val" =~ ^-?[0-9]+$ ]]; then
+        echo "$val"
+        return
+    fi
+    
+    # Float
+    if [[ "$val" =~ ^-?[0-9]+\.[0-9]+$ ]]; then
+        echo "$val"
+        return
+    fi
+    
+    # Array
+    if [[ "$val" =~ ^\[.*\]$ ]]; then
+        local content="${val#[}"
+        content="${content%]}"
+        content="$(str_trim "$content")"
+        
+        local json_arr="["
+        local first=1
+        local in_quotes=0
+        local item=""
+        local i char
+        
+        for ((i=0; i<${#content}; i++)); do
+            char="${content:$i:1}"
+            
+            if [[ "$char" == '"' ]]; then
+                ((in_quotes = 1 - in_quotes))
+                item+="$char"
+            elif [[ "$char" == ',' && $in_quotes -eq 0 ]]; then
+                item="$(str_trim "$item")"
+                if [[ -n "$item" ]]; then
+                    [[ $first -eq 0 ]] && json_arr+=","
+                    first=0
+                    json_arr+="$(_toml_value_to_json "$item")"
+                fi
+                item=""
+            else
+                item+="$char"
+            fi
+        done
+        
+        # Last item
+        item="$(str_trim "$item")"
+        if [[ -n "$item" ]]; then
+            [[ $first -eq 0 ]] && json_arr+=","
+            json_arr+="$(_toml_value_to_json "$item")"
+        fi
+        
+        json_arr+="]"
+        echo "$json_arr"
+        return
+    fi
+    
+    # Double-quoted string
+    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+        # Already quoted, just pass through (escape inner quotes if needed)
+        local inner="${BASH_REMATCH[1]}"
+        # Escape backslashes and quotes for JSON
+        inner="${inner//\\/\\\\}"
+        inner="${inner//\"/\\\"}"
+        echo "\"${inner}\""
+        return
+    fi
+    
+    # Single-quoted string (literal in TOML)
+    if [[ "$val" =~ ^\'(.*)\'$ ]]; then
+        local inner="${BASH_REMATCH[1]}"
+        inner="${inner//\\/\\\\}"
+        inner="${inner//\"/\\\"}"
+        echo "\"${inner}\""
+        return
+    fi
+    
+    # Unquoted - treat as string
+    val="${val//\\/\\\\}"
+    val="${val//\"/\\\"}"
+    echo "\"${val}\""
 }
 
 # @@PUBLIC_API@@

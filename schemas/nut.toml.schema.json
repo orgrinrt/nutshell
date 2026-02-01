@@ -1,0 +1,422 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/orgrinrt/nutshell/schemas/nut.toml.schema.json",
+  "title": "nutshell QA Configuration",
+  "description": "Schema for nut.toml configuration file used by nutshell QA test suite",
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Configuration metadata",
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Schema version for forward compatibility",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "default": "1.0.0"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name for this configuration"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of what this config is for"
+        }
+      },
+      "additionalProperties": false
+    },
+    "paths": {
+      "type": "object",
+      "description": "Path configuration for file discovery",
+      "properties": {
+        "lib_dir": {
+          "type": "string",
+          "description": "Root directory for library source files (relative to repo root)",
+          "default": "."
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Directories/patterns to exclude from all analysis",
+          "items": {
+            "type": "string"
+          },
+          "default": [".git", ".legacy", "node_modules", "vendor", "target"]
+        },
+        "include": {
+          "type": "array",
+          "description": "File patterns to include in analysis",
+          "items": {
+            "type": "string"
+          },
+          "default": ["*.sh"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "deps": {
+      "type": "object",
+      "description": "Dependency/tool configuration",
+      "properties": {
+        "paths": {
+          "type": "object",
+          "description": "Custom paths for tools",
+          "additionalProperties": {
+            "type": "string",
+            "description": "Path to the tool executable"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "type": "object",
+      "description": "Annotation patterns and their meanings",
+      "properties": {
+        "public_api": {
+          "type": "string",
+          "description": "Annotation marking a function as public API",
+          "default": "@@PUBLIC_API@@"
+        },
+        "allow_trivial_wrapper_ergonomics": {
+          "type": "string",
+          "description": "Annotation allowing trivial wrapper for ergonomics",
+          "default": "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+        },
+        "allow_large_file": {
+          "type": "string",
+          "description": "Annotation pattern for large file exemption (regex with capture group)",
+          "default": "@@ALLOW_LOC_([0-9]+)@@"
+        }
+      },
+      "additionalProperties": false
+    },
+    "tests": {
+      "type": "object",
+      "description": "Test enable/disable switches and settings",
+      "properties": {
+        "syntax": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "Enable/disable syntax validation"
+            },
+            {
+              "type": "object",
+              "description": "Syntax validation settings (implies enabled)",
+              "properties": {
+                "shell": {
+                  "type": "string",
+                  "description": "Shell to use for syntax checking",
+                  "enum": ["bash", "sh", "zsh"],
+                  "default": "bash"
+                },
+                "fail_on_error": {
+                  "type": "boolean",
+                  "description": "Fail on syntax errors (if false, only warn)",
+                  "default": true
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "default": false
+        },
+        "trivial_wrappers": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "Enable/disable trivial wrapper detection"
+            },
+            {
+              "type": "object",
+              "description": "Trivial wrapper detection settings (implies enabled)",
+              "properties": {
+                "max_lines": {
+                  "type": "integer",
+                  "description": "Maximum lines of meaningful code to be considered trivial",
+                  "minimum": 1,
+                  "default": 2
+                },
+                "local_usage_threshold": {
+                  "type": "integer",
+                  "description": "Minimum usages in same file to justify existence",
+                  "minimum": 0,
+                  "default": 4
+                },
+                "global_usage_threshold": {
+                  "type": "integer",
+                  "description": "Minimum usages across codebase to justify existence",
+                  "minimum": 0,
+                  "default": 6
+                },
+                "min_vars_for_ergonomic": {
+                  "type": "integer",
+                  "description": "Minimum variables used to be considered ergonomic",
+                  "minimum": 0,
+                  "default": 2
+                },
+                "token_complexity_warn": {
+                  "type": "integer",
+                  "description": "Token count that triggers warning instead of error",
+                  "minimum": 0,
+                  "default": 3
+                },
+                "token_complexity_pass": {
+                  "type": "integer",
+                  "description": "Token count that auto-passes",
+                  "minimum": 0,
+                  "default": 4
+                },
+                "warn_threshold": {
+                  "type": "integer",
+                  "description": "Number of violations before warning",
+                  "minimum": 0,
+                  "default": 5
+                },
+                "fail_threshold": {
+                  "type": "integer",
+                  "description": "Number of violations before failing",
+                  "minimum": 0,
+                  "default": 20
+                },
+                "exempt_annotations": {
+                  "type": "array",
+                  "description": "Annotations that exempt a function from this check",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": ["@@PUBLIC_API@@", "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"]
+                },
+                "exclude_patterns": {
+                  "type": "array",
+                  "description": "Path patterns to exclude from analysis",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "default": false
+        },
+        "file_size": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "Enable/disable file size limits"
+            },
+            {
+              "type": "object",
+              "description": "File size limit settings (implies enabled)",
+              "properties": {
+                "max_loc": {
+                  "type": "integer",
+                  "description": "Maximum lines of code (excluding comments/blanks)",
+                  "minimum": 1,
+                  "default": 300
+                },
+                "max_total_lines": {
+                  "type": "integer",
+                  "description": "Maximum total lines (including comments/blanks)",
+                  "minimum": 1,
+                  "default": 500
+                },
+                "exempt_annotation_pattern": {
+                  "type": "string",
+                  "description": "Regex pattern for per-file exemption annotation",
+                  "default": "@@ALLOW_LOC_([0-9]+)@@"
+                },
+                "exempt_patterns": {
+                  "type": "array",
+                  "description": "File patterns exempt from size limits",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "default": false
+        },
+        "function_duplication": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "Enable/disable function duplication detection"
+            },
+            {
+              "type": "object",
+              "description": "Function duplication detection settings (implies enabled)",
+              "properties": {
+                "similarity_threshold": {
+                  "type": "number",
+                  "description": "Similarity threshold (0.0-1.0) for detecting duplicates",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 0.85
+                },
+                "min_lines_to_check": {
+                  "type": "integer",
+                  "description": "Minimum function body length to check",
+                  "minimum": 1,
+                  "default": 3
+                },
+                "ignore_name_patterns": {
+                  "type": "array",
+                  "description": "Function name patterns (regex) to ignore",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                },
+                "exclude_patterns": {
+                  "type": "array",
+                  "description": "Path patterns to exclude from analysis",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "default": false
+        },
+        "cruft": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "Enable/disable cruft detection"
+            },
+            {
+              "type": "object",
+              "description": "Cruft detection settings (implies enabled)",
+              "properties": {
+                "debug_patterns": {
+                  "type": "array",
+                  "description": "Regex patterns indicating debug code",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": ["echo.*DEBUG", "set -x", "PS4="]
+                },
+                "todo_patterns": {
+                  "type": "array",
+                  "description": "Regex patterns indicating unfinished work",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": ["TODO:", "FIXME:", "XXX:", "HACK:", "BUG:"]
+                },
+                "fail_on_debug": {
+                  "type": "boolean",
+                  "description": "Fail on debug code found",
+                  "default": true
+                },
+                "fail_on_todo": {
+                  "type": "boolean",
+                  "description": "Fail on TODOs found",
+                  "default": false
+                },
+                "max_todos": {
+                  "type": "integer",
+                  "description": "Maximum allowed TODOs before failing (0 = unlimited)",
+                  "minimum": 0,
+                  "default": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "default": false
+        },
+        "public_api_docs": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "Enable/disable public API documentation check"
+            },
+            {
+              "type": "object",
+              "description": "Public API documentation check settings (implies enabled)",
+              "properties": {
+                "public_api_annotation": {
+                  "type": "string",
+                  "description": "Annotation marking a function as public API",
+                  "default": "@@PUBLIC_API@@"
+                },
+                "required_elements": {
+                  "type": "array",
+                  "description": "Required documentation elements",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": ["Usage:"]
+                },
+                "recommended_elements": {
+                  "type": "array",
+                  "description": "Recommended documentation elements (warn if missing)",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": ["->"]
+                },
+                "min_doc_lines": {
+                  "type": "integer",
+                  "description": "Minimum lines of documentation required",
+                  "minimum": 0,
+                  "default": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "description": "Output formatting settings",
+      "properties": {
+        "color": {
+          "type": "string",
+          "description": "Use colors in output",
+          "enum": ["auto", "always", "never"],
+          "default": "auto"
+        },
+        "verbosity": {
+          "type": "string",
+          "description": "Verbosity level",
+          "enum": ["quiet", "normal", "verbose"],
+          "default": "normal"
+        },
+        "format": {
+          "type": "string",
+          "description": "Output format",
+          "enum": ["human", "json", "tap"],
+          "default": "human"
+        },
+        "show_passing": {
+          "type": "boolean",
+          "description": "Show passing tests (not just failures)",
+          "default": true
+        },
+        "show_summary": {
+          "type": "boolean",
+          "description": "Show summary at end",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

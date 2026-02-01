@@ -306,6 +306,7 @@ main() {
     echo -e "${BOLD}nutshell QA${NC}"
     echo ""
     
+    run_test "Config Schema" "$SCRIPT_DIR/test_config_schema.sh"
     run_test "Syntax" "$SCRIPT_DIR/test_syntax.sh"
     run_test "File Size" "$SCRIPT_DIR/test_file_size.sh"
     run_test "Duplication" "$SCRIPT_DIR/test_function_duplication.sh"

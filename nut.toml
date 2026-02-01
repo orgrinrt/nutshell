@@ -44,26 +44,25 @@ allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
 allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
 
 # -----------------------------------------------------------------------------
-# Test Enable/Disable - ALL ON
+# Tests Configuration
 # -----------------------------------------------------------------------------
-[tests]
-syntax = true
-trivial_wrappers = true
-file_size = true
-function_duplication = true
-cruft = true
-public_api_docs = true
+# Each test can be:
+#   - false (disabled)
+#   - true (enabled with defaults)
+#   - a table with settings (enabled with custom config)
+#
+# Note: When using a table, don't also set the boolean - TOML doesn't allow that.
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
-# Syntax Validation - Strict
+# Syntax Validation
 # -----------------------------------------------------------------------------
 [tests.syntax]
 shell = "bash"
 fail_on_error = true
 
 # -----------------------------------------------------------------------------
-# Trivial Wrappers - Strict
-# Every function must justify its existence
+# Trivial Wrappers
 # -----------------------------------------------------------------------------
 [tests.trivial_wrappers]
 # 1-2 line functions are suspicious
@@ -99,7 +98,7 @@ exempt_annotations = [
 ]
 
 # -----------------------------------------------------------------------------
-# File Size - Small, focused modules
+# File Size
 # -----------------------------------------------------------------------------
 [tests.file_size]
 # 300 lines of actual code max - forces decomposition
@@ -116,7 +115,7 @@ exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
 exempt_patterns = []
 
 # -----------------------------------------------------------------------------
-# Function Duplication - DRY or die
+# Function Duplication
 # -----------------------------------------------------------------------------
 [tests.function_duplication]
 # 85% similar = probably copy-pasted
@@ -136,7 +135,7 @@ exclude_patterns = [
 ]
 
 # -----------------------------------------------------------------------------
-# Cruft Detection - Clean code only
+# Cruft Detection
 # -----------------------------------------------------------------------------
 [tests.cruft]
 # Debug code patterns - these should NEVER be committed
@@ -181,7 +180,7 @@ fail_on_todo = false
 max_todos = 10
 
 # -----------------------------------------------------------------------------
-# Public API Documentation - All public functions must be documented
+# Public API Documentation
 # -----------------------------------------------------------------------------
 [tests.public_api_docs]
 # This annotation marks functions as public API

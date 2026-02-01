@@ -44,9 +44,9 @@ LOC_FAIL_THRESHOLD="${LOC_FAIL_THRESHOLD:-500}"
 get_custom_loc_limit() {
     local file="$1"
     
-    # Search first 10 lines for #@@ALLOW_LOC_NNN@@
+    # Search first 10 lines for #@@ALLOW_LOC_NNN@@ (with optional space after #)
     local annotation
-    annotation=$(head -n 10 "$file" 2>/dev/null | grep -oE '#@@ALLOW_LOC_[0-9]+@@' | head -1)
+    annotation=$(head -n 10 "$file" 2>/dev/null | grep -oE '#[[:space:]]*@@ALLOW_LOC_[0-9]+@@' | head -1)
     
     if [[ -n "$annotation" ]]; then
         # Extract the number

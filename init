@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell/init - Main entry point
+# =============================================================================
+# Source this file to use nutshell in your scripts.
+#
+# Usage:
+#   #!/usr/bin/env bash
+#   . "${0%/*}/lib/nutshell/init"
+#
+#   use os log json
+#   log_info "Hello from nutshell!"
+#
+# =============================================================================
+
+# Prevent multiple inclusion
+[[ -n "${_NUTSHELL_INIT:-}" ]] && return 0
+_NUTSHELL_INIT=1
+
+# =============================================================================
+# Resolve paths
+# =============================================================================
+
+# Find our own directory (absolute path)
+_NUTSHELL_ROOT="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+
+# Export for use by modules
+export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
+export NUTSHELL_VERSION="0.1.0"
+
+# Add our bin to PATH so the shebang #!/usr/bin/env nutshell works
+# for any scripts called after this init
+export PATH="${_NUTSHELL_ROOT}/bin:$PATH"
+
+# =============================================================================
+# Module tracking
+# =============================================================================
+
+# Track loaded modules to avoid double-sourcing
+declare -gA _NUTSHELL_LOADED=() 2>/dev/null || declare -A _NUTSHELL_LOADED=()
+
+# Track module errors
+declare -gA _NUTSHELL_MODULE_ERRORS=() 2>/dev/null || declare -A _NUTSHELL_MODULE_ERRORS=()
+
+# Track module initialization status
+declare -gA _NUTSHELL_MODULE_INIT=() 2>/dev/null || declare -A _NUTSHELL_MODULE_INIT=()
+
+# =============================================================================
+# Module loading (for script authors)
+# =============================================================================
+
+# Load one or more modules
+# Usage: use os log json http
+use() {
+    local mod
+    for mod in "$@"; do
+        # Skip if already loaded
+        [[ -n "${_NUTSHELL_LOADED[$mod]:-}" ]] && continue
+        
+        # Find and source the module
+        local mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
+        if [[ -f "$mod_path" ]]; then
+            source "$mod_path"
+            _NUTSHELL_LOADED[$mod]=1
+        else
+            echo "nutshell: unknown module '$mod'" >&2
+            echo "  Available: $(ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | tr '\n' ' ')" >&2
+            return 1
+        fi
+    done
+}
+
+# Export the function so it's available in subshells
+export -f use
+
+# =============================================================================
+# Module declaration (for module authors)
+# =============================================================================
+
+# Declare a module - handles guard variables and registration
+# Usage (at top of module file): module <name>
+# Returns 0 and exits early if module already loaded
+# 
+# This replaces the manual boilerplate:
+#   [[ -n "${_NUTSHELL_CORE_<NAME>_SH:-}" ]] && return 0
+#   readonly _NUTSHELL_CORE_<NAME>_SH=1
+#
+# Example:
+#   module os
+#   # ... rest of module code
+module() {
+    local name="${1:-}"
+    
+    if [[ -z "$name" ]]; then
+        echo "nutshell: module() requires a name" >&2
+        return 1
+    fi
+    
+    # Convert to uppercase for variable names
+    local NAME_UPPER
+    NAME_UPPER="$(echo "$name" | tr '[:lower:]' '[:upper:]')"
+    
+    # Check if already initialized (guard)
+    local guard_var="_NUTSHELL_MODULE_${NAME_UPPER}_LOADED"
+    if [[ -n "${!guard_var:-}" ]]; then
+        return 1  # Return 1 to signal caller should return early
+    fi
+    
+    # Set the guard variable
+    declare -g "$guard_var"=1
+    
+    # Initialize module error variable (can be set by module if something fails)
+    local error_var="${NAME_UPPER}_ERROR"
+    declare -g "$error_var"=""
+    
+    # Initialize module ready variable (modules can set to 0 if not ready)
+    local init_var="${NAME_UPPER}_INIT"
+    declare -g "$init_var"=1
+    
+    # Register in our tracking arrays
+    _NUTSHELL_MODULE_INIT[$name]=1
+    _NUTSHELL_MODULE_ERRORS[$name]=""
+    
+    # Mark as loaded in the main loaded array too
+    _NUTSHELL_LOADED[$name]=1
+    
+    return 0  # Return 0 to signal caller should continue
+}
+export -f module
+
+# Set a module error
+# Usage: module_error <module_name> "error message"
+module_error() {
+    local name="${1:-}"
+    local message="${2:-}"
+    
+    if [[ -z "$name" ]]; then
+        echo "nutshell: module_error() requires a module name" >&2
+        return 1
+    fi
+    
+    local NAME_UPPER
+    NAME_UPPER="$(echo "$name" | tr '[:lower:]' '[:upper:]')"
+    
+    # Set the module-specific error variable
+    local error_var="${NAME_UPPER}_ERROR"
+    declare -g "$error_var"="$message"
+    
+    # Also track in our array
+    _NUTSHELL_MODULE_ERRORS[$name]="$message"
+    
+    # Set init to 0 (not ready) when there's an error
+    local init_var="${NAME_UPPER}_INIT"
+    declare -g "$init_var"=0
+    _NUTSHELL_MODULE_INIT[$name]=0
+}
+export -f module_error
+
+# Check if a module is ready (initialized without errors)
+# Usage: module_ready <name>
+module_ready() {
+    local name="${1:-}"
+    [[ -n "${_NUTSHELL_MODULE_INIT[$name]:-}" ]] && [[ "${_NUTSHELL_MODULE_INIT[$name]}" == "1" ]]
+}
+export -f module_ready
+
+# Get a module's error message
+# Usage: module_get_error <name>
+module_get_error() {
+    local name="${1:-}"
+    echo "${_NUTSHELL_MODULE_ERRORS[$name]:-}"
+}
+export -f module_get_error
+
+# =============================================================================
+# Implementation file declaration (for module authors)
+# =============================================================================
+
+# Declare an implementation file with its dependencies
+# Usage: impl <deps> [impl_name]
+#   deps: comma-separated list of required tools (e.g., "sed,grep")
+#   impl_name: optional name for the impl (defaults to deps joined with _)
+#
+# This is for use inside impl/ files to:
+#   1. Verify the required tools are available
+#   2. Track which impl was loaded
+#
+# Example:
+#   impl sed,grep         # -> impl name is "sed_grep"
+#   impl sed,grep custom  # -> impl name is "custom"
+#
+# Returns 0 if all deps available, 1 if not
+impl() {
+    local deps="${1:-}"
+    local impl_name="${2:-}"
+    
+    if [[ -z "$deps" ]]; then
+        echo "nutshell: impl() requires dependencies" >&2
+        return 1
+    fi
+    
+    # Generate impl name from deps if not provided
+    if [[ -z "$impl_name" ]]; then
+        impl_name="${deps//,/_}"
+    fi
+    
+    # Check if deps module is loaded (we need it for deps_has)
+    if ! declare -F deps_has &>/dev/null; then
+        # Try to load deps module
+        if [[ -f "${_NUTSHELL_ROOT}/lib/deps.sh" ]]; then
+            source "${_NUTSHELL_ROOT}/lib/deps.sh"
+        else
+            echo "nutshell: impl() requires deps module" >&2
+            return 1
+        fi
+    fi
+    
+    # Check all dependencies
+    local dep
+    local IFS=','
+    for dep in $deps; do
+        dep="${dep## }"  # trim leading space
+        dep="${dep%% }"  # trim trailing space
+        if ! deps_has "$dep"; then
+            return 1
+        fi
+    done
+    
+    # All deps available
+    return 0
+}
+export -f impl
+
+# =============================================================================
+# Introspection utilities
+# =============================================================================
+
+# Check if a module is loaded
+# Usage: if nutshell_loaded json; then ...
+nutshell_loaded() {
+    [[ -n "${_NUTSHELL_LOADED[$1]:-}" ]]
+}
+export -f nutshell_loaded
+
+# List loaded modules
+# Usage: nutshell_modules
+nutshell_modules() {
+    local mod
+    for mod in "${!_NUTSHELL_LOADED[@]}"; do
+        echo "$mod"
+    done | sort
+}
+export -f nutshell_modules
+
+# List all available modules
+# Usage: nutshell_available
+nutshell_available() {
+    ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | sort
+}
+export -f nutshell_available

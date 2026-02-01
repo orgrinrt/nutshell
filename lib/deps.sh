@@ -123,17 +123,18 @@ _deps_toml_get() {
 # -----------------------------------------------------------------------------
 
 # Space-separated list of available tools
-declare _TOOLS_AVAILABLE=""
+# Use -g for global scope when sourced from within a function (like use())
+declare -g _TOOLS_AVAILABLE=""
 
 # Associative array: tool name -> path
-declare -A _TOOL_PATH=()
+declare -gA _TOOL_PATH=() 2>/dev/null || declare -A _TOOL_PATH=()
 
 # Associative array: tool name -> variant (gnu/bsd/gawk/mawk/nawk/unknown)
-declare -A _TOOL_VARIANT=()
+declare -gA _TOOL_VARIANT=() 2>/dev/null || declare -A _TOOL_VARIANT=()
 
 # Associative array: capability -> 1 (present) or 0 (absent)
 # Capabilities are named as tool_capability, e.g., sed_inplace, grep_pcre
-declare -A _TOOL_CAN=()
+declare -gA _TOOL_CAN=() 2>/dev/null || declare -A _TOOL_CAN=()
 
 # -----------------------------------------------------------------------------
 # Internal: Path resolution
@@ -446,7 +447,7 @@ _deps_init
 # Make arrays readonly after init (bash 4.2+)
 # Note: associative arrays can't be made readonly in all bash versions,
 # but we document that these should not be modified
-declare -r _TOOLS_AVAILABLE
+declare -gr _TOOLS_AVAILABLE 2>/dev/null || declare -r _TOOLS_AVAILABLE
 
 # -----------------------------------------------------------------------------
 # Public API - Availability checks

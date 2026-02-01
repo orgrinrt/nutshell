@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: QA Checks
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run QA checks
+        run: |
+          chmod +x ./check
+          ./check -v
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on lib/
+        run: |
+          find lib -name '*.sh' -type f -print0 | xargs -0 shellcheck --severity=warning || true
+
+      - name: Run ShellCheck on main files
+        run: |
+          shellcheck --severity=warning nutshell.sh init check || true
+
+  test-source:
+    name: Test Sourcing
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test init sourcing
+        run: |
+          source ./init
+          echo "Successfully sourced init"
+
+      - name: Test module loading
+        run: |
+          source ./init
+          use os log deps
+          echo "OS: $(os_name)"
+          log_info "Module loading works"
+
+      - name: Test full library
+        run: |
+          source ./init
+          use os log deps string array fs text
+          log_info "Full library loaded successfully"

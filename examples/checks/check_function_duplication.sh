@@ -1,9 +1,15 @@
-#!/usr/bin/env bash
+#!/usr/bin/env nutshell
 # =============================================================================
-# test_function_duplication.sh - Function Duplication Detection Test
+# check_function_duplication.sh - Function Duplication Detection Check
 # =============================================================================
-# Gathers ALL function names from all .sh files (excluding .legacy/), then
-# performs fuzzy matching to detect potential duplications.
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# Gathers ALL function names from all .sh files, then performs fuzzy matching
+# to detect potential duplications.
+#
+# FULLY CONFIG-DRIVEN: All thresholds and patterns come from nut.toml.
+# See examples/configs/empty.nut.toml for all available options.
 #
 # Two modes of comparison:
 #   1. Full function names - detects exact or near-exact duplicates (can fail)
@@ -12,43 +18,78 @@
 #      NOTE: Stripped comparison only WARNS, never fails, since identical
 #      stripped names are often intentional API patterns (e.g., *_init, *_debug)
 #
-# Thresholds (configurable via environment variables):
-#   FULL_WARN_THRESHOLD  - Similarity for warning on full names (default: 0.85)
-#   FULL_FAIL_THRESHOLD  - Similarity for failure on full names (default: 0.95)
-#   STRIP_WARN_THRESHOLD - Similarity for warning on stripped names (default: 0.90)
-#
-# NOTE: Stripped name matches generate warnings for review but don't fail the test.
-# This is because common API patterns (init, debug, exists, etc.) are intentional.
-#
-# Usage: ./scripts/tests/test_function_duplication.sh
+# Usage: ./examples/checks/check_function_duplication.sh
 #
 # Exit codes:
 #   0 - All checks passed (may have warnings)
-#   1 - One or more errors found
+#   1 - One or more errors found, or test disabled
 # =============================================================================
 
 set -uo pipefail
 
-# Source the test framework
-source "$(dirname "${BASH_SOURCE[0]}")/framework.sh"
+# Load the check-runner framework (provides cfg_*, log_*, etc.)
+use check-runner
 
 # =============================================================================
-# CONFIGURATION
+# CONFIG-DRIVEN PARAMETERS
 # =============================================================================
 
-# Thresholds for full function name comparison
-FULL_WARN_THRESHOLD="${FULL_WARN_THRESHOLD:-0.85}"
-FULL_FAIL_THRESHOLD="${FULL_FAIL_THRESHOLD:-0.95}"
+# Thresholds (will be loaded from config)
+SIMILARITY_THRESHOLD="0.85"
+MIN_LINES_TO_CHECK="3"
 
-# Thresholds for stripped prefix comparison (warn only, no fail)
-STRIP_WARN_THRESHOLD="${STRIP_WARN_THRESHOLD:-0.90}"
+# Arrays for patterns
+declare -a IGNORE_NAME_PATTERNS=()
+declare -a EXCLUDE_PATTERNS=()
 
 # Minimum function name length to consider for comparison
 MIN_NAME_LENGTH=4
 
+load_config() {
+    # Check if test is enabled
+    if ! cfg_is_true "tests.function_duplication"; then
+        log_info "Function duplication test is disabled in config"
+        exit 0
+    fi
+    
+    # Load thresholds from config
+    SIMILARITY_THRESHOLD="$(cfg_get_or "tests.function_duplication.similarity_threshold" "0.85")"
+    MIN_LINES_TO_CHECK="$(cfg_get_or "tests.function_duplication.min_lines_to_check" "3")"
+    
+    # Load ignore patterns
+    cfg_get_array "tests.function_duplication.ignore_name_patterns" IGNORE_NAME_PATTERNS || IGNORE_NAME_PATTERNS=()
+    
+    # Load exclude patterns
+    cfg_get_array "tests.function_duplication.exclude_patterns" EXCLUDE_PATTERNS || EXCLUDE_PATTERNS=()
+}
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+
+# Check if a path matches any exclude pattern
+is_excluded_path() {
+    local path="$1"
+    
+    for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+        if [[ "$path" == *"$pattern"* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Check if a function name matches any ignore pattern
+is_ignored_name() {
+    local name="$1"
+    
+    for pattern in "${IGNORE_NAME_PATTERNS[@]}"; do
+        if echo "$name" | grep -qE "$pattern"; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 # Collect all function names with their source files
 # Output format: "function_name|file_path"
@@ -60,15 +101,29 @@ collect_all_functions() {
         [[ -z "$file" ]] && continue
         
         local rel_path="${file#$REPO_ROOT/}"
+        
+        # Check if this file is excluded
+        if is_excluded_path "$rel_path"; then
+            continue
+        fi
+        
         local functions
         functions=$(extract_functions "$file")
         
         while IFS= read -r func; do
             [[ -z "$func" ]] && continue
+            
             # Skip short names
-            if [[ ${#func} -ge $MIN_NAME_LENGTH ]]; then
-                echo "${func}|${rel_path}"
+            if [[ ${#func} -lt $MIN_NAME_LENGTH ]]; then
+                continue
             fi
+            
+            # Skip ignored names
+            if is_ignored_name "$func"; then
+                continue
+            fi
+            
+            echo "${func}|${rel_path}"
         done <<< "$functions"
     done <<< "$files"
 }
@@ -81,10 +136,9 @@ collect_all_functions() {
 # Returns lines in format: "FAIL|score|name1|name2|file1|file2" or "WARN|..."
 compare_full_names() {
     local func_data="$1"
-    local warn_threshold="$2"
-    local fail_threshold="$3"
+    local threshold="$2"
     
-    echo "$func_data" | awk -F'|' -v warn="$warn_threshold" -v fail="$fail_threshold" '
+    echo "$func_data" | awk -F'|' -v threshold="$threshold" '
     # Levenshtein distance function
     function levenshtein(s1, s2,    len1, len2, i, j, c1, c2, cost, d, del, ins, repl, min) {
         len1 = length(s1)
@@ -118,16 +172,12 @@ compare_full_names() {
     }
     
     # Quick check: can these strings possibly have similarity >= threshold?
-    # If length difference alone makes it impossible, skip expensive Levenshtein
-    # This is mathematically correct: best case similarity = min_len / max_len
     function can_meet_threshold(s1, s2, threshold,    len1, len2, maxlen, minlen) {
         len1 = length(s1)
         len2 = length(s2)
         maxlen = (len1 > len2) ? len1 : len2
         minlen = (len1 < len2) ? len1 : len2
         if (maxlen == 0) return 1
-        # Best possible similarity is when all chars of shorter string match
-        # giving edit distance = length difference, similarity = minlen/maxlen
         return ((minlen / maxlen) >= threshold)
     }
     
@@ -154,14 +204,12 @@ compare_full_names() {
                 if (files[i] == files[j]) continue
                 
                 # Early exit: if lengths are too different, skip expensive Levenshtein
-                if (!can_meet_threshold(names[i], names[j], warn)) continue
+                if (!can_meet_threshold(names[i], names[j], threshold)) continue
                 
                 score = similarity(names[i], names[j])
                 
-                if (score >= fail) {
-                    printf "FAIL|%.3f|%s|%s|%s|%s\n", score, names[i], names[j], files[i], files[j]
-                } else if (score >= warn) {
-                    printf "WARN|%.3f|%s|%s|%s|%s\n", score, names[i], names[j], files[i], files[j]
+                if (score >= threshold) {
+                    printf "MATCH|%.3f|%s|%s|%s|%s\n", score, names[i], names[j], files[i], files[j]
                 }
             }
         }
@@ -199,13 +247,12 @@ add_stripped_names() {
 }
 
 # Run stripped name comparison using optimized awk
-# Returns lines in format: "FAIL|score|stripped1|orig1|stripped2|orig2|file1|file2" or "WARN|..."
+# Returns lines in format: "WARN|score|stripped1|orig1|stripped2|orig2|file1|file2"
 compare_stripped_names() {
     local func_data="$1"
-    local warn_threshold="$2"
-    local fail_threshold="$3"
+    local threshold="$2"
     
-    echo "$func_data" | awk -F'|' -v warn="$warn_threshold" -v fail="$fail_threshold" '
+    echo "$func_data" | awk -F'|' -v threshold="$threshold" '
     function levenshtein(s1, s2,    len1, len2, i, j, c1, c2, cost, d, del, ins, repl, min) {
         len1 = length(s1)
         len2 = length(s2)
@@ -236,7 +283,6 @@ compare_stripped_names() {
         return d[len1, len2]
     }
     
-    # Quick check: can these strings possibly have similarity >= threshold?
     function can_meet_threshold(s1, s2, threshold,    len1, len2, maxlen, minlen) {
         len1 = length(s1)
         len2 = length(s2)
@@ -269,12 +315,11 @@ compare_stripped_names() {
                 if (files[i] == files[j]) continue
                 
                 # Early exit: if lengths are too different, skip expensive Levenshtein
-                if (!can_meet_threshold(stripped[i], stripped[j], warn)) continue
+                if (!can_meet_threshold(stripped[i], stripped[j], threshold)) continue
                 
                 score = similarity(stripped[i], stripped[j])
                 
-                # Stripped names only warn, never fail (common API patterns are intentional)
-                if (score >= warn) {
+                if (score >= threshold) {
                     printf "WARN|%.3f|%s|%s|%s|%s|%s|%s\n", score, stripped[i], original[i], stripped[j], original[j], files[i], files[j]
                 }
             }
@@ -289,51 +334,39 @@ compare_stripped_names() {
 
 test_full_name_duplication() {
     log_section "Full Function Name Comparison"
-    log_info "Warn threshold: $FULL_WARN_THRESHOLD | Fail threshold: $FULL_FAIL_THRESHOLD"
+    log_info "Similarity threshold: $SIMILARITY_THRESHOLD"
+    if [[ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]]; then
+        log_info "Excluding paths: ${EXCLUDE_PATTERNS[*]}"
+    fi
     echo ""
     
     local func_data
     func_data=$(collect_all_functions)
     
     local count
-    count=$(echo "$func_data" | wc -l | tr -d ' ')
+    count=$(echo "$func_data" | grep -c . || echo "0")
     log_info "Found $count functions to compare"
     echo ""
     
     local results
-    results=$(compare_full_names "$func_data" "$FULL_WARN_THRESHOLD" "$FULL_FAIL_THRESHOLD")
+    results=$(compare_full_names "$func_data" "$SIMILARITY_THRESHOLD")
     
     local failures=0
-    local warnings=0
     
     while IFS='|' read -r level score name1 name2 file1 file2; do
         [[ -z "$level" ]] && continue
         
-        case "$level" in
-            FAIL)
-                log_fail "Similar functions (${score}): '$name1' ↔ '$name2'"
-                echo -e "       ${RED}$file1${NC}"
-                echo -e "       ${RED}$file2${NC}"
-                failures=$((failures + 1))
-                ;;
-            WARN)
-                log_warn "Potentially similar (${score}): '$name1' ↔ '$name2'"
-                echo -e "       ${YELLOW}$file1${NC}"
-                echo -e "       ${YELLOW}$file2${NC}"
-                warnings=$((warnings + 1))
-                ;;
-        esac
+        log_fail "Similar functions (${score}): '$name1' ↔ '$name2'"
+        echo -e "       ${RED}$file1${NC}"
+        echo -e "       ${RED}$file2${NC}"
+        failures=$((failures + 1))
     done <<< "$results"
     
     echo ""
     
     if [[ $failures -gt 0 ]]; then
         echo -e "${RED}Found $failures function pairs that are too similar - likely duplicates!${NC}"
-    fi
-    if [[ $warnings -gt 0 ]]; then
-        echo -e "${YELLOW}Found $warnings function pairs that may need review${NC}"
-    fi
-    if [[ $failures -eq 0 ]] && [[ $warnings -eq 0 ]]; then
+    else
         log_pass "No problematic function name similarities found"
     fi
     
@@ -348,7 +381,7 @@ test_stripped_name_duplication() {
     log_section "Stripped Prefix Comparison"
     log_info "Compares function names after removing first word before underscore"
     log_info "e.g., 'git_check_valid' → 'check_valid', '_private_init' → 'init'"
-    log_info "Warn threshold: $STRIP_WARN_THRESHOLD (warnings only, no failures)"
+    log_info "Similarity threshold: $SIMILARITY_THRESHOLD (warnings only, no failures)"
     log_info "Similar stripped names are often intentional API patterns (e.g., *_init, *_debug)"
     echo ""
     
@@ -359,20 +392,19 @@ test_stripped_name_duplication() {
     stripped_data=$(add_stripped_names "$func_data")
     
     local count
-    count=$(echo "$stripped_data" | wc -l | tr -d ' ')
+    count=$(echo "$stripped_data" | grep -c . || echo "0")
     log_info "Found $count functions with meaningful stripped names"
     echo ""
     
     local results
-    results=$(compare_stripped_names "$stripped_data" "$STRIP_WARN_THRESHOLD" "1.01")
+    results=$(compare_stripped_names "$stripped_data" "$SIMILARITY_THRESHOLD")
     
     local warnings=0
     
     while IFS='|' read -r level score strip1 orig1 strip2 orig2 file1 file2; do
         [[ -z "$level" ]] && continue
         
-        # Stripped name matches are always warnings (intentional API patterns)
-        log_warn "Similar core names (${score}): '$orig1' ['$strip1'] ↔ '$orig2' ['$strip2']"
+        log_test_warn "Similar core names (${score}): '$orig1' ['$strip1'] ↔ '$orig2' ['$strip2']"
         echo -e "       ${YELLOW}$file1${NC}"
         echo -e "       ${YELLOW}$file2${NC}"
         warnings=$((warnings + 1))
@@ -392,10 +424,13 @@ test_stripped_name_duplication() {
 }
 
 # =============================================================================
-# RUN TESTS
+# MAIN
 # =============================================================================
 
 main() {
+    # Load configuration from nut.toml
+    load_config
+    
     log_header "Function Duplication Detection Test"
     
     local full_failures=0
@@ -410,9 +445,12 @@ main() {
     strip_failures=$?
     
     # Set failures count for summary
-    TESTS_FAILED=$((full_failures + strip_failures))
+    TESTS_FAILED=$full_failures
+    TESTS_WARNED=$strip_failures
     if [[ $TESTS_FAILED -eq 0 ]]; then
         TESTS_PASSED=2
+    else
+        TESTS_PASSED=1
     fi
     TESTS_RUN=2
     

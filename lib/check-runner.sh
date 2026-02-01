@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/tests/framework.sh - Config-driven Test Framework
+# nutshell/lib/check-runner.sh - Check/QA Test Framework
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Provides common utilities and test runner infrastructure for all QA tests.
+# Provides common utilities and test runner infrastructure for all QA checks.
 # All behavior is driven by nut.toml configuration - nothing is hardcoded.
 #
-# Usage (in test files):
-#   source "$(dirname "${BASH_SOURCE[0]}")/framework.sh"
+# Usage:
+#   use check-runner
 #
 # Config discovery order:
 #   1. $NUTSHELL_CONFIG (environment variable)
@@ -25,20 +25,20 @@ set -uo pipefail
 # BOOTSTRAP - Find ourselves and load nutshell core
 # =============================================================================
 
-FRAMEWORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NUTSHELL_ROOT="$(cd "$FRAMEWORK_DIR/.." && pwd)"
+_CHECK_RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NUTSHELL_ROOT="${NUTSHELL_ROOT:-$(cd "$_CHECK_RUNNER_DIR/.." && pwd)}"
 
 # The canonical defaults file - this is the ONLY source of defaults
-NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/templates/empty.nut.toml"
+NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/examples/configs/empty.nut.toml"
 
 # Source nutshell core modules
 # We eat our own dogfood - the test framework uses nutshell itself
-source "${NUTSHELL_ROOT}/core/os.sh"
-source "${NUTSHELL_ROOT}/core/log.sh"
-source "${NUTSHELL_ROOT}/core/fs.sh"
-source "${NUTSHELL_ROOT}/core/string.sh"
-source "${NUTSHELL_ROOT}/core/validate.sh"
-source "${NUTSHELL_ROOT}/core/toml.sh"
+source "${NUTSHELL_ROOT}/lib/os.sh"
+source "${NUTSHELL_ROOT}/lib/log.sh"
+source "${NUTSHELL_ROOT}/lib/fs.sh"
+source "${NUTSHELL_ROOT}/lib/string.sh"
+source "${NUTSHELL_ROOT}/lib/validate.sh"
+source "${NUTSHELL_ROOT}/lib/toml.sh"
 
 # =============================================================================
 # PATHS - Determined after config is loaded
@@ -57,8 +57,8 @@ CONFIG_FILE=""
 _ACTIVE_CONFIG_FILE=""
 
 # Cached values from config (for performance)
-declare -a NUT_EXCLUDE_PATHS=()
-declare -a NUT_INCLUDE_PATTERNS=()
+declare -ga NUT_EXCLUDE_PATHS=() 2>/dev/null || declare -a NUT_EXCLUDE_PATHS=()
+declare -ga NUT_INCLUDE_PATTERNS=() 2>/dev/null || declare -a NUT_INCLUDE_PATTERNS=()
 
 # =============================================================================
 # CONFIG ACCESS - All config access goes through toml.sh
@@ -104,14 +104,69 @@ cfg_get_or() {
 }
 
 # Check if a config value is truthy
+# For test sections: a table without explicit boolean is considered "true"
 # Usage: cfg_is_true "key"
 cfg_is_true() {
     local key="$1"
     local value
-    value="$(cfg_get_or "$key" "false")"
-    is_truthy "$value"
+    
+    # First check if user config has a section for this key
+    # If user has [tests.foo] section, that means they want it enabled,
+    # even if defaults file has "foo = false"
+    if [[ -n "$CONFIG_FILE" ]] && [[ -f "$CONFIG_FILE" ]]; then
+        if grep -qE "^\[${key}\]" "$CONFIG_FILE" 2>/dev/null; then
+            return 0  # User has section, treat as enabled
+        fi
+        
+        # Check if user config has explicit boolean for this key
+        if value="$(toml_get "$CONFIG_FILE" "$key" 2>/dev/null)"; then
+            is_truthy "$value"
+            return $?
+        fi
+    fi
+    
+    # Fall back to defaults file
+    if [[ -f "$NUTSHELL_DEFAULTS_FILE" ]]; then
+        # Check for section in defaults
+        if grep -qE "^\[${key}\]" "$NUTSHELL_DEFAULTS_FILE" 2>/dev/null; then
+            return 0  # Defaults has section, treat as enabled
+        fi
+        
+        # Check for explicit boolean
+        if value="$(toml_get "$NUTSHELL_DEFAULTS_FILE" "$key" 2>/dev/null)"; then
+            is_truthy "$value"
+            return $?
+        fi
+    fi
+    
+    # Not found anywhere - default to false
+    return 1
 }
 
+# Check if a section exists in the config
+# Usage: cfg_section_exists "section.name"
+cfg_section_exists() {
+    local section="$1"
+    
+    # Try user config first
+    if [[ -n "$CONFIG_FILE" ]] && [[ -f "$CONFIG_FILE" ]]; then
+        if grep -qE "^\[${section}\]" "$CONFIG_FILE" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    
+    # Fall back to defaults
+    if [[ -f "$NUTSHELL_DEFAULTS_FILE" ]]; then
+        if grep -qE "^\[${section}\]" "$NUTSHELL_DEFAULTS_FILE" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
+# @@PUBLIC_API@@
+# DISABLED_ANNOTATION
 # Check if a test is enabled
 # Usage: cfg_test_enabled "syntax"
 cfg_test_enabled() {
@@ -183,7 +238,7 @@ _find_config_file() {
 
 # Find repo root by looking for common markers
 _find_repo_root() {
-    local dir="$FRAMEWORK_DIR"
+    local dir="$_CHECK_RUNNER_DIR"
     
     while [[ "$dir" != "/" ]]; do
         # Check for repo markers
@@ -298,8 +353,8 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_WARNED=0
 
-declare -a FAILED_TESTS=()
-declare -a WARNED_TESTS=()
+declare -ga FAILED_TESTS=() 2>/dev/null || declare -a FAILED_TESTS=()
+declare -ga WARNED_TESTS=() 2>/dev/null || declare -a WARNED_TESTS=()
 
 # Reset counters (useful when running multiple test files)
 reset_counters() {
@@ -452,7 +507,7 @@ has_trivial_wrapper_exemption() {
     local ergonomics_annotation
     
     public_api_annotation="$(cfg_get_or "annotations.public_api" "@@PUBLIC_API@@")"
-    ergonomics_annotation="$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@")"
+    ergonomics_annotation="$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "DISABLED_ANNOTATION")"
     
     has_annotation "$file" "$func_name" "$public_api_annotation" && return 0
     has_annotation "$file" "$func_name" "$ergonomics_annotation" && return 0
@@ -581,6 +636,13 @@ strip_prefix() {
 # Usage: print_summary ["Test Suite Name"]
 print_summary() {
     local test_name="${1:-Test Suite}"
+    
+    # In quiet mode (called from main check runner), skip verbose output
+    # The main runner handles its own summary
+    if [[ "${NUTSHELL_CHECK_QUIET:-0}" == "1" ]]; then
+        [[ $TESTS_FAILED -gt 0 ]] && return 1
+        return 0
+    fi
     
     local show_summary
     show_summary="$(cfg_get_or "output.show_summary" "true")"

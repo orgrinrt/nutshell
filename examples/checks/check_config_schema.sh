@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
+#!/usr/bin/env nutshell
 # =============================================================================
-# test_config_schema.sh - Configuration Schema Validation Test
+# check_config_schema.sh - Configuration Schema Validation Check
 # =============================================================================
 # Validates that the nut.toml configuration file has valid structure.
 # Uses nutshell's own toml.sh - no external dependencies.
 #
-# Usage: ./tests/test_config_schema.sh
+# Usage: ./examples/checks/check_config_schema.sh
 #
 # Exit codes:
 #   0 - Configuration is valid
@@ -14,8 +14,8 @@
 
 set -uo pipefail
 
-# Source the test framework
-source "$(dirname "${BASH_SOURCE[0]}")/framework.sh"
+# Load the check-runner framework (provides cfg_*, log_*, etc.)
+use check-runner
 
 # =============================================================================
 # SCHEMA DEFINITION

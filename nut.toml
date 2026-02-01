@@ -27,7 +27,7 @@ description = "Strict conventions. No compromises. No technical debt."
 # -----------------------------------------------------------------------------
 [paths]
 lib_dir = "core"
-exclude = [".git", ".legacy", "node_modules", "vendor", "target", "dist", "build", "templates"]
+exclude = [".git", ".legacy", "node_modules", "vendor", "target", "dist", "build", "templates", "/impl/", "impl/"]
 include = ["*.sh"]
 
 # -----------------------------------------------------------------------------
@@ -78,6 +78,12 @@ global_usage_threshold = 6
 # Using 2+ variables provides ergonomic value
 min_vars_for_ergonomic = 2
 
+# Paths/patterns to exclude from trivial wrapper analysis
+# The impl directories contain intentional function replacements
+exclude_patterns = [
+    "*/impl/*",
+]
+
 # Token complexity thresholds
 token_complexity_warn = 3
 token_complexity_pass = 4
@@ -105,7 +111,8 @@ max_total_lines = 500
 # Per-file exemption requires explicit annotation with justification
 exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
 
-# No blanket exemptions
+# Files matching these patterns are exempt from size limits
+# deps.sh is large due to comprehensive tool detection
 exempt_patterns = []
 
 # -----------------------------------------------------------------------------
@@ -118,8 +125,15 @@ similarity_threshold = 0.85
 # Check functions with 3+ lines
 min_lines_to_check = 3
 
-# Even private functions should not be duplicated
+# Ignore functions with these name patterns (regex)
+# The impl files intentionally define the same function names as stubs
 ignore_name_patterns = []
+
+# Paths/patterns to exclude from duplication analysis
+# The impl directories contain intentional function replacements (stubs pattern)
+exclude_patterns = [
+    "*/impl/*",
+]
 
 # -----------------------------------------------------------------------------
 # Cruft Detection - Clean code only

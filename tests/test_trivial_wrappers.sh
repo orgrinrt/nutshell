@@ -2,89 +2,69 @@
 # =============================================================================
 # test_trivial_wrappers.sh - Trivial Wrapper Function Detection Test
 # =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
 # Detects functions that have only 1-2 lines of meaningful code that just wrap
 # another call, AND are not used frequently enough to justify their existence.
 #
-# RULES:
-#   - Functions with 1-2 lines of actual code (excluding declarations, comments)
-#     are considered "trivial wrappers"
-#   - Trivial wrappers are ALLOWED if ANY of these conditions are met:
-#     * They have >= LOCAL_USAGE_THRESHOLD usages in the same file (default: 4)
-#     * They have >= GLOBAL_USAGE_THRESHOLD usages across codebase (default: 6)
-#     * They use >= MIN_VARS_FOR_ERGONOMIC variables (default: 2) - ergonomic benefit
-#     * They have >= TOKEN_COMPLEXITY_PASS tokens/spaces (default: 4) - complex enough
-#     * They have #@@ALLOW_TRIVIAL_WRAPPER@@ comment above them
-#   - Functions with >= TOKEN_COMPLEXITY_WARN tokens get a warning, not error
-#   - Otherwise, they should be inlined or expanded with real logic
+# FULLY CONFIG-DRIVEN: All thresholds and patterns come from nut.toml.
+# See templates/empty.nut.toml for all available options.
 #
-# Thresholds (configurable via environment variables):
-#   LOCAL_USAGE_THRESHOLD    - Minimum usages in same file to allow (default: 4)
-#   GLOBAL_USAGE_THRESHOLD   - Minimum usages across codebase to allow (default: 6)
-#   MIN_VARS_FOR_ERGONOMIC   - Minimum variables used to be considered ergonomic (default: 2)
-#   TOKEN_COMPLEXITY_WARN    - Token count that triggers warning instead of error (default: 3)
-#   TOKEN_COMPLEXITY_PASS    - Token count that auto-passes (default: 4)
-#   WARN_THRESHOLD           - Number of violations before warning (default: 5)
-#   FAIL_THRESHOLD           - Number of violations before failing (default: 20)
-#
-# Usage: ./scripts/tests/test_trivial_wrappers.sh
+# Usage: ./tests/test_trivial_wrappers.sh
 #
 # Exit codes:
 #   0 - All checks passed (may have warnings)
-#   1 - Too many trivial wrappers found
+#   1 - Too many trivial wrappers found, or test disabled
 # =============================================================================
 
 set -uo pipefail
 
 # Source the test framework
-source "$(dirname "${BASH_SOURCE[0]}")/framework.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/framework.sh"
 
 # =============================================================================
-# CONFIGURATION
+# CONFIG-DRIVEN PARAMETERS
+# All values loaded from nut.toml via the framework's cfg_get functions.
+# No hardcoded defaults here - defaults come from templates/empty.nut.toml.
 # =============================================================================
 
-LOCAL_USAGE_THRESHOLD="${LOCAL_USAGE_THRESHOLD:-4}"
-GLOBAL_USAGE_THRESHOLD="${GLOBAL_USAGE_THRESHOLD:-6}"
-MIN_VARS_FOR_ERGONOMIC="${MIN_VARS_FOR_ERGONOMIC:-2}"
-TOKEN_COMPLEXITY_WARN="${TOKEN_COMPLEXITY_WARN:-3}"
-TOKEN_COMPLEXITY_PASS="${TOKEN_COMPLEXITY_PASS:-4}"
-WARN_THRESHOLD="${WARN_THRESHOLD:-5}"
-FAIL_THRESHOLD="${FAIL_THRESHOLD:-20}"
+load_config() {
+    # Check if test is enabled
+    if ! cfg_is_true "tests.trivial_wrappers"; then
+        log_info "Trivial wrapper test is disabled in config"
+        exit 0
+    fi
+    
+    # Load all thresholds from config
+    MAX_LINES="$(cfg_get_or "tests.trivial_wrappers.max_lines" "2")"
+    LOCAL_USAGE_THRESHOLD="$(cfg_get_or "tests.trivial_wrappers.local_usage_threshold" "4")"
+    GLOBAL_USAGE_THRESHOLD="$(cfg_get_or "tests.trivial_wrappers.global_usage_threshold" "6")"
+    MIN_VARS_FOR_ERGONOMIC="$(cfg_get_or "tests.trivial_wrappers.min_vars_for_ergonomic" "2")"
+    TOKEN_COMPLEXITY_WARN="$(cfg_get_or "tests.trivial_wrappers.token_complexity_warn" "3")"
+    TOKEN_COMPLEXITY_PASS="$(cfg_get_or "tests.trivial_wrappers.token_complexity_pass" "4")"
+    WARN_THRESHOLD="$(cfg_get_or "tests.trivial_wrappers.warn_threshold" "5")"
+    FAIL_THRESHOLD="$(cfg_get_or "tests.trivial_wrappers.fail_threshold" "20")"
+    
+    # Load annotation patterns from config
+    PUBLIC_API_ANNOTATION="$(cfg_get_or "annotations.public_api" "@@PUBLIC_API@@")"
+    ERGONOMICS_ANNOTATION="$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@")"
+}
 
 # =============================================================================
 # FUNCTION ANALYSIS
 # =============================================================================
 
-# Check if a function has the ALLOW_TRIVIAL_WRAPPER annotation
-# Returns 0 if allowed, 1 if not
-has_allow_annotation() {
+# Check if a function has an exempting annotation
+# Uses annotation patterns from config
+# Returns 0 if exempt, 1 if not
+has_exempt_annotation() {
     local file="$1"
     local func_name="$2"
     
-    # Look for the annotation in the 5 lines before the function definition
-    # This handles cases where there might be doc comments between annotation and func
-    local line_num
-    line_num=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    
-    if [[ -z "$line_num" ]]; then
-        # Try alternate function syntax
-        line_num=$(grep -n "^[[:space:]]*function[[:space:]]\+${func_name}[[:space:]]*(" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    fi
-    
-    if [[ -z "$line_num" ]] || [[ "$line_num" -lt 1 ]]; then
-        return 1
-    fi
-    
-    # Check the 5 lines before the function definition
-    local start_line=$((line_num - 5))
-    if [[ $start_line -lt 1 ]]; then
-        start_line=1
-    fi
-    
-    if sed -n "${start_line},${line_num}p" "$file" 2>/dev/null | grep -q '#@@ALLOW_TRIVIAL_WRAPPER@@'; then
-        return 0
-    fi
-    
-    return 1
+    # Use the framework's has_trivial_wrapper_exemption which reads from config
+    has_trivial_wrapper_exemption "$file" "$func_name"
 }
 
 # Count usages of a function in a specific file (excluding the definition)
@@ -92,454 +72,344 @@ count_local_usages() {
     local file="$1"
     local func_name="$2"
     
-    # Count occurrences that are NOT the function definition
     local count
     count=$(grep -c "\b${func_name}\b" "$file" 2>/dev/null || echo "0")
-    # Ensure it's a number
     count="${count//[^0-9]/}"
-    if [[ -z "$count" ]]; then
-        count=0
-    fi
-    echo "$count"
-}
-
-# Count usages of a function across all script files (excluding the definition)
-count_global_usages() {
-    local func_name="$1"
-    local defining_file="$2"
-    
-    local count=0
-    
-    # Use grep -r for efficiency, count total matches
-    local total
-    total=$(grep -r "\b${func_name}\b" "$LIB_DIR" --include="*.sh" 2>/dev/null | grep -v "\.legacy" | wc -l || echo "0")
-    total="${total//[^0-9]/}"
-    if [[ -z "$total" ]]; then
-        total=0
-    fi
+    [[ -z "$count" ]] && count=0
     
     # Subtract 1 for the definition itself
-    count=$((total - 1))
-    if [[ $count -lt 0 ]]; then
-        count=0
-    fi
+    count=$((count - 1))
+    [[ $count -lt 0 ]] && count=0
     
     echo "$count"
 }
 
-# Count unique variables used in a function body
-# Returns the count of distinct variable references ($var, ${var}, $1, $2, etc.)
-count_variables_used() {
-    local body="$1"
+# Count usages of a function across all files
+count_global_usages() {
+    local func_name="$1"
     
-    # Extract all variable references:
-    # - Named variables: $var, ${var}, ${var:-...}
-    # - Positional parameters: $1, $2, ${1}, ${10}
-    # - Special variables: $@, $*, $#, $?, $$
-    local var_count
-    var_count=$(echo "$body" | grep -oE '\$\{?[a-zA-Z_0-9@*#?!-][a-zA-Z0-9_]*' | \
-        sed 's/^\${\?//' | \
+    local total=0
+    local file count
+    
+    while IFS= read -r file; do
+        count=$(grep -c "\b${func_name}\b" "$file" 2>/dev/null || echo "0")
+        count="${count//[^0-9]/}"
+        [[ -z "$count" ]] && count=0
+        total=$((total + count))
+    done < <(get_script_files)
+    
+    # Subtract 1 for the definition
+    total=$((total - 1))
+    [[ $total -lt 0 ]] && total=0
+    
+    echo "$total"
+}
+
+# Extract meaningful code lines from a function body
+# Excludes: comments, blank lines, local declarations, opening/closing braces
+get_meaningful_lines() {
+    local file="$1"
+    local func_name="$2"
+    
+    # Find the line number where the function starts
+    local func_line
+    func_line=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+    
+    if [[ -z "$func_line" ]]; then
+        # Try alternate syntax: function name() or function name ()
+        func_line=$(grep -n "^[[:space:]]*function[[:space:]]\+${func_name}[[:space:]]*(" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+    fi
+    
+    [[ -z "$func_line" ]] && return
+    
+    # Find the closing brace - simple heuristic: next line starting with }
+    # This works for most well-formatted shell functions
+    local end_line
+    end_line=$(tail -n "+$((func_line + 1))" "$file" | grep -n "^}" | head -1 | cut -d: -f1)
+    
+    if [[ -z "$end_line" ]]; then
+        # Fallback: look for } at start of line with possible whitespace
+        end_line=$(tail -n "+$((func_line + 1))" "$file" | grep -n "^[[:space:]]*}[[:space:]]*$" | head -1 | cut -d: -f1)
+    fi
+    
+    [[ -z "$end_line" ]] && return
+    
+    # Adjust end_line to be absolute (it's relative to func_line+1)
+    end_line=$((func_line + end_line))
+    
+    # Extract lines between func start and end, filter out non-meaningful lines
+    sed -n "$((func_line + 1)),$((end_line - 1))p" "$file" 2>/dev/null | \
+        grep -v '^[[:space:]]*#' | \
+        grep -v '^[[:space:]]*$' | \
+        grep -v '^[[:space:]]*local[[:space:]]' | \
+        grep -v '^[[:space:]]*readonly[[:space:]]' | \
+        grep -v '^[[:space:]]*return[[:space:]]*$' | \
+        grep -v '^[[:space:]]*return[[:space:]]\+\$?' | \
+        grep -v '^[[:space:]]*}[[:space:]]*$'
+}
+
+# Count meaningful lines in a function
+count_meaningful_lines() {
+    local file="$1"
+    local func_name="$2"
+    
+    get_meaningful_lines "$file" "$func_name" | wc -l | tr -d ' '
+}
+
+# Count unique variables used in function body
+count_variables_used() {
+    local file="$1"
+    local func_name="$2"
+    
+    get_meaningful_lines "$file" "$func_name" | \
+        grep -oE '\$\{?[a-zA-Z_][a-zA-Z0-9_]*' | \
+        sed 's/[${}]//g' | \
         sort -u | \
         wc -l | \
-        tr -d ' ')
-    
-    # Ensure it's a number
-    var_count="${var_count//[^0-9]/}"
-    if [[ -z "$var_count" ]]; then
-        var_count=0
-    fi
-    
-    echo "$var_count"
+        tr -d ' '
 }
 
-# Count token complexity (number of whitespace-separated tokens/words)
-# This measures how "complex" a line is - more tokens = more ergonomic benefit
-count_token_complexity() {
-    local body="$1"
-    
-    # Count distinct whitespace boundaries (spaces, tabs between words)
-    # We count the number of whitespace sequences, which equals tokens - 1
-    local space_count
-    space_count=$(echo "$body" | grep -oE '[[:space:]]+' | wc -l | tr -d ' ')
-    
-    # Ensure it's a number
-    space_count="${space_count//[^0-9]/}"
-    if [[ -z "$space_count" ]]; then
-        space_count=0
-    fi
-    
-    echo "$space_count"
-}
-
-# Analyze all functions in a file and detect trivial wrappers
-# Output format: "filepath|funcname|line_count|local_usages|global_usages|var_count|body"
-analyze_file_for_wrappers() {
+# Count tokens (complexity indicator) in function body
+count_tokens() {
     local file="$1"
-    local rel_path="${file#$REPO_ROOT/}"
+    local func_name="$2"
     
-    # First pass: extract all potential trivial wrappers using awk
-    local wrappers
-    wrappers=$(awk -v file="$rel_path" '
-    BEGIN {
-        in_func = 0
-        func_name = ""
-        brace_count = 0
-        body = ""
-        meaningful_lines = 0
-        func_start_line = 0
-    }
-    
-    # Match function definition start
-    /^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(\)[[:space:]]*\{?/ {
-        if (in_func && brace_count > 0) {
-            # Nested function - skip
-            next
-        }
-        
-        # Extract function name
-        line = $0
-        gsub(/^[[:space:]]*(function[[:space:]]+)?/, "", line)
-        gsub(/[[:space:]]*\(.*/, "", line)
-        func_name = line
-        
-        in_func = 1
-        brace_count = 0
-        body = ""
-        meaningful_lines = 0
-        func_start_line = NR
-        
-        # Count opening brace if on same line
-        if (match($0, /\{/)) {
-            brace_count = 1
-        }
-        next
-    }
-    
-    # Process lines when inside a function
-    in_func {
-        # Count braces
-        n = gsub(/\{/, "{")
-        brace_count += n
-        n = gsub(/\}/, "}")
-        brace_count -= n
-        
-        # Skip opening brace only line
-        if ($0 ~ /^[[:space:]]*\{[[:space:]]*$/) {
-            next
-        }
-        
-        # Check if function ended
-        if (brace_count <= 0) {
-            # Output if this looks like a trivial wrapper (1-2 meaningful lines)
-            if (meaningful_lines >= 1 && meaningful_lines <= 2 && body != "") {
-                # Clean up body for output
-                gsub(/\n+$/, "", body)
-                gsub(/\n/, " ; ", body)
-                printf "%s|%s|%d|%s\n", file, func_name, meaningful_lines, body
-            }
-            
-            in_func = 0
-            func_name = ""
-            body = ""
-            meaningful_lines = 0
-            next
-        }
-        
-        # Skip empty lines
-        if ($0 ~ /^[[:space:]]*$/) {
-            next
-        }
-        
-        # Skip comment lines
-        if ($0 ~ /^[[:space:]]*#/) {
-            next
-        }
-        
-        # Skip closing brace only
-        if ($0 ~ /^[[:space:]]*\}[[:space:]]*$/) {
-            next
-        }
-        
-        # Skip local variable declarations (they dont count as meaningful logic)
-        if ($0 ~ /^[[:space:]]*local[[:space:]]/) {
-            next
-        }
-        
-        # Skip readonly declarations
-        if ($0 ~ /^[[:space:]]*readonly[[:space:]]/) {
-            next
-        }
-        
-        # Skip export declarations
-        if ($0 ~ /^[[:space:]]*export[[:space:]]/) {
-            next
-        }
-        
-        # Skip bare return statements
-        if ($0 ~ /^[[:space:]]*return[[:space:]]*[0-9]*[[:space:]]*$/) {
-            next
-        }
-        
-        # Skip return $?
-        if ($0 ~ /^[[:space:]]*return[[:space:]]+\$\?[[:space:]]*$/) {
-            next
-        }
-        
-        # This is a meaningful line
-        meaningful_lines++
-        
-        # Store the line content
-        line = $0
-        gsub(/^[[:space:]]+/, "", line)
-        gsub(/[[:space:]]+$/, "", line)
-        
-        if (body == "") {
-            body = line
-        } else {
-            body = body "\n" line
-        }
-    }
-    ' "$file")
-    
-    # Second pass: for each potential wrapper, count usages and check annotation
-    echo "$wrappers" | while IFS='|' read -r filepath funcname line_count body; do
-        [[ -z "$funcname" ]] && continue
-        
-        # Check for ALLOW annotation
-        if has_allow_annotation "$file" "$funcname"; then
-            continue  # Skip - explicitly allowed
-        fi
-        
-        # Count usages
-        local local_usages global_usages
-        local_usages=$(count_local_usages "$file" "$funcname")
-        # Ensure numeric and subtract definition
-        local_usages="${local_usages//[^0-9]/}"
-        if [[ -z "$local_usages" ]]; then
-            local_usages=0
-        fi
-        local_usages=$((local_usages - 1))
-        if [[ $local_usages -lt 0 ]]; then
-            local_usages=0
-        fi
-        
-        global_usages=$(count_global_usages "$funcname" "$file")
-        global_usages="${global_usages//[^0-9]/}"
-        if [[ -z "$global_usages" ]]; then
-            global_usages=0
-        fi
-        
-        # Check if usage thresholds are met
-        if [[ $local_usages -ge $LOCAL_USAGE_THRESHOLD ]] || [[ $global_usages -ge $GLOBAL_USAGE_THRESHOLD ]]; then
-            continue  # Skip - meets usage threshold
-        fi
-        
-        # Count variables used in the body
-        local var_count
-        var_count=$(count_variables_used "$body")
-        
-        # Check if this wrapper has ergonomic benefit (uses multiple variables)
-        if [[ $var_count -ge $MIN_VARS_FOR_ERGONOMIC ]]; then
-            continue  # Skip - provides ergonomic benefit (remembers multiple vars)
-        fi
-        
-        # Count token complexity
-        local token_count
-        token_count=$(count_token_complexity "$body")
-        
-        # Check if this wrapper is complex enough to auto-pass
-        if [[ $token_count -ge $TOKEN_COMPLEXITY_PASS ]]; then
-            continue  # Skip - complex enough to be ergonomic
-        fi
-        
-        # Determine if this is a warning or error based on token complexity
-        local severity="error"
-        if [[ $token_count -ge $TOKEN_COMPLEXITY_WARN ]]; then
-            severity="warn"
-        fi
-        
-        # This is a trivial wrapper that should be flagged
-        echo "$filepath|$funcname|$line_count|$local_usages|$global_usages|$var_count|$token_count|$severity|$body"
-    done
+    get_meaningful_lines "$file" "$func_name" | \
+        tr -s '[:space:]' '\n' | \
+        grep -v '^$' | \
+        wc -l | \
+        tr -d ' '
 }
 
-# Check if a wrapper is truly trivial based on its content
-# Some patterns indicate actual value even in 1-2 lines
-is_trivial_content() {
-    local body="$1"
+# Analyze a single function for trivial wrapper status
+# Returns: pass, warn, or fail
+analyze_function() {
+    local file="$1"
+    local func_name="$2"
     
-    # If it has complex conditionals spanning logic, it's not trivial
-    if [[ "$body" == *"if "* ]] && [[ "$body" == *"then"* ]]; then
-        return 1  # Not trivial
+    # Get metrics
+    local line_count var_count token_count local_usages global_usages
+    line_count=$(count_meaningful_lines "$file" "$func_name")
+    
+    # Not a trivial wrapper if more than MAX_LINES
+    if [[ $line_count -gt $MAX_LINES ]]; then
+        echo "pass:not_trivial"
+        return
     fi
     
-    # If it has a loop, it's not trivial
-    if [[ "$body" == *"for "* ]] || [[ "$body" == *"while "* ]] || [[ "$body" == *"until "* ]]; then
-        return 1
+    # Check for exempt annotation
+    if has_exempt_annotation "$file" "$func_name"; then
+        echo "pass:annotated"
+        return
     fi
     
-    # Multiple pipe operations suggest real transformation
-    local pipe_count
-    pipe_count=$(echo "$body" | grep -o '|' | wc -l | tr -d ' ')
-    if [[ $pipe_count -gt 2 ]]; then
-        return 1
+    # Calculate other metrics
+    var_count=$(count_variables_used "$file" "$func_name")
+    token_count=$(count_tokens "$file" "$func_name")
+    local_usages=$(count_local_usages "$file" "$func_name")
+    global_usages=$(count_global_usages "$func_name")
+    
+    # Check ergonomic passes (ANY of these = pass)
+    if [[ $local_usages -ge $LOCAL_USAGE_THRESHOLD ]]; then
+        echo "pass:local_usage"
+        return
     fi
     
-    # Everything else is trivial
-    return 0
+    if [[ $global_usages -ge $GLOBAL_USAGE_THRESHOLD ]]; then
+        echo "pass:global_usage"
+        return
+    fi
+    
+    if [[ $var_count -ge $MIN_VARS_FOR_ERGONOMIC ]]; then
+        echo "pass:ergonomic_vars"
+        return
+    fi
+    
+    if [[ $token_count -ge $TOKEN_COMPLEXITY_PASS ]]; then
+        echo "pass:complex"
+        return
+    fi
+    
+    # Warn vs fail based on token complexity
+    if [[ $token_count -ge $TOKEN_COMPLEXITY_WARN ]]; then
+        echo "warn:${line_count}:${local_usages}:${global_usages}:${var_count}:${token_count}"
+        return
+    fi
+    
+    echo "fail:${line_count}:${local_usages}:${global_usages}:${var_count}:${token_count}"
+}
+
+# Get the first meaningful line of a function (for display)
+get_function_preview() {
+    local file="$1"
+    local func_name="$2"
+    
+    get_meaningful_lines "$file" "$func_name" | head -1 | sed 's/^[[:space:]]*//'
 }
 
 # =============================================================================
-# MAIN TEST
+# MAIN TEST LOGIC
 # =============================================================================
 
 test_trivial_wrappers() {
     log_header "Trivial Wrapper Function Detection Test"
-    log_info "Detecting functions with 1-2 lines that just wrap another call"
+    
+    log_info "Detecting functions with 1-$MAX_LINES lines that just wrap another call"
     log_info "Thresholds (ANY passes): local >= $LOCAL_USAGE_THRESHOLD OR global >= $GLOBAL_USAGE_THRESHOLD usages"
     log_info "Ergonomic: >= $MIN_VARS_FOR_ERGONOMIC variables OR >= $TOKEN_COMPLEXITY_PASS tokens auto-pass"
     log_info "Token complexity >= $TOKEN_COMPLEXITY_WARN triggers warning instead of error"
-    log_info "Use #@@ALLOW_TRIVIAL_WRAPPER@@ above a function to explicitly allow it"
+    log_info "Exempt annotations: $PUBLIC_API_ANNOTATION, $ERGONOMICS_ANNOTATION"
     echo ""
     
     local files
     files=$(get_script_files)
     
-    if [[ -z "$files" ]]; then
-        log_fail "No .sh files found to test"
-        return 1
-    fi
-    
     local file_count=0
     local wrapper_count=0
-    local -a wrappers=()
-    
-    while IFS= read -r file; do
-        [[ -z "$file" ]] && continue
-        file_count=$((file_count + 1))
-        
-        # Analyze this file
-        local results
-        results=$(analyze_file_for_wrappers "$file")
-        
-        while IFS='|' read -r filepath funcname line_count local_usages global_usages var_count token_count severity body; do
-            [[ -z "$funcname" ]] && continue
-            
-            # Check if content is trivial
-            if is_trivial_content "$body"; then
-                wrappers+=("$filepath|$funcname|$line_count|$local_usages|$global_usages|$var_count|$token_count|$severity|$body")
-                wrapper_count=$((wrapper_count + 1))
-            fi
-        done <<< "$results"
-        
-    done <<< "$files"
-    
-    echo ""
-    log_info "Scanned $file_count files"
-    echo ""
-    
-    if [[ $wrapper_count -eq 0 ]]; then
-        log_pass "No trivial wrapper functions found"
-        TESTS_PASSED=1
-        TESTS_RUN=1
-        return 0
-    fi
-    
-    # Report all wrappers found
-    log_section "Trivial Wrappers Found: $wrapper_count"
-    echo ""
-    
-    # Group by file for cleaner output
-    local current_file=""
     local error_count=0
     local warn_count=0
     
-    for entry in "${wrappers[@]}"; do
-        IFS='|' read -r filepath funcname line_count local_usages global_usages var_count token_count severity body <<< "$entry"
+    declare -a errors=()
+    declare -a warnings=()
+    
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        [[ ! -f "$file" ]] && continue
         
-        if [[ "$filepath" != "$current_file" ]]; then
-            if [[ -n "$current_file" ]]; then
-                echo ""
-            fi
-            echo -e "${CYAN}$filepath${NC}"
-            current_file="$filepath"
+        file_count=$((file_count + 1))
+        local rel_path="${file#$REPO_ROOT/}"
+        local file_has_issues=0
+        local file_issues=""
+        
+        # Get all functions in this file
+        local functions
+        functions=$(extract_functions "$file")
+        
+        while IFS= read -r func_name; do
+            [[ -z "$func_name" ]] && continue
+            
+            local result
+            result=$(analyze_function "$file" "$func_name")
+            
+            local status="${result%%:*}"
+            local details="${result#*:}"
+            
+            case "$status" in
+                pass)
+                    # Passed - do nothing
+                    ;;
+                warn)
+                    wrapper_count=$((wrapper_count + 1))
+                    warn_count=$((warn_count + 1))
+                    
+                    IFS=':' read -r lines local_use global_use vars tokens <<< "$details"
+                    local preview
+                    preview=$(get_function_preview "$file" "$func_name")
+                    
+                    if [[ $file_has_issues -eq 0 ]]; then
+                        file_issues+="\n${rel_path}"
+                        file_has_issues=1
+                    fi
+                    file_issues+="\n${YELLOW}[WARN]${NC} ${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"
+                    file_issues+="\n       ${preview}"
+                    
+                    warnings+=("${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens")
+                    ;;
+                fail)
+                    wrapper_count=$((wrapper_count + 1))
+                    error_count=$((error_count + 1))
+                    
+                    IFS=':' read -r lines local_use global_use vars tokens <<< "$details"
+                    local preview
+                    preview=$(get_function_preview "$file" "$func_name")
+                    
+                    if [[ $file_has_issues -eq 0 ]]; then
+                        file_issues+="\n${rel_path}"
+                        file_has_issues=1
+                    fi
+                    file_issues+="\n  ${RED}✗${NC} ${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"
+                    file_issues+="\n       ${preview}"
+                    
+                    errors+=("${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens")
+                    ;;
+            esac
+        done <<< "$functions"
+        
+        if [[ -n "$file_issues" ]]; then
+            echo -e "$file_issues"
         fi
         
-        if [[ "$severity" == "warn" ]]; then
-            log_warn "$funcname() - $line_count line(s), $local_usages local / $global_usages global usages, $var_count vars, $token_count tokens"
-            warn_count=$((warn_count + 1))
+    done <<< "$files"
+    
+    log_info "Scanned $file_count files"
+    echo ""
+    
+    # Summary
+    if [[ $wrapper_count -gt 0 ]]; then
+        log_section "Trivial Wrappers Found: $wrapper_count"
+        echo ""
+        
+        if [[ $error_count -gt 0 ]]; then
+            echo -e "${RED}Found $error_count errors, $warn_count warnings${NC}"
         else
-            log_fail "$funcname() - $line_count line(s), $local_usages local / $global_usages global usages, $var_count vars, $token_count tokens"
-            error_count=$((error_count + 1))
+            echo -e "${YELLOW}Found $warn_count warnings${NC}"
         fi
-        echo -e "       ${MAGENTA}$body${NC}"
-    done
+        echo ""
+        
+        # Help text
+        echo "What makes a function a 'trivial wrapper':"
+        echo "  - Only 1-$MAX_LINES lines of meaningful code (excluding declarations, comments)"
+        echo "  - Just calls another function/command without adding logic"
+        echo "  - Does NOT meet ANY of the ergonomic thresholds below"
+        echo ""
+        echo "How to resolve:"
+        echo "  1. Inline the wrapper at call sites (if rarely used)"
+        echo "  2. Expand with real logic (error handling, validation, logging)"
+        echo "  3. Add # $PUBLIC_API_ANNOTATION if it's part of the public API"
+        echo "  4. Add # $ERGONOMICS_ANNOTATION if it's intentional for API consistency"
+        echo ""
+        echo "NOT trivial (passes if ANY condition is met):"
+        echo "  - Functions with >$MAX_LINES lines of meaningful code"
+        echo "  - Functions with >= $LOCAL_USAGE_THRESHOLD local or >= $GLOBAL_USAGE_THRESHOLD global usages"
+        echo "  - Functions using >= $MIN_VARS_FOR_ERGONOMIC variables (ergonomic benefit)"
+        echo "  - Functions with >= $TOKEN_COMPLEXITY_PASS tokens (complex enough)"
+        echo "  - Functions with conditionals, loops, or complex logic"
+        echo "  - Functions marked with exempt annotations"
+        echo ""
+        echo "WARNING instead of ERROR:"
+        echo "  - Functions with >= $TOKEN_COMPLEXITY_WARN tokens get a warning, not error"
+        echo ""
+    fi
     
-    echo ""
-    
-    if [[ $error_count -gt $FAIL_THRESHOLD ]]; then
-        echo -e "${RED}Found $error_count errors, $warn_count warnings (fail threshold: $FAIL_THRESHOLD)${NC}"
-        echo -e "${RED}These functions should be inlined, expanded, or marked with #@@ALLOW_TRIVIAL_WRAPPER@@${NC}"
-        TESTS_FAILED=$error_count
-        TESTS_WARNED=$warn_count
-        TESTS_RUN=$wrapper_count
-    elif [[ $error_count -gt 0 ]]; then
-        echo -e "${RED}Found $error_count errors, $warn_count warnings${NC}"
-        TESTS_FAILED=$error_count
-        TESTS_WARNED=$warn_count
-        TESTS_RUN=$wrapper_count
-    elif [[ $warn_count -gt $WARN_THRESHOLD ]]; then
-        echo -e "${YELLOW}Found $warn_count warnings (warn threshold: $WARN_THRESHOLD)${NC}"
-        TESTS_WARNED=$warn_count
-        TESTS_PASSED=1
+    # Set test counters for framework
+    TESTS_RUN=$wrapper_count
+    if [[ $wrapper_count -eq 0 ]]; then
         TESTS_RUN=1
+        TESTS_PASSED=1
     else
-        echo -e "${YELLOW}Found $warn_count warnings${NC}"
-        TESTS_WARNED=$warn_count
-        TESTS_PASSED=1
-        TESTS_RUN=1
+        TESTS_PASSED=$((wrapper_count - error_count - warn_count))
+        [[ $TESTS_PASSED -lt 0 ]] && TESTS_PASSED=0
     fi
-    
-    echo ""
-    echo "What makes a function a 'trivial wrapper':"
-    echo "  - Only 1-2 lines of meaningful code (excluding declarations, comments)"
-    echo "  - Just calls another function/command without adding logic"
-    echo "  - Does NOT meet ANY of the ergonomic thresholds below"
-    echo ""
-    echo "How to resolve:"
-    echo "  1. Inline the wrapper at call sites (if rarely used)"
-    echo "  2. Expand with real logic (error handling, validation, logging)"
-    echo "  3. Add #@@ALLOW_TRIVIAL_WRAPPER@@ above the function if it's intentional API"
-    echo ""
-    echo "NOT trivial (passes if ANY condition is met):"
-    echo "  - Functions with >2 lines of meaningful code"
-    echo "  - Functions with >= $LOCAL_USAGE_THRESHOLD local or >= $GLOBAL_USAGE_THRESHOLD global usages"
-    echo "  - Functions using >= $MIN_VARS_FOR_ERGONOMIC variables (ergonomic benefit)"
-    echo "  - Functions with >= $TOKEN_COMPLEXITY_PASS tokens (complex enough)"
-    echo "  - Functions with conditionals, loops, or complex logic"
-    echo "  - Functions marked with #@@ALLOW_TRIVIAL_WRAPPER@@"
-    echo ""
-    echo "WARNING instead of ERROR:"
-    echo "  - Functions with >= $TOKEN_COMPLEXITY_WARN tokens get a warning, not error"
-    
-    if [[ $error_count -gt 0 ]]; then
-        return 1
-    fi
-    return 0
+    TESTS_FAILED=$error_count
+    TESTS_WARNED=$warn_count
+    FAILED_TESTS=("${errors[@]}")
+    WARNED_TESTS=("${warnings[@]}")
 }
 
 # =============================================================================
-# RUN TEST
+# MAIN
 # =============================================================================
 
 main() {
+    # Load configuration from nut.toml
+    load_config
+    
+    # Run the test
     test_trivial_wrappers
-    local result=$?
+    
+    # Print summary and exit
     print_summary "Trivial Wrapper Detection"
     exit_with_status
 }
 
-# Run if executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+main "$@"

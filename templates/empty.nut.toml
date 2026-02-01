@@ -1,0 +1,265 @@
+# =============================================================================
+# nutshell QA Configuration
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# This is the EMPTY template - all tests disabled, but fully documented.
+# Copy this file to your repo root as `nut.toml` and enable what you need.
+#
+# Config discovery order:
+#   1. ./nut.toml
+#   2. ./tests/nut.toml
+#   3. ./scripts/nut.toml
+#   4. $NUTSHELL_CONFIG (environment variable)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# [meta] - Configuration metadata
+# -----------------------------------------------------------------------------
+[meta]
+# Schema version for forward compatibility
+version = "1.0.0"
+
+# Human-readable name for this configuration
+name = "Empty Configuration"
+
+# Description of what this config is for
+description = "All tests disabled. Use as a starting point or documentation reference."
+
+# -----------------------------------------------------------------------------
+# [paths] - Path configuration
+# -----------------------------------------------------------------------------
+[paths]
+# Root directory for library source files (relative to repo root)
+# Default: "." (current directory)
+lib_dir = "."
+
+# Directories to exclude from all analysis (glob patterns)
+# Default: [".git", ".legacy", "node_modules", "vendor", "target"]
+exclude = [".git", ".legacy", "node_modules", "vendor", "target"]
+
+# File patterns to include in analysis
+# Default: ["*.sh"]
+include = ["*.sh"]
+
+# -----------------------------------------------------------------------------
+# [annotations] - Annotation patterns and their meanings
+# -----------------------------------------------------------------------------
+# Annotations are special comments that mark code for specific treatment.
+# Format: pattern = "description"
+# The pattern is matched literally (no regex) in comments.
+# -----------------------------------------------------------------------------
+[annotations]
+
+# Public API marker - function is part of the public interface
+# Used for: documentation generation, trivial wrapper exemption
+# Example: # @@PUBLIC_API@@
+public_api = "@@PUBLIC_API@@"
+
+# Trivial wrapper allowed for ergonomics
+# Used for: trivial wrapper test exemption
+# Example: # @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+
+# Large file allowed with reason
+# Used for: file size test exemption
+# Format: # @@ALLOW_LOC_<number>@@
+# Example: # @@ALLOW_LOC_600@@
+allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
+
+# -----------------------------------------------------------------------------
+# [tests] - Master test enable/disable switches
+# -----------------------------------------------------------------------------
+# Set to false to completely disable a test category.
+# Individual test settings below are ignored if the category is disabled.
+# -----------------------------------------------------------------------------
+[tests]
+# Enable syntax validation (bash -n)
+syntax = false
+
+# Enable trivial wrapper detection
+trivial_wrappers = false
+
+# Enable file size limits
+file_size = false
+
+# Enable function duplication detection
+function_duplication = false
+
+# Enable cruft detection (debug code, todos, etc.)
+cruft = false
+
+# Enable public API documentation check
+public_api_docs = false
+
+# -----------------------------------------------------------------------------
+# [tests.syntax] - Syntax validation settings
+# -----------------------------------------------------------------------------
+[tests.syntax]
+# Shell to use for syntax checking
+# Options: "bash", "sh", "zsh"
+shell = "bash"
+
+# Fail on syntax errors (if false, only warn)
+fail_on_error = true
+
+# -----------------------------------------------------------------------------
+# [tests.trivial_wrappers] - Trivial wrapper detection settings
+# -----------------------------------------------------------------------------
+# A "trivial wrapper" is a function with only 1-2 lines of meaningful code
+# that just wraps another call. These are allowed if they provide value.
+# -----------------------------------------------------------------------------
+[tests.trivial_wrappers]
+# Maximum lines of meaningful code to be considered "trivial"
+# Lines excluded: comments, blank lines, local declarations, bare returns
+max_lines = 2
+
+# Minimum usages in the same file to justify existence
+local_usage_threshold = 4
+
+# Minimum usages across entire codebase to justify existence
+global_usage_threshold = 6
+
+# Minimum unique variables used to be considered "ergonomic"
+# Functions using multiple variables provide value even if short
+min_vars_for_ergonomic = 2
+
+# Token complexity that triggers warning instead of error
+# Tokens = whitespace-separated words in the function body
+token_complexity_warn = 3
+
+# Token complexity that auto-passes (complex enough to justify)
+token_complexity_pass = 4
+
+# Number of violations before warning (0 = warn on first)
+warn_threshold = 5
+
+# Number of violations before failing (0 = fail on first)
+fail_threshold = 20
+
+# Annotations that exempt a function from this check
+# These are matched in the 5 lines preceding the function definition
+exempt_annotations = [
+    "@@PUBLIC_API@@",
+    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@",
+]
+
+# -----------------------------------------------------------------------------
+# [tests.file_size] - File size limit settings
+# -----------------------------------------------------------------------------
+# Large files are hard to maintain. This encourages splitting.
+# -----------------------------------------------------------------------------
+[tests.file_size]
+# Maximum lines of code (excluding comments and blank lines)
+max_loc = 300
+
+# Maximum total lines (including comments and blank lines)
+max_total_lines = 500
+
+# Annotation pattern for per-file exemption
+# The captured number becomes the new limit for that file
+# Example: # @@ALLOW_LOC_600@@ allows up to 600 LOC
+exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
+
+# Files matching these patterns are exempt from size limits
+exempt_patterns = []
+
+# -----------------------------------------------------------------------------
+# [tests.function_duplication] - Function duplication detection settings
+# -----------------------------------------------------------------------------
+# Detects copy-pasted or nearly identical functions.
+# -----------------------------------------------------------------------------
+[tests.function_duplication]
+# Similarity threshold (0.0 to 1.0) for considering functions duplicates
+# 1.0 = exact match only, 0.8 = 80% similar
+similarity_threshold = 0.85
+
+# Minimum function body length (lines) to check for duplication
+# Very short functions often legitimately look similar
+min_lines_to_check = 3
+
+# Ignore functions with these name patterns (regex)
+ignore_name_patterns = [
+    "^_.*",  # Private/internal functions often have similar structure
+]
+
+# -----------------------------------------------------------------------------
+# [tests.cruft] - Cruft detection settings
+# -----------------------------------------------------------------------------
+# Detects leftover debug code, unfinished TODOs, and other cruft.
+# -----------------------------------------------------------------------------
+[tests.cruft]
+# Patterns that indicate debug code (regex)
+debug_patterns = [
+    "echo.*DEBUG",
+    "echo.*TODO",
+    "echo.*FIXME",
+    "echo.*XXX",
+    "set -x",  # Debug mode
+    "PS4=",    # Debug prompt customization (usually temporary)
+]
+
+# Patterns that indicate unfinished work (regex)
+# These generate warnings, not errors
+todo_patterns = [
+    "TODO:",
+    "FIXME:",
+    "XXX:",
+    "HACK:",
+    "BUG:",
+]
+
+# Fail on debug code found
+fail_on_debug = true
+
+# Fail on TODOs found (usually false - TODOs are just warnings)
+fail_on_todo = false
+
+# Maximum allowed TODOs before failing (0 = unlimited)
+max_todos = 0
+
+# -----------------------------------------------------------------------------
+# [tests.public_api_docs] - Public API documentation check settings
+# -----------------------------------------------------------------------------
+# Ensures all functions marked as public API have documentation.
+# -----------------------------------------------------------------------------
+[tests.public_api_docs]
+# Annotation that marks a function as public API
+public_api_annotation = "@@PUBLIC_API@@"
+
+# Required documentation elements
+# Each element must be present in the comment block above the function
+required_elements = [
+    "Usage:",  # Usage example
+]
+
+# Recommended documentation elements (warn if missing)
+recommended_elements = [
+    "->",      # Return value description (e.g., "-> prints result")
+]
+
+# Minimum lines of documentation required
+min_doc_lines = 1
+
+# -----------------------------------------------------------------------------
+# [output] - Output formatting settings
+# -----------------------------------------------------------------------------
+[output]
+# Use colors in output
+# Options: "auto", "always", "never"
+color = "auto"
+
+# Verbosity level
+# Options: "quiet", "normal", "verbose"
+verbosity = "normal"
+
+# Output format
+# Options: "human", "json", "tap"
+format = "human"
+
+# Show passing tests (not just failures)
+show_passing = true
+
+# Show summary at end
+show_summary = true

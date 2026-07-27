@@ -140,6 +140,34 @@ log_substep() {
     printf '    %b→%b %s\n' "$color" "$reset" "$*"
 }
 
+# log_tagged <TAG> <colour> <message...>
+#
+# The house format, `[TAG] message`, for a module that needs a tag of its own
+# rather than a severity. Public so that a check reporting BLOCK or a migration
+# reporting STEP writes the same shape as everything else: one formatter, so
+# the convention cannot drift per script.
+#
+# `colour` is a name from the palette below, or `none`. Colour is applied only
+# when the stream is a terminal, exactly as the level functions do it.
+log_tagged() {
+    local tag="$1" want="$2"; shift 2
+    local color="" reset=""
+    if _log_should_color; then
+        case "$want" in
+            red)     color='\033[0;31m' ;;
+            green)   color='\033[0;32m' ;;
+            yellow)  color='\033[0;33m' ;;
+            blue)    color='\033[0;34m' ;;
+            magenta) color='\033[0;35m' ;;
+            cyan)    color='\033[0;36m' ;;
+            gray)    color='\033[0;37m' ;;
+            *)       color='' ;;
+        esac
+        [[ -n "$color" ]] && reset='\033[0m'
+    fi
+    _log_format "$tag" "$color" "$reset" "$*"
+}
+
 log_fatal() {
     local color="" reset=""
     if _log_should_color; then

@@ -5,7 +5,7 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# @@ALLOW_LOC_650@@
+#[allow(loc = 650)]
 # Layer 0 (Core): Depends on deps.sh for tool detection
 #
 # Provides JSON parsing and manipulation functions. Uses lazy-init stubs to
@@ -541,7 +541,7 @@ _json_length_perl() {
 # Public API - Core Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a value from JSON by path
 # Usage: json_get '{"foo":"bar"}' "foo" -> "bar"
 # Usage: json_get '{"a":{"b":1}}' "a.b" -> "1"
@@ -561,7 +561,7 @@ json_get() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Set a value in JSON by path
 # Usage: json_set '{"foo":"bar"}' "foo" "baz" -> '{"foo":"baz"}'
 # Usage: json_set '{}' "new.key" "value" -> '{"new":{"key":"value"}}'
@@ -581,7 +581,7 @@ json_set() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get all keys at a path in JSON
 # Usage: json_keys '{"a":1,"b":2}' -> prints "a" and "b" on separate lines
 # Usage: json_keys '{"x":{"y":1}}' "x" -> prints "y"
@@ -600,7 +600,7 @@ json_keys() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if JSON is valid
 # Usage: json_valid '{"foo":"bar"}' -> returns 0 (valid)
 # Usage: json_valid 'not json' -> returns 1 (invalid)
@@ -618,7 +618,7 @@ json_valid() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Pretty print JSON with indentation
 # Usage: json_pretty '{"a":1,"b":2}' -> prints formatted JSON
 # Returns: Pretty-printed JSON
@@ -635,7 +635,7 @@ json_pretty() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Compact JSON (remove whitespace)
 # Usage: json_compact '{ "a": 1, "b": 2 }' -> '{"a":1,"b":2}'
 # Returns: Compact JSON on single line
@@ -652,7 +652,7 @@ json_compact() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the type of a JSON value
 # Usage: json_type '{"a":1}' -> "object"
 # Usage: json_type '[1,2]' -> "array"
@@ -675,7 +675,7 @@ json_type() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the length of a JSON array or object
 # Usage: json_length '[1,2,3]' -> "3"
 # Usage: json_length '{"a":1,"b":2}' -> "2"
@@ -698,7 +698,7 @@ json_length() {
 # Public API - Convenience Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a path exists in JSON
 # Usage: json_has '{"a":{"b":1}}' "a.b" -> returns 0 (exists)
 # Usage: json_has '{"a":1}' "b" -> returns 1 (not found)
@@ -712,7 +712,7 @@ json_has() {
     [[ -n "$result" && "$result" != "null" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get value with default if not found
 # Usage: json_get_or '{"a":1}' "b" "default" -> "default"
 # Usage: json_get_or '{"a":1}' "a" "default" -> "1"
@@ -732,7 +732,7 @@ json_get_or() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Create a simple JSON object from key-value pairs
 # Usage: json_object "key1" "value1" "key2" "value2" -> '{"key1":"value1","key2":"value2"}'
 # Returns: JSON object
@@ -761,7 +761,7 @@ json_object() {
     echo "$result"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Create a JSON array from values
 # Usage: json_array "a" "b" "c" -> '["a","b","c"]'
 # Returns: JSON array
@@ -786,7 +786,7 @@ json_array() {
     echo "$result"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Merge two JSON objects (second overwrites first for conflicts)
 # Usage: json_merge '{"a":1}' '{"b":2}' -> '{"a":1,"b":2}'
 # Returns: Merged JSON object
@@ -819,7 +819,7 @@ print(json.dumps(a))
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Delete a key from JSON
 # Usage: json_delete '{"a":1,"b":2}' "a" -> '{"b":2}'
 # Returns: JSON with key removed
@@ -889,7 +889,7 @@ print(json.dumps(data))
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Read JSON from a file
 # Usage: json_read "/path/to/file.json" -> prints JSON content
 # Returns: JSON content of file
@@ -901,7 +901,7 @@ json_read() {
     cat "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Write JSON to a file (pretty printed)
 # Usage: json_write '{"a":1}' "/path/to/file.json"
 # Returns: 0 on success, 1 on failure
@@ -918,21 +918,21 @@ json_write() {
 # Module Status Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if JSON module is ready
 # Usage: json_ready -> returns 0 if ready, 1 if not
 json_ready() {
     [[ "$_JSON_READY" == "1" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get JSON module error (if not ready)
 # Usage: json_error -> prints error message
 json_error() {
     echo "$_JSON_ERROR"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get which JSON implementation is being used
 # Usage: json_impl -> "jq" | "python" | "perl" | ""
 json_impl() {

@@ -99,6 +99,7 @@ log_warn() {
     _log_format "WARN" "$color" "$reset" "$*" >&2
 }
 
+#[pub]
 log_error() {
     _log_should_emit error || return 0
     local color="" reset=""

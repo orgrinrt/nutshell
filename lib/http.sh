@@ -243,7 +243,7 @@ _http_request() {
 # Public API - Core Request Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Perform HTTP GET request
 # Usage: http_get "https://example.com/api" -> stores response in _HTTP_LAST_*
 # Usage: http_get "https://example.com/api" "-H" "Authorization: Bearer token"
@@ -258,7 +258,7 @@ http_get() {
     _http_request "GET" "$url" "" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Perform HTTP POST request
 # Usage: http_post "https://example.com/api" "data=value" -> stores response
 # Usage: http_post "https://example.com/api" '{"key":"value"}' "-H" "Content-Type: application/json"
@@ -274,7 +274,7 @@ http_post() {
     _http_request "POST" "$url" "$data" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Perform HTTP PUT request
 # Usage: http_put "https://example.com/api/1" '{"key":"value"}'
 # Returns: 0 on success, 1 on failure
@@ -289,7 +289,7 @@ http_put() {
     _http_request "PUT" "$url" "$data" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Perform HTTP PATCH request
 # Usage: http_patch "https://example.com/api/1" '{"key":"value"}'
 # Returns: 0 on success, 1 on failure
@@ -304,7 +304,7 @@ http_patch() {
     _http_request "PATCH" "$url" "$data" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Perform HTTP DELETE request
 # Usage: http_delete "https://example.com/api/1"
 # Returns: 0 on success, 1 on failure
@@ -318,7 +318,7 @@ http_delete() {
     _http_request "DELETE" "$url" "" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Perform HTTP HEAD request (headers only)
 # Usage: http_head "https://example.com" -> stores headers in _HTTP_LAST_HEADERS
 # Returns: 0 on success, 1 on failure
@@ -340,28 +340,28 @@ http_head() {
 # Public API - Response Access
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the response body from the last request
 # Usage: http_body -> prints response body
 http_body() {
     echo "$_HTTP_LAST_BODY"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the HTTP status code from the last request
 # Usage: http_status -> prints status code (e.g., "200")
 http_status() {
     echo "$_HTTP_LAST_STATUS"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the response headers from the last request
 # Usage: http_headers -> prints all headers
 http_headers() {
     echo "$_HTTP_LAST_HEADERS"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a specific header value from the last request
 # Usage: http_header "Content-Type" -> prints header value
 http_header() {
@@ -372,28 +372,28 @@ http_header() {
     echo "$_HTTP_LAST_HEADERS" | grep -i "^${name}:" | head -1 | sed 's/^[^:]*:[[:space:]]*//'
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if the last request was successful (2xx status)
 # Usage: http_ok -> returns 0 if success, 1 otherwise
 http_ok() {
     [[ "$_HTTP_LAST_STATUS" =~ ^2[0-9][0-9]$ ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if the last request resulted in a redirect (3xx status)
 # Usage: http_redirect -> returns 0 if redirect, 1 otherwise
 http_redirect() {
     [[ "$_HTTP_LAST_STATUS" =~ ^3[0-9][0-9]$ ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if the last request resulted in client error (4xx status)
 # Usage: http_client_error -> returns 0 if client error, 1 otherwise
 http_client_error() {
     [[ "$_HTTP_LAST_STATUS" =~ ^4[0-9][0-9]$ ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if the last request resulted in server error (5xx status)
 # Usage: http_server_error -> returns 0 if server error, 1 otherwise
 http_server_error() {
@@ -404,7 +404,7 @@ http_server_error() {
 # Public API - JSON Helpers
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # POST JSON data with correct content type
 # Usage: http_post_json "https://api.example.com" '{"key":"value"}'
 # Returns: 0 on success, 1 on failure
@@ -416,7 +416,7 @@ http_post_json() {
     http_post "$url" "$json" -H "Content-Type: application/json" -H "Accept: application/json" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # PUT JSON data with correct content type
 # Usage: http_put_json "https://api.example.com/1" '{"key":"value"}'
 # Returns: 0 on success, 1 on failure
@@ -428,7 +428,7 @@ http_put_json() {
     http_put "$url" "$json" -H "Content-Type: application/json" -H "Accept: application/json" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # PATCH JSON data with correct content type
 # Usage: http_patch_json "https://api.example.com/1" '{"key":"value"}'
 # Returns: 0 on success, 1 on failure
@@ -440,7 +440,7 @@ http_patch_json() {
     http_patch "$url" "$json" -H "Content-Type: application/json" -H "Accept: application/json" "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # GET with JSON accept header
 # Usage: http_get_json "https://api.example.com"
 # Returns: 0 on success, 1 on failure
@@ -455,7 +455,7 @@ http_get_json() {
 # Public API - File Operations
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Download a file to a local path
 # Usage: http_download "https://example.com/file.zip" "/tmp/file.zip"
 # Returns: 0 on success, 1 on failure
@@ -480,7 +480,7 @@ http_download() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Upload a file via POST (multipart form data)
 # Usage: http_upload "https://example.com/upload" "/path/to/file" "file"
 # Returns: 0 on success, 1 on failure
@@ -518,21 +518,21 @@ http_upload() {
 # Public API - Configuration
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Set HTTP timeout in seconds
 # Usage: http_set_timeout 60
 http_set_timeout() {
     HTTP_TIMEOUT="${1:-30}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Set custom user agent
 # Usage: http_set_user_agent "MyApp/1.0"
 http_set_user_agent() {
     HTTP_USER_AGENT="${1:-nutshell-http/1.0}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Enable or disable following redirects
 # Usage: http_follow_redirects true
 # Usage: http_follow_redirects false
@@ -544,7 +544,7 @@ http_follow_redirects() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Set maximum number of redirects to follow
 # Usage: http_max_redirects 5
 http_max_redirects() {
@@ -555,7 +555,7 @@ http_max_redirects() {
 # Public API - Utility Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # URL encode a string
 # Usage: http_urlencode "hello world" -> "hello%20world"
 http_urlencode() {
@@ -581,7 +581,7 @@ http_urlencode() {
     echo "$encoded"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # URL decode a string
 # Usage: http_urldecode "hello%20world" -> "hello world"
 http_urldecode() {
@@ -591,7 +591,7 @@ http_urldecode() {
     printf '%b' "${string//%/\\x}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Build query string from key-value pairs
 # Usage: http_query "key1" "value1" "key2" "value2" -> "key1=value1&key2=value2"
 http_query() {
@@ -612,7 +612,7 @@ http_query() {
     echo "$query"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Build full URL with query parameters
 # Usage: http_url "https://example.com/api" "key1" "value1" "key2" "value2"
 # Returns: "https://example.com/api?key1=value1&key2=value2"
@@ -639,21 +639,21 @@ http_url() {
 # Module Status Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if HTTP module is ready
 # Usage: http_ready -> returns 0 if ready, 1 if not
 http_ready() {
     [[ "$_HTTP_READY" == "1" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get HTTP module error (if not ready)
 # Usage: http_error -> prints error message
 http_error() {
     echo "$_HTTP_ERROR"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get which HTTP implementation is being used
 # Usage: http_impl -> "curl" | "wget" | ""
 http_impl() {

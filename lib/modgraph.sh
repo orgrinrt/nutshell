@@ -77,11 +77,18 @@ _MG_ROOT=""
 # rather than content: reading every file to hash it would cost as much as the
 # analysis the cache exists to avoid, and a file whose size and mtime are both
 # unchanged has not been edited by anything this cache needs to notice.
+# Bumped whenever the scan changes shape. The fingerprint covers the library's
+# files, which is not enough on its own: change how a module is read and every
+# cached graph is stale while still looking current, which is how a fixed
+# scanner kept reporting a fixed bug.
+readonly _MG_SCHEMA=3
+
 _mg_fingerprint() {
     local dir="$1"
     { ls -1 "$dir"/*.sh 2>/dev/null | while IFS= read -r f; do
           printf '%s:%s:%s\n' "${f##*/}" "$(fs_size "$f" 2>/dev/null)" "$(fs_mtime "$f" 2>/dev/null)"
       done
+      printf 'schema:%s\n' "$_MG_SCHEMA"
     } | cksum | tr -d ' '
 }
 
@@ -151,13 +158,34 @@ _mg_scan() {
             if (stripped != "" && $0 !~ /^[[:space:]]*#/) pending_pub = ""
         }
 
-        # Every module-prefixed call, from the code with comments removed.
+        # Calls, and only calls. Every module-prefixed token used to count,
+        # which meant a local named `in_section` read as a call to a function
+        # of that name in whichever module happened to define one. Now a token
+        # counts only in command position: first word of the line, or first
+        # after a separator that starts a new command.
         {
             code = $0
             sub(/#.*$/, "", code)
-            while (match(code, /_?[a-z][a-z0-9]*_[a-z0-9_]+/)) {
-                calls[substr(code, RSTART, RLENGTH)] = 1
-                code = substr(code, RSTART + RLENGTH)
+            # Turn command separators into line breaks, so "first word of a
+            # command" becomes "first word of a segment".
+            gsub(/\$\(/, "\n", code)
+            gsub(/[;|&`]/, "\n", code)
+            gsub(/\(\)/, "", code)
+            n = split(code, segs, "\n")
+            for (si = 1; si <= n; si++) {
+                seg = segs[si]
+                sub(/^[[:space:]]+/, "", seg)
+                # Shell keywords introduce a command rather than being one.
+                while (match(seg, /^(if|then|else|elif|while|until|do|done|fi|!|\{|\}|\[\[)[[:space:]]+/)) {
+                    seg = substr(seg, RSTART + RLENGTH)
+                    sub(/^[[:space:]]+/, "", seg)
+                }
+                if (match(seg, /^_?[a-z][a-z0-9]*_[a-z0-9_]+/)) {
+                    word = substr(seg, RSTART, RLENGTH)
+                    rest = substr(seg, RSTART + RLENGTH, 1)
+                    # An assignment is not a call.
+                    if (rest != "=") calls[word] = 1
+                }
             }
         }
 
@@ -243,7 +271,7 @@ _mg_load() {
 # modgraph_build <lib-dir>
 #
 # Analyse the library, or read the analysis back if nothing has changed.
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_build "path/to/lib" -> populates the graph, returns 0
 modgraph_build() {
     local dir="${1:-${NUTSHELL_ROOT}/lib}"
@@ -270,23 +298,23 @@ modgraph_build() {
 # Queries
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_modules -> prints every module name, one per line
 modgraph_modules() { printf '%s\n' "${_MG_MODULES[@]}"; }
 
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_declares toml -> prints the modules toml names in a use line
 modgraph_declares() { printf '%s' "${_MG_DECLARES[$1]:-}"; }
 
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_defines string -> prints the functions string introduces
 modgraph_defines() { printf '%s' "${_MG_DEFINES[$1]:-}"; }
 
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_calls toml -> prints the prefixed functions toml invokes
 modgraph_calls() { printf '%s' "${_MG_CALLS[$1]:-}"; }
 
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_owner str_trim -> prints the module defining it, if any
 modgraph_owner() { printf '%s' "${_MG_OWNER[$1]:-}"; }
 
@@ -295,7 +323,7 @@ modgraph_owner() { printf '%s' "${_MG_OWNER[$1]:-}"; }
 # `pub` when consumers may call it, `lib` when only other modules in the same
 # library may, and nothing at all when it is module-private.
 #
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_visibility str_trim -> prints "pub", "lib", or nothing
 modgraph_visibility() { printf '%s' "${_MG_VIS[$1]:-}"; }
 
@@ -309,7 +337,7 @@ modgraph_visibility() { printf '%s' "${_MG_VIS[$1]:-}"; }
 # with the path carried down, so what comes back is the route rather than the
 # bare fact, and a reader can see which edge to cut.
 #
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_cycle -> prints a cycle path, or nothing. Returns 1 if none.
 modgraph_cycle() {
     local -A state=()
@@ -373,7 +401,7 @@ modgraph_cycle() {
 #     harmless and invisible here.
 #   - anything about a module that failed to parse. A file is text to this.
 #
-# @@PUBLIC_API@@
+#[pub]
 # Usage: modgraph_audit -> prints violations, one per line. Returns 1 if any.
 modgraph_audit() {
     local found=0 mod fn owner vis declared

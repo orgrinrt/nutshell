@@ -16,8 +16,8 @@ readonly _NUTSHELL_CORE_STRING_SH=1
 # Public API
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Convert string to lowercase
 # Usage: str_lower "HELLO" -> "hello"
 str_lower() {
@@ -25,8 +25,8 @@ str_lower() {
     echo "${str,,}"
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Convert string to uppercase
 # Usage: str_upper "hello" -> "HELLO"
 str_upper() {
@@ -34,7 +34,7 @@ str_upper() {
     echo "${str^^}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Trim whitespace from both ends
 # Usage: str_trim "  hello  " -> "hello"
 str_trim() {
@@ -46,7 +46,7 @@ str_trim() {
     echo "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Trim whitespace from left side
 # Usage: str_ltrim "  hello" -> "hello"
 str_ltrim() {
@@ -55,7 +55,7 @@ str_ltrim() {
     echo "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Trim whitespace from right side
 # Usage: str_rtrim "hello  " -> "hello"
 str_rtrim() {
@@ -64,7 +64,7 @@ str_rtrim() {
     echo "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Replace all occurrences of a substring
 # Usage: str_replace "hello world" "world" "bash" -> "hello bash"
 str_replace() {
@@ -76,7 +76,7 @@ str_replace() {
     echo "${str//$from/$to}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if string contains substring
 # Usage: str_contains "hello world" "world" -> returns 0 (true)
 str_contains() {
@@ -87,7 +87,7 @@ str_contains() {
     [[ "$str" == *"$substr"* ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if string starts with prefix
 # Usage: str_starts_with "hello world" "hello" -> returns 0 (true)
 str_starts_with() {
@@ -98,7 +98,7 @@ str_starts_with() {
     [[ "$str" == "$prefix"* ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if string ends with suffix
 # Usage: str_ends_with "hello world" "world" -> returns 0 (true)
 str_ends_with() {
@@ -109,7 +109,7 @@ str_ends_with() {
     [[ "$str" == *"$suffix" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Split string by delimiter into array
 # Usage: str_split ":" "a:b:c" arr -> arr=("a" "b" "c")
 str_split() {
@@ -129,7 +129,7 @@ str_split() {
     read -ra _arr <<< "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Join array elements with delimiter
 # Usage: str_join "," "a" "b" "c" -> "a,b,c"
 str_join() {
@@ -151,8 +151,8 @@ str_join() {
     echo "$result"
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Get string length
 # Usage: str_length "hello" -> 5
 str_length() {
@@ -160,7 +160,7 @@ str_length() {
     echo "${#str}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Extract substring
 # Usage: str_substr "hello world" 0 5 -> "hello"
 str_substr() {
@@ -175,7 +175,7 @@ str_substr() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Repeat string N times
 # Usage: str_repeat "-" 5 -> "-----"
 str_repeat() {

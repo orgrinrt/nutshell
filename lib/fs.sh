@@ -46,64 +46,64 @@ fi
 # Existence checks (pure bash; no external tools needed)
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if path exists (file or directory)
 # Usage: fs_exists "path" -> returns 0 (true) or 1 (false)
 fs_exists() {
     [[ -e "${1:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if path is a regular file
 # Usage: fs_is_file "path" -> returns 0 (true) or 1 (false)
 fs_is_file() {
     [[ -f "${1:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if path is a directory
 # Usage: fs_is_dir "path" -> returns 0 (true) or 1 (false)
 fs_is_dir() {
     [[ -d "${1:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if path is a symbolic link
 # Usage: fs_is_link "path" -> returns 0 (true) or 1 (false)
 fs_is_link() {
     [[ -L "${1:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if file is readable
 # Usage: fs_is_readable "path" -> returns 0 (true) or 1 (false)
 fs_is_readable() {
     [[ -r "${1:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if file is writable
 # Usage: fs_is_writable "path" -> returns 0 (true) or 1 (false)
 fs_is_writable() {
     [[ -w "${1:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if file is executable
 # Usage: fs_is_executable "path" -> returns 0 (true) or 1 (false)
 fs_is_executable() {
     [[ -x "${1:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if file is non-empty
 # Usage: fs_is_nonempty "path" -> returns 0 (true) or 1 (false)
 fs_is_nonempty() {
@@ -114,7 +114,7 @@ fs_is_nonempty() {
 # Directory operations (standard tools)
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Create directory (and parents) if it doesn't exist
 # Usage: fs_mkdir "/path/to/dir" -> returns 0 on success
 fs_mkdir() {
@@ -128,7 +128,7 @@ fs_mkdir() {
 # File operations (standard tools)
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Remove file or directory (safe - doesn't fail if missing)
 # Usage: fs_rm "/path/to/remove" -> returns 0 on success
 fs_rm() {
@@ -138,7 +138,7 @@ fs_rm() {
     rm -rf "$path"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Copy file or directory
 # Usage: fs_cp "source" "dest" -> returns 0 on success
 fs_cp() {
@@ -149,7 +149,7 @@ fs_cp() {
     cp -r "$src" "$dst"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Move file or directory
 # Usage: fs_mv "source" "dest" -> returns 0 on success
 fs_mv() {
@@ -164,7 +164,7 @@ fs_mv() {
 # Path manipulation (pure bash + standard tools)
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get absolute path (resolves symlinks)
 # Usage: fs_realpath "relative/path" -> "/absolute/path"
 fs_realpath() {
@@ -191,7 +191,7 @@ fs_realpath() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get directory portion of path
 # Usage: fs_dirname "/path/to/file" -> "/path/to"
 fs_dirname() {
@@ -200,7 +200,7 @@ fs_dirname() {
     dirname "$path"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get filename portion of path
 # Usage: fs_basename "/path/to/file.txt" -> "file.txt"
 fs_basename() {
@@ -209,7 +209,7 @@ fs_basename() {
     basename "$path"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get file extension
 # Usage: fs_extension "file.txt" -> "txt"
 fs_extension() {
@@ -224,7 +224,7 @@ fs_extension() {
     echo "${base##*.}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get filename without extension
 # Usage: fs_basename_no_ext "file.txt" -> "file"
 fs_basename_no_ext() {
@@ -244,7 +244,7 @@ fs_basename_no_ext() {
 # These stubs select and source the best implementation on first call
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get file size in bytes
 # Usage: fs_size "/path/to/file" -> "12345"
 fs_size() {
@@ -287,7 +287,7 @@ fs_size() {
     fs_size "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get file modification time (epoch seconds)
 # Usage: fs_mtime "/path/to/file" -> "1234567890"
 fs_mtime() {
@@ -331,7 +331,7 @@ fs_mtime() {
 # Temporary files (standard tools)
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Create a temporary file and print its path
 # Usage: fs_temp_file [prefix] -> "/tmp/prefix.XXXXXX"
 fs_temp_file() {
@@ -346,7 +346,7 @@ fs_temp_file() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Create a temporary directory and print its path
 # Usage: fs_temp_dir [prefix] -> "/tmp/prefix.XXXXXX"
 fs_temp_dir() {
@@ -365,14 +365,14 @@ fs_temp_dir() {
 # Module readiness check
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if fs module is ready to use
 # Usage: fs_ready -> returns 0 if ready, 1 if not
 fs_ready() {
     [[ "$_FS_READY" == "1" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get fs module error message (if not ready)
 # Usage: fs_error -> prints error message
 fs_error() {

@@ -154,21 +154,21 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
     
     # Add new combo functions to the text module
     
-    # @@PUBLIC_API@@
+    #[pub]
     # Replace pattern only in lines matching a filter
     # Usage: text_filtered_replace "filter_regex" "search" "replace" "file"
     text_filtered_replace() {
         _text_grep_sed_filtered_replace_impl "$@"
     }
     
-    # @@PUBLIC_API@@
+    #[pub]
     # Extract matching lines and transform them (non-destructive)
     # Usage: text_extract_transform "pattern" "search" "replace" "file" -> prints transformed lines
     text_extract_transform() {
         _text_grep_sed_extract_transform_impl "$@"
     }
     
-    # @@PUBLIC_API@@
+    #[pub]
     # Count occurrences of secondary pattern within lines matching primary pattern
     # Usage: text_count_in_matches "filter" "count_pattern" "file" -> "5"
     text_count_in_matches() {

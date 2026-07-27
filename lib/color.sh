@@ -245,28 +245,28 @@ _init_colors
 # Public API - Query Functions
 # =============================================================================
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if colors are enabled
 # Usage: color_enabled -> returns 0 if colors enabled, 1 otherwise
 color_enabled() {
     [[ "$_COLOR_SUPPORT" != "none" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the color support level
 # Usage: color_support -> "none" | "basic" | "256" | "truecolor"
 color_support() {
     echo "$_COLOR_SUPPORT"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if 256-color mode is supported
 # Usage: color_has_256 -> returns 0 if supported, 1 otherwise
 color_has_256() {
     [[ "$_COLOR_SUPPORT" == "256" || "$_COLOR_SUPPORT" == "truecolor" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if true color (24-bit) is supported
 # Usage: color_has_truecolor -> returns 0 if supported, 1 otherwise
 color_has_truecolor() {
@@ -277,7 +277,7 @@ color_has_truecolor() {
 # Public API - Enable/Disable
 # =============================================================================
 
-# @@PUBLIC_API@@
+#[pub]
 # Force enable colors (ignores NO_COLOR and terminal detection)
 # Usage: color_enable
 color_enable() {
@@ -285,7 +285,7 @@ color_enable() {
     _init_colors
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Force disable colors
 # Usage: color_disable
 color_disable() {
@@ -293,7 +293,7 @@ color_disable() {
     _init_colors
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Re-detect color support (useful after changing TERM or NO_COLOR)
 # Usage: color_redetect
 color_redetect() {
@@ -305,7 +305,7 @@ color_redetect() {
 # Public API - Colorize Functions
 # =============================================================================
 
-# @@PUBLIC_API@@
+#[pub]
 # Wrap text in a color and reset
 # Usage: color_wrap "color_var" "text" -> prints colored text
 # Example: color_wrap RED "Error!" -> "\e[31mError!\e[0m"
@@ -323,56 +323,56 @@ color_wrap() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in red
 # Usage: color_red "text" -> prints red text with newline
 color_red() {
     echo -e "${RED}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in green
 # Usage: color_green "text" -> prints green text with newline
 color_green() {
     echo -e "${GREEN}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in yellow
 # Usage: color_yellow "text" -> prints yellow text with newline
 color_yellow() {
     echo -e "${YELLOW}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in blue
 # Usage: color_blue "text" -> prints blue text with newline
 color_blue() {
     echo -e "${BLUE}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in magenta
 # Usage: color_magenta "text" -> prints magenta text with newline
 color_magenta() {
     echo -e "${MAGENTA}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in cyan
 # Usage: color_cyan "text" -> prints cyan text with newline
 color_cyan() {
     echo -e "${CYAN}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in bold
 # Usage: color_bold "text" -> prints bold text with newline
 color_bold() {
     echo -e "${BOLD}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text in dim
 # Usage: color_dim "text" -> prints dim text with newline
 color_dim() {
@@ -383,7 +383,7 @@ color_dim() {
 # Public API - 256 Color Functions
 # =============================================================================
 
-# @@PUBLIC_API@@
+#[pub]
 # Get ANSI escape for a 256-color foreground
 # Usage: color_fg256 "color_num" -> prints escape sequence
 # color_num: 0-255
@@ -394,7 +394,7 @@ color_fg256() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get ANSI escape for a 256-color background
 # Usage: color_bg256 "color_num" -> prints escape sequence
 color_bg256() {
@@ -404,7 +404,7 @@ color_bg256() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text with 256-color foreground
 # Usage: color_text256 "color_num" "text" -> prints colored text
 color_text256() {
@@ -422,7 +422,7 @@ color_text256() {
 # Public API - True Color (24-bit) Functions
 # =============================================================================
 
-# @@PUBLIC_API@@
+#[pub]
 # Get ANSI escape for RGB foreground color
 # Usage: color_fg_rgb "r" "g" "b" -> prints escape sequence
 # r, g, b: 0-255
@@ -440,7 +440,7 @@ color_fg_rgb() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get ANSI escape for RGB background color
 # Usage: color_bg_rgb "r" "g" "b" -> prints escape sequence
 color_bg_rgb() {
@@ -456,7 +456,7 @@ color_bg_rgb() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text with RGB foreground color
 # Usage: color_text_rgb "r" "g" "b" "text" -> prints colored text
 color_text_rgb() {
@@ -475,7 +475,7 @@ color_text_rgb() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Parse hex color and get RGB foreground escape
 # Usage: color_fg_hex "#RRGGBB" -> prints escape sequence
 # Example: color_fg_hex "#FF5500"
@@ -490,7 +490,7 @@ color_fg_hex() {
     color_fg_rgb "$r" "$g" "$b"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Parse hex color and get RGB background escape
 # Usage: color_bg_hex "#RRGGBB" -> prints escape sequence
 color_bg_hex() {
@@ -504,7 +504,7 @@ color_bg_hex() {
     color_bg_rgb "$r" "$g" "$b"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print text with hex foreground color
 # Usage: color_text_hex "#RRGGBB" "text" -> prints colored text
 color_text_hex() {
@@ -523,7 +523,7 @@ color_text_hex() {
 # Public API - Utility Functions
 # =============================================================================
 
-# @@PUBLIC_API@@
+#[pub]
 # Strip all ANSI escape sequences from text
 # Usage: color_strip "colored text" -> prints plain text
 color_strip() {
@@ -532,7 +532,7 @@ color_strip() {
     echo -e "$text" | sed 's/\x1b\[[0-9;]*m//g'
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the visible length of text (excluding ANSI escapes)
 # Usage: color_strlen "colored text" -> prints length as number
 color_strlen() {
@@ -542,7 +542,7 @@ color_strlen() {
     echo "${#stripped}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Pad text to a fixed width (accounting for colors)
 # Usage: color_pad "text" "width" ["char"] -> prints padded text
 # Default pad char is space
@@ -562,7 +562,7 @@ color_pad() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Center text within a fixed width
 # Usage: color_center "text" "width" -> prints centered text
 color_center() {
@@ -589,42 +589,42 @@ color_center() {
 
 # These provide semantic meaning to colors - can be customized by user
 
-# @@PUBLIC_API@@
+#[pub]
 # Print success message (green)
 # Usage: color_success "message" -> prints green message
 color_success() {
     echo -e "${GREEN}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print error message (red)
 # Usage: color_error "message" -> prints red message
 color_error() {
     echo -e "${RED}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print warning message (yellow)
 # Usage: color_warning "message" -> prints yellow message
 color_warning() {
     echo -e "${YELLOW}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print info message (blue)
 # Usage: color_info "message" -> prints blue message
 color_info() {
     echo -e "${BLUE}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print debug message (dim)
 # Usage: color_debug "message" -> prints dim message
 color_debug() {
     echo -e "${DIM}${1:-}${NC}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Print highlighted/important message (bold + cyan)
 # Usage: color_highlight "message" -> prints highlighted message
 color_highlight() {

@@ -65,7 +65,7 @@ _attr_defines() {
 # Every attribute attached to that definition, one per line, name first and any
 # argument after a tab.
 #
-# @@PUBLIC_API@@
+#[pub]
 # Usage: attr_on lib/string.sh str_trim -> prints "pub" or "allow\tloc = 400"
 attr_on() {
     local file="$1" want="$2"
@@ -108,7 +108,7 @@ attr_on() {
 
 # attr_has <file> <function> <attribute>
 #
-# @@PUBLIC_API@@
+#[pub]
 # Usage: attr_has lib/string.sh str_trim pub -> returns 0 when marked
 attr_has() {
     attr_on "$1" "$2" 2>/dev/null | cut -f1 | grep -qx "$3"
@@ -116,7 +116,7 @@ attr_has() {
 
 # attr_arg <file> <function> <attribute>
 #
-# @@PUBLIC_API@@
+#[pub]
 # Usage: attr_arg lib/foo.sh big_fn allow -> prints "loc = 400"
 attr_arg() {
     attr_on "$1" "$2" 2>/dev/null | awk -F'\t' -v a="$3" '$1 == a { print $2; exit }'
@@ -127,7 +127,7 @@ attr_arg() {
 # Every definition in the file carrying that attribute, one name per line. How
 # a test runner finds its tests and a checker finds its exemptions.
 #
-# @@PUBLIC_API@@
+#[pub]
 # Usage: attr_find tests/string_test.sh test -> prints each #[test] function
 attr_find() {
     local file="$1" want="$2"

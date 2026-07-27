@@ -56,7 +56,7 @@ _TEXT_MATCH_IMPL=""
 # Line operations (pure bash + standard tools; no impl switching needed)
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Count lines in file
 # Usage: text_line_count "file" -> "42"
 text_line_count() {
@@ -65,7 +65,7 @@ text_line_count() {
     wc -l < "$file" | tr -d ' '
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Count words in file
 # Usage: text_word_count "file" -> "123"
 text_word_count() {
@@ -74,7 +74,7 @@ text_word_count() {
     wc -w < "$file" | tr -d ' '
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get first N lines of file
 # Usage: text_head "file" [n=10]
 text_head() {
@@ -84,7 +84,7 @@ text_head() {
     head -n "$n" "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get last N lines of file
 # Usage: text_tail "file" [n=10]
 text_tail() {
@@ -94,7 +94,7 @@ text_tail() {
     tail -n "$n" "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get specific line from file
 # Usage: text_line "file" 5 -> prints line 5
 text_line() {
@@ -121,7 +121,7 @@ text_line() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get range of lines from file
 # Usage: text_lines "file" 5 10 -> prints lines 5-10
 text_lines() {
@@ -152,7 +152,7 @@ text_lines() {
 # These stubs select and source the best implementation on first call
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Find lines matching pattern
 # Usage: text_grep "pattern" "file" -> prints matching lines
 text_grep() {
@@ -176,7 +176,7 @@ text_grep() {
     text_grep "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if file contains pattern
 # Usage: text_contains "pattern" "file" -> returns 0 (true) or 1 (false)
 text_contains() {
@@ -198,7 +198,7 @@ text_contains() {
     text_contains "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Count occurrences of pattern in file
 # Usage: text_count_matches "pattern" "file" -> "5"
 text_count_matches() {
@@ -224,7 +224,7 @@ text_count_matches() {
 # Text manipulation - LAZY INIT STUBS
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Replace pattern in file (in-place)
 # Usage: text_replace "pattern" "replacement" "file"
 # 
@@ -269,7 +269,7 @@ text_replace() {
 # These provide additional functionality when multiple tools are available
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Replace pattern only in lines matching a filter
 # Usage: text_filtered_replace "filter_regex" "search" "replace" "file"
 # 
@@ -294,7 +294,7 @@ text_filtered_replace() {
     text_filtered_replace "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Extract matching lines and transform them (non-destructive)
 # Usage: text_extract_transform "pattern" "search" "replace" "file" -> prints transformed lines
 # 
@@ -327,7 +327,7 @@ text_extract_transform() {
     text_extract_transform "$@"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Count occurrences of secondary pattern within lines matching primary pattern
 # Usage: text_count_in_matches "filter" "count_pattern" "file" -> "5"
 # 
@@ -361,7 +361,7 @@ text_count_in_matches() {
 # Simple operations (don't need impl switching)
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Append line to file
 # Usage: text_append "line" "file"
 text_append() {
@@ -371,7 +371,7 @@ text_append() {
     echo "$line" >> "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prepend line to file
 # Usage: text_prepend "line" "file"
 text_prepend() {
@@ -391,7 +391,7 @@ text_prepend() {
     mv "$temp" "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Extract text between two markers
 # Usage: text_between "file" "START" "END" -> prints text between markers
 text_between() {
@@ -411,7 +411,7 @@ text_between() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Remove blank lines from file content
 # Usage: text_remove_blank "file" -> prints non-blank lines
 text_remove_blank() {
@@ -432,7 +432,7 @@ text_remove_blank() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Remove comment lines (starting with #)
 # Usage: text_remove_comments "file" -> prints non-comment lines
 text_remove_comments() {
@@ -454,21 +454,21 @@ text_remove_comments() {
 # Module readiness and introspection
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if text module is ready to use
 # Usage: text_ready -> returns 0 if ready, 1 if not
 text_ready() {
     [[ "$_TEXT_READY" == "1" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get text module error message (if not ready)
 # Usage: text_error -> prints error message
 text_error() {
     echo "$_TEXT_ERROR"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get which implementation was selected for text_replace
 # Usage: text_replace_impl -> "grep_sed" | "sed" | "perl" | "awk" | "none" | ""
 # Returns empty string if text_replace hasn't been called yet (stub not resolved)
@@ -476,7 +476,7 @@ text_replace_impl() {
     echo "$_TEXT_REPLACE_IMPL"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get which implementation was selected for matching functions
 # Usage: text_match_impl -> "grep" | "perl" | "none" | ""
 # Returns empty string if matching functions haven't been called yet

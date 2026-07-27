@@ -65,7 +65,7 @@ _prompt_read() {
 # Public API - Basic Input
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for yes/no confirmation
 # Usage: prompt_confirm "Continue?" -> returns 0 for yes, 1 for no
 # Usage: prompt_confirm "Delete?" "y" -> default is yes
@@ -112,7 +112,7 @@ prompt_confirm() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for text input
 # Usage: prompt_input "Enter name:" -> prints user input
 # Usage: prompt_input "Enter name:" "default" -> default value if empty
@@ -142,7 +142,7 @@ prompt_input() {
     echo "$response"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for password (hidden input)
 # Usage: prompt_password "Password:" -> prints password (not echoed)
 # Returns: Password (prints to stdout)
@@ -165,7 +165,7 @@ prompt_password() {
     echo "$password"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for input with validation
 # Usage: prompt_validated "Email:" "^[^@]+@[^@]+$" -> keeps asking until valid
 # Returns: Validated input (prints to stdout)
@@ -194,7 +194,7 @@ prompt_validated() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for integer input
 # Usage: prompt_int "Count:" -> prints integer
 # Usage: prompt_int "Count:" 1 100 -> enforces range
@@ -250,7 +250,7 @@ prompt_int() {
 # Public API - Selection
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt user to select from numbered options
 # Usage: prompt_select "Choose:" "Option A" "Option B" "Option C" -> prints selected option
 # Returns: Selected option text (prints to stdout)
@@ -294,7 +294,7 @@ prompt_select() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt user to select from options using arrow keys (if supported)
 # Falls back to numbered selection if not interactive
 # Usage: prompt_menu "Choose:" "Option A" "Option B" -> prints selected option
@@ -378,7 +378,7 @@ prompt_menu() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Multi-select: user can select multiple options
 # Usage: prompt_multiselect "Select:" "Option A" "Option B" "Option C"
 # Returns: Selected options, one per line (prints to stdout)
@@ -478,7 +478,7 @@ prompt_multiselect() {
 # Public API - Special Prompts
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for a file path with completion hint
 # Usage: prompt_file "Config file:" -> prints file path
 # Returns: File path (prints to stdout)
@@ -509,7 +509,7 @@ prompt_file() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for a directory path
 # Usage: prompt_dir "Output directory:" -> prints directory path
 # Returns: Directory path (prints to stdout)
@@ -540,7 +540,7 @@ prompt_dir() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Wait for user to press any key
 # Usage: prompt_pause -> waits for keypress
 # Usage: prompt_pause "Press any key to continue..."
@@ -556,7 +556,7 @@ prompt_pause() {
     echo ""
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Countdown with option to cancel
 # Usage: prompt_countdown 5 "Starting in" -> returns 0 if completed, 1 if cancelled
 # Returns: 0 if countdown completed, 1 if user pressed key to cancel
@@ -583,7 +583,7 @@ prompt_countdown() {
     return 0
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Ask user to choose between two options (like a vs b)
 # Usage: prompt_choice "Keep?" "local" "remote" -> prints chosen option
 # Returns: First or second option (prints to stdout)
@@ -626,21 +626,21 @@ prompt_choice() {
 # Public API - Utility Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if running in interactive mode
 # Usage: prompt_interactive -> returns 0 if interactive, 1 otherwise
 prompt_interactive() {
     _prompt_is_interactive
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Set the timeout for prompts (0 = no timeout)
 # Usage: prompt_set_timeout 30 -> sets 30 second timeout
 prompt_set_timeout() {
     PROMPT_TIMEOUT="${1:-0}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Set default value for confirm prompts in non-interactive mode
 # Usage: prompt_set_default_confirm "y" -> defaults to yes
 prompt_set_default_confirm() {

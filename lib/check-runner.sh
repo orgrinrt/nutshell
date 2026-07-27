@@ -189,7 +189,7 @@ cfg_section_exists() {
     return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # DISABLED_ANNOTATION
 # Check if a test is enabled
 # Usage: cfg_test_enabled "syntax"
@@ -464,7 +464,7 @@ _is_excluded() {
 }
 
 # Get all files matching include patterns, excluding configured paths
-# @@PUBLIC_API@@
+#[pub]
 # Usage: get_lib_files -> prints file paths, one per line
 get_lib_files() {
     _framework_init
@@ -479,7 +479,7 @@ get_lib_files() {
 }
 
 # Get all script files (same as lib files for nutshell)
-# @@PUBLIC_API@@
+#[pub]
 # Usage: get_script_files -> prints file paths, one per line
 get_script_files() {
     get_lib_files
@@ -490,7 +490,7 @@ get_script_files() {
 # =============================================================================
 
 # Check if a function has a specific annotation
-# @@PUBLIC_API@@
+#[pub]
 # Usage: has_annotation "file" "func_name" "annotation_pattern" -> returns 0/1
 has_annotation() {
     local file="$1"
@@ -521,7 +521,7 @@ has_annotation() {
 }
 
 # Check if function has any of the configured exempt annotations for trivial wrappers
-# @@PUBLIC_API@@
+#[pub]
 # Usage: has_trivial_wrapper_exemption "file" "func_name" -> returns 0/1
 has_trivial_wrapper_exemption() {
     local file="$1"
@@ -530,7 +530,7 @@ has_trivial_wrapper_exemption() {
     local public_api_annotation
     local ergonomics_annotation
     
-    public_api_annotation="$(cfg_get_or "annotations.public_api" "@@PUBLIC_API@@")"
+    public_api_annotation="$(cfg_get_or "annotations.public_api" "#[pub]")"
     ergonomics_annotation="$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "DISABLED_ANNOTATION")"
     
     has_annotation "$file" "$func_name" "$public_api_annotation" && return 0
@@ -544,7 +544,7 @@ has_trivial_wrapper_exemption() {
 # =============================================================================
 
 # Extract function names from a shell script
-# @@PUBLIC_API@@
+#[pub]
 # Usage: extract_functions "file" -> prints function names, one per line
 extract_functions() {
     local file="$1"
@@ -558,7 +558,7 @@ extract_functions() {
 }
 
 # Count lines of code (excluding comments and empty lines)
-# @@PUBLIC_API@@
+#[pub]
 # Usage: count_code_lines "file" -> prints number
 count_code_lines() {
     local file="$1"
@@ -569,7 +569,7 @@ count_code_lines() {
 }
 
 # Count total lines in a file
-# @@PUBLIC_API@@
+#[pub]
 # Usage: count_total_lines "file" -> prints number
 count_total_lines() {
     local file="$1"
@@ -577,7 +577,7 @@ count_total_lines() {
 }
 
 # Calculate Levenshtein distance between two strings
-# @@PUBLIC_API@@
+#[pub]
 # Usage: levenshtein_distance "string1" "string2" -> prints distance
 levenshtein_distance() {
     local s1="$1"
@@ -619,7 +619,7 @@ levenshtein_distance() {
 }
 
 # Calculate similarity score (0.0 to 1.0) based on Levenshtein distance
-# @@PUBLIC_API@@
+#[pub]
 # Usage: similarity_score "string1" "string2" -> prints score (e.g., "0.850")
 similarity_score() {
     local s1="$1"
@@ -639,7 +639,7 @@ similarity_score() {
 }
 
 # Strip module prefix from function name
-# @@PUBLIC_API@@
+#[pub]
 # Usage: strip_prefix "git_check_valid" -> "check_valid"
 strip_prefix() {
     local name="$1"
@@ -656,7 +656,7 @@ strip_prefix() {
 # =============================================================================
 
 # Print test summary
-# @@PUBLIC_API@@
+#[pub]
 # Usage: print_summary ["Test Suite Name"]
 print_summary() {
     local test_name="${1:-Test Suite}"
@@ -730,7 +730,7 @@ print_summary() {
 }
 
 # Exit with appropriate code based on test results
-# @@PUBLIC_API@@
+#[pub]
 # Usage: exit_with_status
 exit_with_status() {
     [[ $TESTS_FAILED -gt 0 ]] && exit 1

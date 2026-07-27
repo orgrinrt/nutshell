@@ -5,14 +5,14 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Verifies that all functions marked with @@PUBLIC_API@@ annotation have
+# Verifies that all functions marked with #[pub] annotation have
 # proper documentation including usage examples.
 #
 # FULLY CONFIG-DRIVEN: All settings come from nut.toml.
 # See examples/configs/empty.nut.toml for all available options.
 #
 # Checks:
-#   - Functions with @@PUBLIC_API@@ must have a Usage: line
+#   - Functions with #[pub] must have a Usage: line
 #   - Optionally checks for return value documentation (->)
 #
 # Usage: ./examples/checks/check_public_api_docs.sh
@@ -32,7 +32,7 @@ use check-runner
 # =============================================================================
 
 # Settings (will be loaded from config)
-PUBLIC_API_ANNOTATION="@@PUBLIC_API@@"
+PUBLIC_API_ANNOTATION="#[pub]"
 declare -a REQUIRED_ELEMENTS=()
 declare -a RECOMMENDED_ELEMENTS=()
 MIN_DOC_LINES=1
@@ -45,7 +45,7 @@ load_config() {
     fi
     
     # Load settings from config
-    PUBLIC_API_ANNOTATION="$(cfg_get_or "tests.public_api_docs.public_api_annotation" "@@PUBLIC_API@@")"
+    PUBLIC_API_ANNOTATION="$(cfg_get_or "tests.public_api_docs.public_api_annotation" "#[pub]")"
     MIN_DOC_LINES="$(cfg_get_or "tests.public_api_docs.min_doc_lines" "1")"
     
     # Load required elements
@@ -313,7 +313,7 @@ test_public_api_docs() {
         echo ""
         echo "Example of well-documented public API function:"
         echo ""
-        echo "  # @@PUBLIC_API@@"
+        echo "  # #[pub]"
         echo "  # Brief description of what the function does"
         echo "  # Usage: function_name \"arg1\" \"arg2\" -> \"result\""
         echo "  function_name() {"

@@ -5,7 +5,7 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# @@ALLOW_LOC_450@@
+#[allow(loc = 450)]
 # Layer -1 (Foundation): Depends only on os.sh
 #
 # This module detects what external tools are available and collects
@@ -460,7 +460,7 @@ declare -gr _TOOLS_AVAILABLE 2>/dev/null || declare -r _TOOLS_AVAILABLE
 # Public API - Availability checks
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a tool is available
 # Usage: deps_has "sed" -> returns 0 (true) or 1 (false)
 deps_has() {
@@ -468,7 +468,7 @@ deps_has() {
     [[ -n "${_TOOL_PATH[$tool]:-}" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if multiple tools are all available
 # Usage: deps_has_all "sed" "awk" "grep" -> returns 0 if all present
 deps_has_all() {
@@ -479,7 +479,7 @@ deps_has_all() {
     return 0
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if at least one of the tools is available
 # Usage: deps_has_any "perl" "sed" -> returns 0 if any present
 deps_has_any() {
@@ -490,7 +490,7 @@ deps_has_any() {
     return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the list of available tools (space-separated)
 # Usage: deps_available -> "sed awk grep perl stat..."
 deps_available() {
@@ -501,7 +501,7 @@ deps_available() {
 # Public API - Path and variant access
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the path to a tool
 # Usage: deps_path "sed" -> "/usr/bin/sed"
 deps_path() {
@@ -516,7 +516,7 @@ deps_path() {
     return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the variant of a tool
 # Usage: deps_variant "sed" -> "gnu" or "bsd"
 deps_variant() {
@@ -524,7 +524,7 @@ deps_variant() {
     echo "${_TOOL_VARIANT[$tool]:-unknown}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if tool is GNU variant
 # Usage: deps_is_gnu "sed" -> returns 0 or 1
 deps_is_gnu() {
@@ -533,7 +533,7 @@ deps_is_gnu() {
     [[ "$variant" == "gnu" ]] || [[ "$variant" == "gawk" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if tool is BSD variant
 # Usage: deps_is_bsd "sed" -> returns 0 or 1
 deps_is_bsd() {
@@ -546,7 +546,7 @@ deps_is_bsd() {
 # Public API - Capability checks
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a capability is available
 # Usage: deps_can "grep_pcre" -> returns 0 or 1
 deps_can() {
@@ -554,7 +554,7 @@ deps_can() {
     [[ "${_TOOL_CAN[$cap]:-0}" == "1" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get capability value (1 or 0)
 # Usage: deps_cap "grep_pcre" -> "1" or "0"
 deps_cap() {
@@ -562,7 +562,7 @@ deps_cap() {
     echo "${_TOOL_CAN[$cap]:-0}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # List all capabilities (one per line: cap=value)
 # Usage: deps_caps -> "sed_inplace=1\ngrep_pcre=1\n..."
 deps_caps() {
@@ -576,7 +576,7 @@ deps_caps() {
 # Public API - Requirement enforcement
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Require a tool to be present; exit if not
 # Usage: deps_require "sed" ["Custom error message"]
 deps_require() {
@@ -589,7 +589,7 @@ deps_require() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Require multiple tools; exit if any missing
 # Usage: deps_require_all "sed" "awk" "grep"
 deps_require_all() {
@@ -606,7 +606,7 @@ deps_require_all() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Require a capability; exit if not available
 # Usage: deps_require_cap "grep_pcre" ["Custom error message"]
 deps_require_cap() {
@@ -623,7 +623,7 @@ deps_require_cap() {
 # Public API - Diagnostics
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Print dependency information for debugging
 # Usage: deps_info -> prints formatted tool info
 deps_info() {
@@ -657,7 +657,7 @@ deps_info() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check all common tools and report status
 # Usage: deps_check -> returns 0 if all basic tools present
 deps_check() {
@@ -681,7 +681,7 @@ deps_check() {
 # Convenience: Direct tool execution with resolved path
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Run a tool using its detected path
 # Usage: deps_run "sed" -i 's/a/b/' file.txt
 deps_run() {
@@ -702,7 +702,7 @@ deps_run() {
 # These are convenience functions; modules can also access _TOOL_PATH directly
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Portable sed in-place edit
 # Usage: deps_sed_inplace "s/old/new/g" "file.txt"
 deps_sed_inplace() {
@@ -718,7 +718,7 @@ deps_sed_inplace() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Portable stat for file size in bytes
 # Usage: deps_stat_size "file" -> "12345"
 deps_stat_size() {
@@ -732,7 +732,7 @@ deps_stat_size() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Portable stat for modification time (epoch seconds)
 # Usage: deps_stat_mtime "file" -> "1234567890"
 deps_stat_mtime() {

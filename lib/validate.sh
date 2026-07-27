@@ -43,8 +43,8 @@ is_empty() {
 # Command availability checks
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if a command is available
 # Usage: has_command "git" -> returns 0 (true) or 1 (false)
 has_command() {
@@ -89,6 +89,7 @@ is_boolean() {
 
 # Check if value is truthy (1/true/yes/on/y)
 # Usage: is_truthy "yes" -> returns 0 (true)
+#[pub]
 is_truthy() {
     local val="${1:-}"
     local lower="${val,,}"

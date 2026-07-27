@@ -45,6 +45,23 @@ declare -gA _NUTSHELL_MODULE_ERRORS=() 2>/dev/null || declare -A _NUTSHELL_MODUL
 # Track module initialization status
 declare -gA _NUTSHELL_MODULE_INIT=() 2>/dev/null || declare -A _NUTSHELL_MODULE_INIT=()
 
+# nut_once
+#
+# The include guard, deriving its own key from the file that calls it, so a
+# module says `nut_once || return 0` instead of inventing a unique variable
+# name and typing it twice. The name was always computable from the path; the
+# only reason it was written by hand is that nothing offered to compute it.
+#
+# Returns 0 the first time a given file calls it, non-zero after, so the idiom
+# reads as "carry on, or stop".
+nut_once() {
+    local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+    local key="_NUT_ONCE_${src//[^A-Za-z0-9]/_}"
+    [[ -n "${!key:-}" ]] && return 1
+    printf -v "$key" '%s' 1
+    return 0
+}
+
 # =============================================================================
 # Module loading (for script authors)
 # =============================================================================

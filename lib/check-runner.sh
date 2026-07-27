@@ -66,13 +66,34 @@ declare -ga NUT_INCLUDE_PATTERNS=() 2>/dev/null || declare -a NUT_INCLUDE_PATTER
 
 # Get a config value with fallback to defaults
 # Usage: cfg_get "key" -> prints value
+# Resolved configuration values, and keys already known to be absent.
+#
+# Every lookup used to re-parse the whole file, in a subshell, twice: once for
+# the user config and once for the defaults. `toml_get` reads line by line in
+# bash, so a run cost functions x lookups x file length, and the check that
+# analyses every function in lib/ paid it for each one. Adding two modules took
+# that from slow to minutes.
+#
+# Absence is cached as well as presence. A miss is the expensive case, since it
+# parses both files to the end before giving up, and a key absent once is
+# absent for the rest of the run.
+declare -gA _CFG_CACHE=()
+declare -gA _CFG_MISS=()
+
 cfg_get() {
     local key="$1"
     local value=""
+
+    [[ -n "${_CFG_MISS[$key]:-}" ]] && return 1
+    if [[ -n "${_CFG_CACHE[$key]+set}" ]]; then
+        printf '%s\n' "${_CFG_CACHE[$key]}"
+        return 0
+    fi
     
     # Try user config first
     if [[ -n "$CONFIG_FILE" ]] && [[ -f "$CONFIG_FILE" ]]; then
         value="$(toml_get "$CONFIG_FILE" "$key" 2>/dev/null)" && {
+            _CFG_CACHE[$key]="$value"
             echo "$value"
             return 0
         }
@@ -81,11 +102,14 @@ cfg_get() {
     # Fall back to defaults
     if [[ -f "$NUTSHELL_DEFAULTS_FILE" ]]; then
         value="$(toml_get "$NUTSHELL_DEFAULTS_FILE" "$key" 2>/dev/null)" && {
+            _CFG_CACHE[$key]="$value"
             echo "$value"
             return 0
         }
     fi
-    
+
+    # Remember the miss. Reaching here means both files were parsed to the end.
+    _CFG_MISS[$key]=1
     return 1
 }
 

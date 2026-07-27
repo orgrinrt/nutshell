@@ -26,6 +26,11 @@ use log
 
 #[pub]
 # Check if variable is set and non-empty
+#
+# The NAME of a variable, not its value. `is_set "$x"` asks about a variable
+# named after the contents of x, which is almost never set, so it answers no
+# whatever x holds. The same goes for `is_empty`.
+#
 # Usage: is_set "varname" -> returns 0 (true) or 1 (false)
 is_set() {
     local varname="${1:-}"
@@ -164,10 +169,53 @@ is_ipv4() {
 # Usage: is_ipv6 "::1" -> returns 0 (true)
 is_ipv6() {
     local val="${1:-}"
-    [[ "$val" =~ ^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$ ]] || \
-    [[ "$val" =~ ^::$ ]] || \
-    [[ "$val" =~ ^::1$ ]] || \
-    [[ "$val" =~ ^[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){7}$ ]]
+    [[ -z "$val" ]] && return 1
+
+    # Counted, not pattern-matched. The pattern this replaced allowed a group
+    # of zero to four hex digits anywhere, which accepts `:::::` and `1:2:3`:
+    # any run of colons matched, because every group between them was allowed
+    # to be empty.
+    #
+    # An address is eight groups. `::` stands for a run of all-zero groups and
+    # may appear once, so with it there are at most seven written groups and
+    # without it exactly eight.
+    local head tail
+    if [[ "$val" == *::* ]]; then
+        # Once only. `1::2::3` says nothing about where the zeroes go.
+        [[ "${val%%::*}" == *::* || "${val#*::}" == *::* ]] && return 1
+        head="${val%%::*}"
+        tail="${val#*::}"
+    else
+        head="$val"
+        tail=""
+        # No `::`, so every one of the eight has to be written.
+        [[ "$(_v6_count "$head")" -eq 8 ]] || return 1
+        _v6_groups_ok "$head"
+        return $?
+    fi
+
+    local n=$(( $(_v6_count "$head") + $(_v6_count "$tail") ))
+    [[ "$n" -le 7 ]] || return 1
+    _v6_groups_ok "$head" || return 1
+    _v6_groups_ok "$tail"
+}
+
+# _v6_count <segment> -> how many colon-separated groups it holds
+_v6_count() {
+    [[ -z "$1" ]] && { printf '0'; return 0; }
+    local rest="${1//[^:]/}"
+    printf '%d' $(( ${#rest} + 1 ))
+}
+
+# _v6_groups_ok <segment> -> every group is one to four hex digits
+_v6_groups_ok() {
+    [[ -z "$1" ]] && return 0
+    local group
+    local IFS=':'
+    for group in $1; do
+        [[ "$group" =~ ^[0-9a-fA-F]{1,4}$ ]] || return 1
+    done
+    return 0
 }
 
 #[pub]
@@ -191,7 +239,19 @@ is_port() {
 # Usage: is_hostname "example.com" -> returns 0 (true)
 is_hostname() {
     local val="${1:-}"
-    # Allow alphanumeric, hyphens, and dots; no leading/trailing hyphens per label
+
+    # Length first. The pattern alone accepts a single label of any length, so
+    # a 300-character name passed, and a name that cannot be resolved is not a
+    # hostname whatever it is made of. RFC 1035: 253 for the name, 63 a label.
+    [[ -z "$val" || "${#val}" -gt 253 ]] && return 1
+
+    local label
+    local IFS='.'
+    for label in $val; do
+        [[ "${#label}" -ge 1 && "${#label}" -le 63 ]] || return 1
+    done
+
+    # Alphanumeric and hyphens, no label starting or ending on a hyphen.
     [[ "$val" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
 }
 

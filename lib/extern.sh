@@ -61,6 +61,67 @@ _extern_cache_root() {
     printf '%s/externs' "$(xdg_app_cache)"
 }
 
+# -----------------------------------------------------------------------------
+# The lockfile
+# -----------------------------------------------------------------------------
+#
+# `nut.lock` sits beside `nut.toml` and records the commit each dependency
+# resolved to. `ref = "main"` names a branch, and a branch is a moving target:
+# without this, two checkouts of the same project on the same day can be
+# running different code, and neither can say so.
+#
+# It is written on first resolution and obeyed from then on. Moving to a newer
+# commit is deliberate: delete the entry, or the file.
+#
+# Commit it. A lockfile in .gitignore records nothing anybody else can read.
+
+_extern_lock_path() {
+    local manifest
+    manifest="$(_extern_manifest)" || return 1
+    printf '%s/nut.lock' "${manifest%/*}"
+}
+
+#[pub]
+# Usage: extern_locked shebang -> prints the pinned commit, or nothing
+extern_locked() {
+    local name="$1" lock
+    lock="$(_extern_lock_path)" || return 1
+    [[ -f "$lock" ]] || return 1
+    toml_get "$lock" "deps.${name}.commit" 2>/dev/null
+}
+
+#[pub]
+# Usage: extern_lock_write shebang <commit>
+#
+# Rewrites the whole file rather than editing one entry in place. It is
+# generated, it is small, and a rewrite cannot corrupt a neighbouring entry the
+# way a targeted edit can.
+extern_lock_write() {
+    local name="$1" commit="$2" lock existing tmp
+    lock="$(_extern_lock_path)" || return 1
+
+    tmp="${lock}.tmp.$$"
+    {
+        printf '# nut.lock - resolved dependency commits. Generated; commit it.\n'
+        printf '#\n'
+        printf '# Delete an entry to take the newest commit on its ref again.\n'
+
+        # Every other entry, carried across unchanged.
+        if [[ -f "$lock" ]]; then
+            local other
+            while IFS= read -r other; do
+                [[ -z "$other" || "$other" == "$name" ]] && continue
+                existing="$(toml_get "$lock" "deps.${other}.commit" 2>/dev/null)" || continue
+                printf '\n[deps.%s]\ncommit = "%s"\n' "$other" "$existing"
+            done < <(grep -o '^\[deps\.[^]]*\]' "$lock" 2>/dev/null | sed 's/^\[deps\.//; s/\]$//')
+        fi
+
+        printf '\n[deps.%s]\ncommit = "%s"\n' "$name" "$commit"
+    } > "$tmp" || return 1
+
+    mv -f "$tmp" "$lock"
+}
+
 #[pub]
 # Usage: extern_declared shebang -> prints "<url> <ref>", or fails
 extern_declared() {
@@ -88,32 +149,60 @@ extern_path() {
     key="$(printf '%s@%s' "$url" "$ref" | cksum | tr -d ' ')"
     dir="$(_extern_cache_root)/${key}"
 
-    if [[ -d "$dir/.git" ]]; then
-        printf '%s' "$dir"
-        return 0
+    if [[ ! -d "$dir/.git" ]]; then
+        # validate rather than deps: deps tracks the unix text tools and their
+        # variants, and git is not one of those.
+        require_command git "fetching an external library needs git" || return 1
+        fs_mkdir "${dir%/*}" || return 1
+
+        # To stderr: this function's stdout is its return value, and a progress
+        # line captured by command substitution becomes part of the path.
+        log_info "fetching ${name} from ${url} (${ref})" >&2
+        if ! git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$url" "$dir" 2>/dev/null; then
+            # A ref that is a sha rather than a branch cannot be cloned
+            # shallowly by name, so fall back rather than reporting the
+            # repository missing.
+            git clone --quiet "$url" "$dir" 2>/dev/null || {
+                log_error "could not fetch ${name} from ${url}"
+                return 1
+            }
+            git -C "$dir" checkout --quiet "$ref" 2>/dev/null || {
+                log_error "${name} has no ref '${ref}'"
+                return 1
+            }
+        fi
     fi
 
-    # validate rather than deps: deps tracks the unix text tools and their
-    # variants, and git is not one of those.
-    require_command git "fetching an external library needs git" || return 1
-    fs_mkdir "${dir%/*}" || return 1
-
-    # To stderr: this function's stdout is its return value, and a progress
-    # line captured by command substitution becomes part of the path.
-    log_info "fetching ${name} from ${url} (${ref})" >&2
-    if ! git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$url" "$dir" 2>/dev/null; then
-        # A ref that is a sha rather than a branch cannot be cloned shallowly
-        # by name, so fall back rather than reporting the repository missing.
-        git clone --quiet "$url" "$dir" 2>/dev/null || {
-            log_error "could not fetch ${name} from ${url}"
-            return 1
-        }
-        git -C "$dir" checkout --quiet "$ref" 2>/dev/null || {
-            log_error "${name} has no ref '${ref}'"
-            return 1
-        }
-    fi
+    _extern_pin "$name" "$dir" "$url" || return 1
     printf '%s' "$dir"
+}
+
+# _extern_pin <name> <dir> <url>
+#
+# Hold the checkout at the locked commit, or record the one it is at.
+#
+# Checked on every resolution, not only on the fetch. The cache is shared
+# between projects keyed by url and ref, so the checkout a project finds
+# already there was placed by somebody else, and "we cloned it, so it is what
+# we asked for" only holds the first time.
+_extern_pin() {
+    local name="$1" dir="$2" url="$3" locked head
+    head="$(git -C "$dir" rev-parse HEAD 2>/dev/null)" || return 0
+
+    locked="$(extern_locked "$name")" || {
+        extern_lock_write "$name" "$head"
+        return 0
+    }
+    [[ -z "$locked" || "$locked" == "$head" ]] && return 0
+
+    # Fetch before checkout: a shallow clone of a branch does not contain an
+    # older commit on it, and that is the ordinary case rather than an edge.
+    git -C "$dir" fetch --quiet origin "$locked" 2>/dev/null
+    git -C "$dir" checkout --quiet "$locked" 2>/dev/null || {
+        log_error "${name} is locked to ${locked}, which ${url} does not have"
+        log_error "delete its entry in nut.lock to take the newest commit instead"
+        return 1
+    }
 }
 
 #[pub]

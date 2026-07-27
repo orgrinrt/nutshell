@@ -489,6 +489,22 @@ get_script_files() {
 # Check if a function has a specific annotation
 #[pub]
 # Usage: has_annotation "file" "func_name" "annotation_pattern" -> returns 0/1
+# attr_name_of <annotation>
+#
+# The attribute name inside a configured marker: `#[pub]` gives `pub`. Prints
+# nothing when the marker is not in attribute shape, which is how a caller
+# tells that it has to match the string literally instead.
+#
+# Here rather than in each check because two of them needed it and each got it
+# wrong in its own way: both interpolated the marker straight into a regex,
+# where `[pub]` is a bracket expression matching one character out of p, u and
+# b, so one check exempted almost nothing and the other found no public
+# functions at all in a library with more than a hundred of them.
+attr_name_of() {
+    [[ "$1" =~ ^#\[([a-z_][a-z0-9_]*)\]$ ]] || return 1
+    printf '%s' "${BASH_REMATCH[1]}"
+}
+
 # has_annotation <file> <function> <annotation>
 #
 # Whether that definition carries that annotation.
@@ -508,9 +524,8 @@ has_annotation() {
     local file="$1" func_name="$2" annotation="$3"
 
     # The configured form is the written form, `#[pub]`. attr works in names.
-    local name="$annotation"
-    if [[ "$annotation" =~ ^#\[([a-z_][a-z0-9_]*)\]$ ]]; then
-        name="${BASH_REMATCH[1]}"
+    local name
+    if name="$(attr_name_of "$annotation")"; then
         attr_has "$file" "$func_name" "$name"
         return $?
     fi

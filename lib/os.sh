@@ -17,6 +17,7 @@ nut_once || return 0
 
 # Returns the OS name: linux|macos|windows|unknown
 #[pub]
+# Usage: os_name -> "linux", "macos", "windows" or "unknown"
 os_name() {
     case "$(uname -s)" in
         Linux*)  echo "linux" ;;
@@ -33,6 +34,7 @@ os_is_linux() {
 
 # Returns 0 (true) if running on macOS, 1 (false) otherwise
 #[pub]
+# Usage: os_is_macos -> returns 0 on macOS, 1 elsewhere
 os_is_macos() {
     [[ "$(uname -s)" == Darwin* ]]
 }

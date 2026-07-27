@@ -135,6 +135,12 @@ declare -gA _TOOL_VARIANT=() 2>/dev/null || declare -A _TOOL_VARIANT=()
 # Capabilities are named as tool_capability, e.g., sed_inplace, grep_pcre
 declare -gA _TOOL_CAN=() 2>/dev/null || declare -A _TOOL_CAN=()
 
+# Tools looked for and not found, so a miss is paid for once.
+declare -gA _TOOL_MISSING=() 2>/dev/null || declare -A _TOOL_MISSING=()
+
+# The config file, found once at init rather than on every lookup.
+declare -g _DEPS_CONFIG=""
+
 # -----------------------------------------------------------------------------
 # Internal: Path resolution
 # -----------------------------------------------------------------------------
@@ -413,6 +419,7 @@ _deps_detect_capabilities() {
 _deps_init() {
     local config_file
     config_file="$(_deps_find_config)" || config_file=""
+    _DEPS_CONFIG="$config_file"
     
     # List of tools to detect
     local tools=(
@@ -450,10 +457,15 @@ _deps_init() {
 # Run initialization immediately
 _deps_init
 
-# Make arrays readonly after init (bash 4.2+)
-# Note: associative arrays can't be made readonly in all bash versions,
-# but we document that these should not be modified
-declare -gr _TOOLS_AVAILABLE 2>/dev/null || declare -r _TOOLS_AVAILABLE
+# Not readonly, deliberately. It was, and that froze the answer rather than the
+# source of truth: init scans a fixed list of unix text tools, so a tool found
+# later by `deps_has` could never join the list of what is available. An
+# immutable cache is a bug wherever the cache is allowed to be incomplete, and
+# this one is incomplete by construction.
+#
+# The associative arrays beside it were never readonly either, since bash
+# cannot always make one so. They are written by this module and read by
+# everyone; treat them as read-only from outside.
 
 # -----------------------------------------------------------------------------
 # Public API - Availability checks
@@ -464,7 +476,27 @@ declare -gr _TOOLS_AVAILABLE 2>/dev/null || declare -r _TOOLS_AVAILABLE
 # Usage: deps_has "sed" -> returns 0 (true) or 1 (false)
 deps_has() {
     local tool="${1:-}"
-    [[ -n "${_TOOL_PATH[$tool]:-}" ]]
+    [[ -z "$tool" ]] && return 1
+    [[ -n "${_TOOL_PATH[$tool]:-}" ]] && return 0
+    [[ -n "${_TOOL_MISSING[$tool]:-}" ]] && return 1
+
+    # Anything not in the eager list is looked for now, once, and remembered.
+    #
+    # Without this, `deps_has` answered no for every tool init did not scan
+    # for, and init scans for the unix text tools. So `json.sh` asked for jq
+    # and was told no on a machine with jq, and fell through its documented
+    # "jq, then python, then perl" preference to perl every time; `http.sh`
+    # asked for curl and for wget, was told no to both, and reported itself
+    # unavailable on every machine there has ever been. Neither module was
+    # wrong to ask. The answer was.
+    local path
+    if path="$(_deps_find_tool "$tool" "$_DEPS_CONFIG")"; then
+        _TOOL_PATH[$tool]="$path"
+        _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"
+        return 0
+    fi
+    _TOOL_MISSING[$tool]=1
+    return 1
 }
 
 #[pub]
@@ -505,14 +537,12 @@ deps_available() {
 # Usage: deps_path "sed" -> "/usr/bin/sed"
 deps_path() {
     local tool="${1:-}"
-    local path="${_TOOL_PATH[$tool]:-}"
-    
-    if [[ -n "$path" ]]; then
-        echo "$path"
-        return 0
-    fi
-    
-    return 1
+    # Through deps_has, so a tool outside the eager list resolves here too. The
+    # two used to disagree: asking whether a tool was there found it, and
+    # asking where it was did not, because only the first had been taught to
+    # look.
+    deps_has "$tool" || return 1
+    printf '%s\n' "${_TOOL_PATH[$tool]}"
 }
 
 #[pub]

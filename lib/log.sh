@@ -69,6 +69,7 @@ _log_format() {
 # -----------------------------------------------------------------------------
 
 #[pub]
+# Usage: log_debug "probing $path" -> to stderr, only when LOG_LEVEL=debug
 log_debug() {
     _log_should_emit debug || return 0
     local color="" reset=""
@@ -80,6 +81,7 @@ log_debug() {
 }
 
 #[pub]
+# Usage: log_info "building" -> to stdout
 log_info() {
     _log_should_emit info || return 0
     local color="" reset=""
@@ -91,6 +93,7 @@ log_info() {
 }
 
 #[pub]
+# Usage: log_warn "falling back to sed" -> to stderr
 log_warn() {
     _log_should_emit warn || return 0
     local color="" reset=""
@@ -102,6 +105,7 @@ log_warn() {
 }
 
 #[pub]
+# Usage: log_error "no such file" -> to stderr
 log_error() {
     _log_should_emit error || return 0
     local color="" reset=""
@@ -113,6 +117,7 @@ log_error() {
 }
 
 #[pub]
+# Usage: log_success "41 passed" -> to stdout
 log_success() {
     _log_should_emit info || return 0
     local color="" reset=""
@@ -124,6 +129,7 @@ log_success() {
 }
 
 #[pub]
+# Usage: log_step "Building" -> a heading, to stdout
 log_step() {
     _log_should_emit info || return 0
     local color="" reset="" bold=""
@@ -136,6 +142,7 @@ log_step() {
 }
 
 #[pub]
+# Usage: log_substep "linking" -> an indented line under a step
 log_substep() {
     _log_should_emit info || return 0
     local color="" reset=""
@@ -156,6 +163,7 @@ log_substep() {
 # `colour` is a name from the palette below, or `none`. Colour is applied only
 # when the stream is a terminal, exactly as the level functions do it.
 #[pub]
+# Usage: log_tagged BLOCK red "unsigned commit" -> "[BLOCK] unsigned commit"
 log_tagged() {
     local tag="$1" want="$2"; shift 2
     local color="" reset=""
@@ -176,6 +184,7 @@ log_tagged() {
 }
 
 #[pub]
+# Usage: log_fatal "cannot continue" -> to stderr, then exits 1
 log_fatal() {
     local color="" reset=""
     if _log_should_color; then

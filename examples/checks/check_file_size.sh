@@ -249,7 +249,13 @@ main() {
     exit_with_status
 }
 
-# Run if executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# A check script is an entry point, so it runs.
+#
+# This used to be guarded by `[[ "${BASH_SOURCE[0]}" == "${0}" ]]`, the ordinary
+# "executed, not sourced" test. Under nutshell it is never true: the `#!/usr/bin/env
+# nutshell` shebang runs the interpreter, and the interpreter *sources* the
+# script, which is what makes `use` available from its first line. So `$0` is
+# the interpreter and `BASH_SOURCE[0]` is this file, and `main` was never
+# called. Six of the eight built-in checks exited 0 having done nothing, and
+# `./check` read that as a pass and printed one.
+main "$@"

@@ -50,10 +50,12 @@ _CLI_EPILOGUE=""
 
 # cli_name <name>
 #[pub]
+# Usage: cli_name mytool -> names the tool in usage output
 cli_name() { _CLI_NAME="$1"; }
 
 # cli_summary <one line>
 #[pub]
+# Usage: cli_summary "does the thing" -> one line under the name
 cli_summary() { _CLI_SUMMARY_LINE="$1"; }
 
 # cli_epilogue <text>
@@ -61,6 +63,7 @@ cli_summary() { _CLI_SUMMARY_LINE="$1"; }
 # Printed under the subcommand list. For the sentence a reader needs after
 # seeing what the tool can do, which is usually where to look next.
 #[pub]
+# Usage: cli_epilogue "See https://..." -> a closing line in usage output
 cli_epilogue() { _CLI_EPILOGUE="$1"; }
 
 # cli_command <name> <summary> <handler>
@@ -69,6 +72,7 @@ cli_epilogue() { _CLI_EPILOGUE="$1"; }
 # whose subcommands run in a sequence should list them in that sequence, and
 # alphabetical order would scatter it.
 #[pub]
+# Usage: cli_command build "compile everything" do_build -> registers one
 cli_command() {
     local name="$1" summary="$2" handler="$3"
     _CLI_ORDER+=("$name")
@@ -81,6 +85,7 @@ cli_command() {
 # -----------------------------------------------------------------------------
 
 #[pub]
+# Usage: cli_usage -> prints the whole usage text, commands in registration order
 cli_usage() {
     printf '%s' "$_CLI_NAME"
     [[ -n "$_CLI_SUMMARY_LINE" ]] && printf ': %s' "$_CLI_SUMMARY_LINE"
@@ -143,6 +148,7 @@ _cli_distance() {
 # input's length because two edits on a three-character name is most of the
 # name, and one edit on a twelve-character name misses obvious typos.
 #[pub]
+# Usage: cli_nearest buidl -> "build", or nothing when nothing is close
 cli_nearest() {
     local input="$1" name best="" best_d=99 d limit
     limit=2
@@ -167,6 +173,7 @@ cli_nearest() {
 # Returns the handler's own exit code, so a tool that means something by its
 # codes keeps meaning it.
 #[pub]
+# Usage: cli_run "$@" -> dispatches, or explains and exits 64
 cli_run() {
     local cmd="${1:-}"
 

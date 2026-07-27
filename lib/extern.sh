@@ -152,33 +152,86 @@ extern_path() {
     fi
 
     dir="$(_extern_cache_root)/$(_extern_key "${url}@${commit}")"
-    if [[ ! -e "$dir" ]]; then
-        # A shallow clone of a branch does not contain an older commit on it,
-        # and taking an older commit is the ordinary case for a lockfile.
-        git -C "$mirror" fetch --quiet origin "$commit" 2>/dev/null
-        if ! git -C "$mirror" cat-file -e "${commit}^{commit}" 2>/dev/null; then
-            log_error "${name} is locked to ${commit}, which ${url} does not have"
-            log_error "delete its entry in nut.lock to take the newest commit instead"
-            return 1
-        fi
-        fs_mkdir "${dir%/*}" || return 1
-
-        # A worktree, not a second clone. Cloning the mirror was the obvious
-        # shape and it does not work: a commit fetched by hash is reachable
-        # from no ref, so a clone leaves it behind and the checkout fails on
-        # the exact commit the lockfile asked for. A worktree reads the
-        # mirror's object store, where it is.
-        git -C "$mirror" worktree add --quiet --detach "$dir" "$commit" 2>/dev/null || {
-            log_error "could not lay ${name} out at ${commit}"
-            git -C "$mirror" worktree prune 2>/dev/null
-            return 1
-        }
+    # Whether it is a working checkout, not whether the path exists. A worktree
+    # whose mirror has been deleted is still a directory, and returning it
+    # handed the caller a path that git refuses to answer any question about,
+    # permanently, with nothing to do about it but find the cache by hand.
+    if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+        [[ -e "$dir" ]] && { rm -rf "$dir"; git -C "$mirror" worktree prune 2>/dev/null; }
+        _extern_guard "$dir" _extern_lay_out "$name" "$mirror" "$url" "$commit" "$dir" || return 1
     fi
 
     printf '%s' "$dir"
 }
 
+# _extern_lay_out <name> <mirror> <url> <commit> <dir>
+_extern_lay_out() {
+    local name="$1" mirror="$2" url="$3" commit="$4" dir="$5"
+
+    # A shallow clone of a branch does not contain an older commit on it, and
+    # taking an older commit is the ordinary case for a lockfile.
+    git -C "$mirror" fetch --quiet origin "$commit" 2>/dev/null
+    if ! git -C "$mirror" cat-file -e "${commit}^{commit}" 2>/dev/null; then
+        log_error "${name} is locked to ${commit}, which ${url} does not have"
+        log_error "delete its entry in nut.lock to take the newest commit instead"
+        return 1
+    fi
+    fs_mkdir "${dir%/*}" || return 1
+
+    # A worktree, not a second clone. Cloning the mirror was the obvious shape
+    # and it does not work: a commit fetched by hash is reachable from no ref,
+    # so a clone leaves it behind and the checkout fails on the exact commit
+    # the lockfile asked for. A worktree reads the mirror's object store, where
+    # it is.
+    git -C "$mirror" worktree add --quiet --detach "$dir" "$commit" 2>/dev/null || {
+        log_error "could not lay ${name} out at ${commit}"
+        git -C "$mirror" worktree prune 2>/dev/null
+        return 1
+    }
+}
+
 _extern_key() { printf '%s' "$1" | cksum | tr -d ' '; }
+
+# _extern_guard <dir> <command...>
+#
+# Run the command with one process at a time laying out that directory, and
+# only if it is still absent by the time this process wins.
+#
+# The cache is shared, so several processes resolving at once is the ordinary
+# case rather than a corner: four of them on a cold cache had three fail with
+# "could not fetch", because `git clone` was writing into a directory another
+# clone was already populating.
+#
+# `mkdir` is the lock. It is one syscall, it is atomic on every filesystem
+# worth the name, and it needs no tool beyond the shell. A stale lock older
+# than an hour is taken over, since the alternative is a cache that stays
+# wedged after one interrupted fetch.
+_extern_guard() {
+    local dir="$1"; shift
+    local lock="${dir}.lock" waited=0
+
+    while ! mkdir "$lock" 2>/dev/null; do
+        if [[ -d "$lock" ]] && [[ -z "$(find "$lock" -maxdepth 0 -mmin -60 2>/dev/null)" ]]; then
+            rm -rf "$lock"
+            continue
+        fi
+        sleep 1
+        waited=$((waited + 1))
+        if [[ "$waited" -ge 120 ]]; then
+            log_error "gave up waiting for another process to lay out ${dir}"
+            return 1
+        fi
+        # Somebody else finished it while this process waited.
+        [[ -e "$dir" ]] && return 0
+    done
+
+    local rc=0
+    if [[ ! -e "$dir" ]]; then
+        "$@" || rc=$?
+    fi
+    rmdir "$lock" 2>/dev/null
+    return "$rc"
+}
 
 # _extern_mirror <name> <url> <ref> -> the fetch clone for that url and ref
 #
@@ -204,22 +257,32 @@ _extern_mirror() {
     require_command git "fetching an external library needs git" || return 1
     fs_mkdir "${dir%/*}" || return 1
 
-    # To stderr: this function's stdout is its return value, and a progress
-    # line captured by command substitution becomes part of the path.
+    _extern_guard "$dir" _extern_fetch "$name" "$url" "$ref" "$dir" || return 1
+    printf '%s' "$dir"
+}
+
+# _extern_fetch <name> <url> <ref> <dir>
+_extern_fetch() {
+    local name="$1" url="$2" ref="$3" dir="$4"
+
+    # To stderr: the caller's stdout is its return value, and a progress line
+    # captured by command substitution becomes part of the path.
     log_info "fetching ${name} from ${url} (${ref})" >&2
     if ! git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$url" "$dir" 2>/dev/null; then
         # A ref that is a sha rather than a branch cannot be cloned shallowly
         # by name, so fall back rather than reporting the repository missing.
+        rm -rf "$dir"
         git clone --quiet "$url" "$dir" 2>/dev/null || {
             log_error "could not fetch ${name} from ${url}"
+            rm -rf "$dir"
             return 1
         }
         git -C "$dir" checkout --quiet "$ref" 2>/dev/null || {
             log_error "${name} has no ref '${ref}'"
+            rm -rf "$dir"
             return 1
         }
     fi
-    printf '%s' "$dir"
 }
 
 #[pub]

@@ -5,11 +5,17 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-#[allow(loc = 650)]
 # Layer 0 (Core): Depends on deps.sh for tool detection
 #
 # Provides JSON parsing and manipulation functions. Uses lazy-init stubs to
 # select the best available tool (jq > python > perl > pure bash fallback).
+#
+# Object keys come back sorted, and documents come back compact. Not a
+# preference: a perl hash has no order and its iteration order is randomised
+# per process, so sorted is the only order all three backends can produce, and
+# `json_pretty` is where formatting lives. Without this the same call returned
+# different text depending on which tool happened to be installed, and on perl
+# a different order on every run.
 #
 # Features:
 #   - Get values by path (dot notation or jq syntax)
@@ -71,30 +77,6 @@ readonly _JSON_IMPL_DIR="${BASH_SOURCE[0]%/*}/json/impl"
 deps_has jq && source "${_JSON_IMPL_DIR}/jq.sh"
 { deps_has python3 || deps_has python; } && source "${_JSON_IMPL_DIR}/python.sh"
 deps_has perl && source "${_JSON_IMPL_DIR}/perl.sh"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # -----------------------------------------------------------------------------
@@ -353,30 +335,14 @@ json_array() {
 json_merge() {
     local json1="${1:-\{\}}"
     local json2="${2:-\{\}}"
-    
+
     [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
-    if [[ "$_JSON_IMPL" == "jq" ]]; then
-        echo "$json1" | "${_TOOL_PATH[jq]}" -c ". * $json2" 2>/dev/null
-    elif [[ "$_JSON_IMPL" == "python" ]]; then
-        local python_cmd
-        python_cmd=$(_json_python_cmd)
-        "$python_cmd" -c "
-import json
-a = json.loads('''$json1''')
-b = json.loads('''$json2''')
-a.update(b)
-print(json.dumps(a))
-" 2>/dev/null
-    else
-        # Perl fallback
-        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-            my $a = decode_json($ARGV[0]);
-            my $b = decode_json($ARGV[1]);
-            @{$a}{keys %$b} = values %$b;
-            print encode_json($a);
-        ' "$json1" "$json2" 2>/dev/null
-    fi
+
+    case "$_JSON_IMPL" in
+        jq)     _json_merge_jq "$json1" "$json2" ;;
+        python) _json_merge_python "$json1" "$json2" ;;
+        perl)   _json_merge_perl "$json1" "$json2" ;;
+    esac
 }
 
 #[pub]
@@ -386,67 +352,16 @@ print(json.dumps(a))
 json_delete() {
     local json="${1:-}"
     local path="${2:-}"
-    
+
     [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
-    if [[ "$path" != "."* ]]; then
-        path=".${path}"
-    fi
-    
-    if [[ "$_JSON_IMPL" == "jq" ]]; then
-        echo "$json" | "${_TOOL_PATH[jq]}" "del($path)" 2>/dev/null
-    elif [[ "$_JSON_IMPL" == "python" ]]; then
-        local python_cmd
-        python_cmd=$(_json_python_cmd)
-        "$python_cmd" -c "
-import json
 
-data = json.loads('''$json''')
-path = '${path#.}'
+    [[ "$path" != "."* ]] && path=".${path}"
 
-parts = [p for p in path.split('.') if p]
-current = data
-for part in parts[:-1]:
-    if part.isdigit():
-        current = current[int(part)]
-    else:
-        current = current[part]
-
-last = parts[-1]
-if last.isdigit():
-    del current[int(last)]
-else:
-    del current[last]
-
-print(json.dumps(data))
-" 2>/dev/null
-    else
-        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-            my $data = decode_json($ARGV[0]);
-            my $path = $ARGV[1];
-            $path =~ s/^\.//;
-            
-            my @parts = grep { $_ ne "" } split /\./, $path;
-            my $current = $data;
-            for my $i (0 .. $#parts - 1) {
-                my $part = $parts[$i];
-                if ($part =~ /^\d+$/) {
-                    $current = $current->[$part];
-                } else {
-                    $current = $current->{$part};
-                }
-            }
-            
-            my $last = $parts[-1];
-            if ($last =~ /^\d+$/) {
-                splice @$current, $last, 1;
-            } else {
-                delete $current->{$last};
-            }
-            
-            print encode_json($data);
-        ' "$json" "$path" 2>/dev/null
-    fi
+    case "$_JSON_IMPL" in
+        jq)     _json_delete_jq "$json" "$path" ;;
+        python) _json_delete_python "$json" "$path" ;;
+        perl)   _json_delete_perl "$json" "$path" ;;
+    esac
 }
 
 #[pub]

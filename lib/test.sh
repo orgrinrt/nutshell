@@ -71,13 +71,29 @@ declare -ga _TEST_FAILURES=()
 # reach the runner that has to decide the verdict.
 _test_failed() {
     printf '%s\n' "$@" >&2
-    [[ -n "${_TEST_MARK:-}" ]] && printf 'x' >> "$_TEST_MARK"
+    _test_mark f
     return 1
 }
+
+# _test_mark <a|f|z>
+#
+# One character on the tally: `a` an assertion was evaluated, `f` one failed,
+# `z` the body returned rather than dying part way through.
+#
+# A file, because each test runs in its own subshell and a variable set there
+# cannot reach the runner that has to decide the verdict.
+_test_mark() {
+    [[ -n "${_TEST_MARK:-}" ]] && printf '%s' "$1" >> "$_TEST_MARK"
+    return 0
+}
+
+# _test_asserted -> record that an assertion happened, whatever its outcome
+_test_asserted() { _test_mark a; }
 
 #[pub]
 # Usage: assert_eq "$got" "$want" ["what this is about"] -> 0 or 1
 assert_eq() {
+    _test_asserted
     [[ "$1" == "$2" ]] && return 0
     _test_failed "expected [$2]" "     got [$1]" ${3:+"     $3"}
 }
@@ -85,6 +101,7 @@ assert_eq() {
 #[pub]
 # Usage: assert_ne "$got" "$unwanted" ["what this is about"] -> 0 or 1
 assert_ne() {
+    _test_asserted
     [[ "$1" != "$2" ]] && return 0
     _test_failed "expected anything but [$2]" ${3:+"     $3"}
 }
@@ -92,6 +109,7 @@ assert_ne() {
 #[pub]
 # Usage: assert_contains "$haystack" "$needle" ["about"] -> 0 or 1
 assert_contains() {
+    _test_asserted
     [[ "$1" == *"$2"* ]] && return 0
     _test_failed "expected to find [$2]" "            in [$1]" ${3:+"     $3"}
 }
@@ -99,6 +117,7 @@ assert_contains() {
 #[pub]
 # Usage: assert_empty "$value" ["about"] -> 0 or 1
 assert_empty() {
+    _test_asserted
     [[ -z "$1" ]] && return 0
     _test_failed "expected nothing, got [$1]" ${2:+"     $2"}
 }
@@ -106,6 +125,7 @@ assert_empty() {
 #[pub]
 # Usage: assert_ok some_command args -> 0 when it succeeds
 assert_ok() {
+    _test_asserted
     local rc=0
     "$@" || rc=$?
     [[ "$rc" -eq 0 ]] && return 0
@@ -119,6 +139,7 @@ assert_ok() {
 # quietly started succeeding where it used to refuse is the change nobody
 # notices without this.
 assert_fails() {
+    _test_asserted
     if "$@"; then
         _test_failed "expected failure from [$*], got success"
         return 1
@@ -133,6 +154,7 @@ assert_fails() {
 # is a different bug from one that refuses for the right one, and a bare
 # `assert_fails` cannot tell them apart.
 assert_exits() {
+    _test_asserted
     local want="$1"; shift
     local rc=0
     "$@" || rc=$?
@@ -174,12 +196,29 @@ test_run() {
         # A subshell per test. Bash has one global namespace, so without this a
         # test that sets a variable or cd's changes what the next one sees, and
         # the failure surfaces in the innocent test rather than the guilty one.
-        output="$( set +e; . "$file" >/dev/null 2>&1; "$name" 2>&1 )"
-        rc=$?
+        # `_test_mark z` after the call, so a body that returned is told apart
+        # from one that died part way through. It runs whatever the function's
+        # status, because a test is allowed to end on a command that returns
+        # non-zero and half this library returns non-zero on purpose.
+        output="$( set +e; . "$file" >/dev/null 2>&1; "$name" 2>&1; _test_mark z )"
 
-        # Either signal is enough: a test that returned non-zero failed, and so
-        # did one whose assertions failed before a later line returned zero.
-        [[ -s "$_TEST_MARK" ]] && rc=1
+        # The tally decides, not the exit status. A test whose last command
+        # happened to return non-zero used to fail with every assertion in it
+        # passing, which contradicted the note above and made the verdict
+        # depend on which line a test ended with.
+        local tally why=""
+        tally="$(cat "$_TEST_MARK" 2>/dev/null)"
+        rc=0
+        if [[ "$tally" != *z* ]]; then
+            rc=1; why="the test did not finish"
+        elif [[ "$tally" == *f* ]]; then
+            rc=1
+        elif [[ "$tally" != *a* ]]; then
+            # Worse than a weak test: it occupies the place a real one would be
+            # noticed missing from, and it counts toward a number people quote.
+            rc=1; why="the test asserted nothing"
+        fi
+        [[ -n "$why" ]] && output="${output}${output:+$'\n'}${why}"
 
         if [[ $rc -eq 0 ]]; then
             _TEST_PASSED+=1

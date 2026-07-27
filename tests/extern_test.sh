@@ -173,3 +173,43 @@ it_fetches_one_repository_once_for_two_projects() {
     out="$(extern_path fixture 2>&1 >/dev/null)"
     assert_empty "$out" "the second project fetches nothing"
 }
+
+#[test]
+it_survives_four_processes_resolving_at_once() {
+    # The shared cache makes this the ordinary case, not a corner. Four of them
+    # on a cold cache had three fail with "could not fetch", because git was
+    # cloning into a directory another clone was already populating.
+    _isolate
+    local fix work i rc=0
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    local -a pids=()
+    for i in 1 2 3 4; do
+        bash -c '. "$1"/init; use extern; extern_path fixture >/dev/null 2>&1' \
+            _ "$NUTSHELL_ROOT" &
+        pids+=($!)
+    done
+    for i in "${pids[@]}"; do
+        wait "$i" || rc=1
+    done
+
+    assert_eq "$rc" "0" "every one of four concurrent resolutions succeeded"
+}
+
+#[test]
+it_relays_out_a_checkout_whose_mirror_is_gone() {
+    # A worktree whose mirror has been deleted is still a directory. Returning
+    # it handed the caller a path git refuses to answer any question about,
+    # permanently, with nothing to do but find the cache by hand.
+    _isolate
+    local fix work dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    extern_path fixture >/dev/null
+    rm -rf "$(_extern_cache_root)"/mirror-*
+
+    dir="$(extern_path fixture)"
+    assert_ok git -C "$dir" rev-parse --git-dir
+}

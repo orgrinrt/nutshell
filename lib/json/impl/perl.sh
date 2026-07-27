@@ -37,7 +37,7 @@ _json_get_perl() {
         }
         
         if (ref($data) eq "HASH" || ref($data) eq "ARRAY") {
-            print encode_json($data);
+            print JSON::PP->new->canonical->encode($data);
         } elsif (defined $data) {
             print $data;
         } else {
@@ -84,7 +84,7 @@ _json_set_perl() {
             $current->{$last} = $value;
         }
         
-        print encode_json($data);
+        print JSON::PP->new->canonical->encode($data);
     ' "$json" "$path" "$value" 2>/dev/null
 }
 
@@ -109,7 +109,10 @@ _json_keys_perl() {
         }
         
         if (ref($data) eq "HASH") {
-            print "$_\n" for keys %$data;
+            # Sorted. A perl hash has no order, and its iteration order is
+            # randomised per process, so this returned the same keys in a
+            # different order on every run while jq and python were stable.
+            print "$_\n" for sort keys %$data;
         } elsif (ref($data) eq "ARRAY") {
             print "$_\n" for 0 .. $#$data;
         }
@@ -131,7 +134,7 @@ _json_pretty_perl() {
     local json="${1:-}"
     
     "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $coder = JSON::PP->new->pretty;
+        my $coder = JSON::PP->new->pretty->canonical;
         print $coder->encode(decode_json($ARGV[0]));
     ' "$json" 2>/dev/null
 }
@@ -141,7 +144,7 @@ _json_compact_perl() {
     local json="${1:-}"
     
     "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        print encode_json(decode_json($ARGV[0]));
+        print JSON::PP->new->canonical->encode(decode_json($ARGV[0]));
     ' "$json" 2>/dev/null
 }
 
@@ -200,4 +203,44 @@ _json_length_perl() {
         elsif (defined $data) { print length($data); }
         else { print 0; }
     ' "$json" "$path" 2>/dev/null
+}
+
+_json_merge_perl() {
+    local json1="$1" json2="$2"
+        # Perl fallback
+        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
+            my $a = decode_json($ARGV[0]);
+            my $b = decode_json($ARGV[1]);
+            @{$a}{keys %$b} = values %$b;
+            print JSON::PP->new->canonical->encode($a);
+        ' "$json1" "$json2" 2>/dev/null
+}
+
+_json_delete_perl() {
+    local json="$1" path="$2"
+        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
+            my $data = decode_json($ARGV[0]);
+            my $path = $ARGV[1];
+            $path =~ s/^\.//;
+            
+            my @parts = grep { $_ ne "" } split /\./, $path;
+            my $current = $data;
+            for my $i (0 .. $#parts - 1) {
+                my $part = $parts[$i];
+                if ($part =~ /^\d+$/) {
+                    $current = $current->[$part];
+                } else {
+                    $current = $current->{$part};
+                }
+            }
+            
+            my $last = $parts[-1];
+            if ($last =~ /^\d+$/) {
+                splice @$current, $last, 1;
+            } else {
+                delete $current->{$last};
+            }
+            
+            print JSON::PP->new->canonical->encode($data);
+        ' "$json" "$path" 2>/dev/null
 }

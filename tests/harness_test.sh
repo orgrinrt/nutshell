@@ -48,3 +48,32 @@ it_shows_the_values_that_did_not_match() {
     assert_contains "$out" "expected [b]"
     assert_contains "$out" "got [a]"
 }
+
+#[test]
+it_fails_a_test_that_asserts_nothing() {
+    # Worse than a weak test: it occupies the place a real one would be noticed
+    # missing from, and it counts toward a number people quote.
+    local out
+    out="$(_harness_run "${FIXTURES}/harness_shapes_test.sh")"
+    assert_contains "$out" "[FAIL] it_asserts_nothing_at_all"
+    assert_contains "$out" "asserted nothing"
+}
+
+#[test]
+it_passes_a_test_that_ends_on_a_non_zero_command() {
+    # The verdict is the assertions, not the exit status of whichever line the
+    # test happened to end with.
+    local out
+    out="$(_harness_run "${FIXTURES}/harness_shapes_test.sh")"
+    assert_contains "$out" "[PASS] it_ends_on_a_command_that_returns_non_zero"
+}
+
+#[test]
+it_fails_a_test_that_dies_part_way_through() {
+    # Passing assertions before an abort are not a pass. Without this a test
+    # that exits early looks identical to one that finished.
+    local out
+    out="$(_harness_run "${FIXTURES}/harness_shapes_test.sh")"
+    assert_contains "$out" "[FAIL] it_dies_part_way_through"
+    assert_contains "$out" "did not finish"
+}

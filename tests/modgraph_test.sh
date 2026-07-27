@@ -107,9 +107,13 @@ it_keeps_two_libraries_cache_apart() {
     # The cache path was the fingerprint of the files alone, so two libraries
     # whose files share names, sizes and modification times resolved to one
     # file and each read the other's graph.
+    # `cp -p`, keeping the modification times. Without it the copies carry
+    # fresh mtimes, the fingerprints differ on that alone, and the test passes
+    # whether the directory is part of the key or not: it was green with the
+    # `dir:` line deleted.
     local other
     other="$(fs_temp_dir nutshell-mg)"
-    cp "$FIXTURE"/*.sh "$other/"
+    cp -p "$FIXTURE"/*.sh "$other/"
 
     modgraph_build "$FIXTURE"
     local a="${_MG_ROOT}"

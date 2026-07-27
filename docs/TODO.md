@@ -71,12 +71,12 @@
 - [x] Core architecture with lazy-init stubs
 - [x] deps.sh with tool detection and capabilities
 - [x] All core modules: os, log, deps, color, validate, string, array, fs, text, toml, json, http, prompt, xdg
-- [x] QA framework (lib/qa.sh)
+- [x] QA framework (lib/check-runner.sh)
 - [x] Built-in QA checks (examples/checks/check_*.sh)
 - [x] Config templates (empty, default, tough)
 - [x] JSON Schema for nut.toml
 - [x] New init/use pattern for module loading
 - [x] bin/nutshell interpreter
 - [x] Restructured from core/ to lib/
-- [x] Moved tests/ to qa/
+- [x] Checks in examples/checks/, tests in tests/
 - [x] README with usage patterns and examples

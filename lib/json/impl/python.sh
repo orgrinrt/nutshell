@@ -16,6 +16,12 @@
 
 nut_once || return 0
 
+# `json.dumps` puts a space after every colon unless told not to, so this
+# backend returned `{"a": 1}` where jq and perl returned `{"a":1}`. The same
+# call gave different text depending on which tool happened to be installed,
+# which is the failure a set of interchangeable backends exists to prevent.
+# `separators` on every dump but the deliberately formatted one.
+
 # Get python command (python3 preferred)
 _json_python_cmd() {
     if deps_has "python3"; then
@@ -53,7 +59,7 @@ for part in path.split('.'):
 
 # Output
 if isinstance(current, (dict, list)):
-    print(json.dumps(current))
+    print(json.dumps(current, separators=(',', ':'), sort_keys=True))
 else:
     print(current if current is not None else 'null')
 " 2>/dev/null
@@ -95,7 +101,7 @@ if last.isdigit():
 else:
     current[last] = value
 
-print(json.dumps(data))
+print(json.dumps(data, separators=(',', ':'), sort_keys=True))
 " 2>/dev/null
 }
 
@@ -122,7 +128,7 @@ for part in path.split('.'):
         current = current[part]
 
 if isinstance(current, dict):
-    for k in current.keys():
+    for k in sorted(current.keys()):
         print(k)
 elif isinstance(current, list):
     for i in range(len(current)):
@@ -153,7 +159,7 @@ _json_pretty_python() {
     
     "$python_cmd" -c "
 import json
-print(json.dumps(json.loads('''$json'''), indent=2))
+print(json.dumps(json.loads('''$json'''), indent=2, sort_keys=True))
 " 2>/dev/null
 }
 
@@ -165,7 +171,7 @@ _json_compact_python() {
     
     "$python_cmd" -c "
 import json
-print(json.dumps(json.loads('''$json'''), separators=(',', ':')))
+print(json.dumps(json.loads('''$json'''), separators=(',', ':'), sort_keys=True))
 " 2>/dev/null
 }
 
@@ -220,5 +226,46 @@ for part in path.split('.'):
         current = current[part]
 
 print(len(current) if hasattr(current, '__len__') else 0)
+" 2>/dev/null
+}
+
+_json_merge_python() {
+    local json1="$1" json2="$2"
+        local python_cmd
+        python_cmd=$(_json_python_cmd)
+        "$python_cmd" -c "
+import json
+a = json.loads('''$json1''')
+b = json.loads('''$json2''')
+a.update(b)
+print(json.dumps(a, separators=(',', ':'), sort_keys=True))
+" 2>/dev/null
+}
+
+_json_delete_python() {
+    local json="$1" path="$2"
+        local python_cmd
+        python_cmd=$(_json_python_cmd)
+        "$python_cmd" -c "
+import json
+
+data = json.loads('''$json''')
+path = '${path#.}'
+
+parts = [p for p in path.split('.') if p]
+current = data
+for part in parts[:-1]:
+    if part.isdigit():
+        current = current[int(part)]
+    else:
+        current = current[part]
+
+last = parts[-1]
+if last.isdigit():
+    del current[int(last)]
+else:
+    del current[last]
+
+print(json.dumps(data, separators=(',', ':'), sort_keys=True))
 " 2>/dev/null
 }

@@ -505,7 +505,11 @@ deps_has() {
 deps_has_all() {
     local tool
     for tool in "$@"; do
-        [[ -z "${_TOOL_PATH[$tool]:-}" ]] && return 1
+        # Through deps_has, so a tool outside the eager list is looked for.
+        # Reading the table straight made the answer depend on whether
+        # something else had asked about the tool first, and the whole point of
+        # this module is that the answer does not depend on load order.
+        deps_has "$tool" || return 1
     done
     return 0
 }
@@ -516,7 +520,7 @@ deps_has_all() {
 deps_has_any() {
     local tool
     for tool in "$@"; do
-        [[ -n "${_TOOL_PATH[$tool]:-}" ]] && return 0
+        deps_has "$tool" && return 0
     done
     return 1
 }
@@ -716,13 +720,13 @@ deps_check() {
 deps_run() {
     local tool="${1:-}"
     shift
-    
-    local path="${_TOOL_PATH[$tool]:-}"
-    if [[ -z "$path" ]]; then
+
+    local path
+    if ! path="$(deps_path "$tool")"; then
         echo "[ERROR] Tool '$tool' not available" >&2
         return 1
     fi
-    
+
     "$path" "$@"
 }
 

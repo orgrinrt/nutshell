@@ -26,7 +26,9 @@
 ### QA System
 - [x] Checks live in examples/checks/ and run from the project root
 - [ ] Add custom_checks support testing
-- [ ] Split lib/json.sh, 614 LOC against a 300 limit, along its backend seam
+- [x] Split lib/json.sh along its backend seam into json/impl/
+- [ ] Six modules sit between 336 and 426 LOC against a 300 warn: check-runner,
+      color, deps, http, prompt, toml. Each wants its own seam followed.
 
 ### Testing
 - [ ] Add integration tests for the init/use workflow

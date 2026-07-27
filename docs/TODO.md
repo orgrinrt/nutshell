@@ -13,6 +13,11 @@
 - [x] `cli` subcommand dispatch, `git` repository reading
 - [x] External libraries via `nut.toml` deps, pinned by `nut.lock`
 - [ ] Tag v0.2.0 release
+- [ ] `cli` and `git` ship with no consumer in this repository. They exist for
+      the pr-review and work-in-mockspace tools being built on nutshell, which
+      is where they get one. `bin/nutshell` is not that consumer: it takes a
+      script path and flags, not subcommands, and routing it through a
+      subcommand dispatcher would be a worse interface, not dogfood.
 - [ ] Create GitHub release with tarball
 
 ## High Priority

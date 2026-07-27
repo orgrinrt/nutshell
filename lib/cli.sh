@@ -31,6 +31,8 @@
 
 nut_once || return 0
 
+use string
+
 CLI_EXIT_UNKNOWN="${CLI_EXIT_UNKNOWN:-64}"
 
 # -----------------------------------------------------------------------------
@@ -111,37 +113,6 @@ cli_usage() {
 # Did you mean
 # -----------------------------------------------------------------------------
 
-# _cli_distance <a> <b>
-#
-# Levenshtein over one row. A misspelling is worth naming and a stranger is
-# not, so the caller applies a threshold; this only measures.
-_cli_distance() {
-    local a="$1" b="$2"
-    local -i alen=${#a} blen=${#b} i j cost prev tmp
-    local -a row=()
-
-    for (( j = 0; j <= blen; j++ )); do row[j]=$j; done
-
-    for (( i = 1; i <= alen; i++ )); do
-        prev=${row[0]}
-        row[0]=$i
-        for (( j = 1; j <= blen; j++ )); do
-            tmp=${row[j]}
-            cost=1
-            [[ "${a:i-1:1}" == "${b:j-1:1}" ]] && cost=0
-            local -i del=$(( row[j] + 1 ))
-            local -i ins=$(( row[j-1] + 1 ))
-            local -i sub=$(( prev + cost ))
-            local -i best=$del
-            (( ins < best )) && best=$ins
-            (( sub < best )) && best=$sub
-            row[j]=$best
-            prev=$tmp
-        done
-    done
-    printf '%d' "${row[blen]}"
-}
-
 # cli_nearest <input>
 #
 # The closest registered command, or nothing. The threshold scales with the
@@ -155,7 +126,7 @@ cli_nearest() {
     (( ${#input} <= 4 )) && limit=1
 
     for name in "${_CLI_ORDER[@]}"; do
-        d=$(_cli_distance "$input" "$name")
+        d=$(str_distance "$input" "$name")
         if (( d <= limit && d < best_d )); then
             best_d=$d
             best="$name"

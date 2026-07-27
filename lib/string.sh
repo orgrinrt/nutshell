@@ -189,3 +189,42 @@ str_repeat() {
     done
     echo "$result"
 }
+
+# str_distance <a> <b>
+#
+# Levenshtein distance: how many single-character edits turn one into the
+# other. For suggesting what somebody meant, so a caller applies its own
+# threshold; this only measures.
+#
+# One row rather than the full matrix, and no subprocess. There were two of
+# these, one here in spirit and one in the check framework, and the other was
+# an awk invocation per comparison: a `cli` module offering did-you-mean would
+# have had to depend on the QA framework to reach it, which is backwards.
+#[pub]
+# Usage: str_distance build buidl -> 2
+str_distance() {
+    local a="$1" b="$2"
+    local -i alen=${#a} blen=${#b} i j cost prev tmp
+    local -a row=()
+
+    for (( j = 0; j <= blen; j++ )); do row[j]=$j; done
+
+    for (( i = 1; i <= alen; i++ )); do
+        prev=${row[0]}
+        row[0]=$i
+        for (( j = 1; j <= blen; j++ )); do
+            tmp=${row[j]}
+            cost=1
+            [[ "${a:i-1:1}" == "${b:j-1:1}" ]] && cost=0
+            local -i del=$(( row[j] + 1 ))
+            local -i ins=$(( row[j-1] + 1 ))
+            local -i sub=$(( prev + cost ))
+            local -i best=$del
+            (( ins < best )) && best=$ins
+            (( sub < best )) && best=$sub
+            row[j]=$best
+            prev=$tmp
+        done
+    done
+    printf '%d' "${row[blen]}"
+}

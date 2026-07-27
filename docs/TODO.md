@@ -24,10 +24,9 @@
 - [ ] Add CONTRIBUTING.md
 
 ### QA System
-- [ ] Fix qa/check_*.sh scripts to use new paths (lib/ not core/)
-- [ ] Fix qa/run_builtins.sh to work with new structure
-- [ ] Ensure check.sh runs correctly from project root
+- [x] Checks live in examples/checks/ and run from the project root
 - [ ] Add custom_checks support testing
+- [ ] Split lib/json.sh, 614 LOC against a 300 limit, along its backend seam
 
 ### Testing
 - [ ] Add integration tests for the init/use workflow
@@ -71,7 +70,7 @@
 - [x] deps.sh with tool detection and capabilities
 - [x] All core modules: os, log, deps, color, validate, string, array, fs, text, toml, json, http, prompt, xdg
 - [x] QA framework (lib/qa.sh)
-- [x] Built-in QA checks (qa/check_*.sh)
+- [x] Built-in QA checks (examples/checks/check_*.sh)
 - [x] Config templates (empty, default, tough)
 - [x] JSON Schema for nut.toml
 - [x] New init/use pattern for module loading

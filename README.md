@@ -191,7 +191,7 @@ use os log json http
 | `deps` | Tool detection (`deps_has`, `deps_require`, `deps_path`) |
 | `fs` | Filesystem (`fs_exists`, `fs_mkdir`, `fs_temp_file`, `fs_size`) |
 | `string` | String manipulation (`str_upper`, `str_lower`, `str_trim`, `str_contains`) |
-| `array` | Array operations (`arr_contains`, `arr_unique`, `arr_join`) |
+| `array` | Array operations (`arr_contains`, `arr_unique`, `arr_length`) |
 | `text` | Text processing (`text_grep`, `text_replace`, `text_count_matches`) |
 | `json` | JSON parsing (`json_get`, `json_set`, `json_valid`, `json_pretty`) |
 | `http` | HTTP requests (`http_get`, `http_post`, `http_download`) |
@@ -199,7 +199,7 @@ use os log json http
 | `prompt` | User prompts (`prompt_confirm`, `prompt_input`, `prompt_select`) |
 | `color` | Terminal colors (`color_red`, `color_green`, `color_bold`) |
 | `validate` | Validation (`is_set`, `is_integer`, `require_command`) |
-| `xdg` | XDG directories (`xdg_config`, `xdg_data`, `xdg_cache`) |
+| `xdg` | XDG directories (`xdg_config_home`, `xdg_data_home`, `xdg_app_cache`) |
 | `check-runner` | QA framework (`cfg_get`, `log_pass`, `log_fail`) |
 | `test` | Test harness (`assert_eq`, `test_run`, `test_summary`) |
 | `attr` | Attributes on definitions (`attr_has`, `attr_arg`, `attr_find`) |
@@ -578,6 +578,7 @@ str_contains "hello" "ell"           # Returns 0 (true)
 str_replace "hello" "l" "L"          # "heLLo"
 str_split ":" "a:b:c" arr            # arr=("a" "b" "c")
 str_join "," "a" "b" "c"             # "a,b,c"
+str_distance "build" "buidl"         # 2
 ```
 
 ### Dependencies (`use deps`)

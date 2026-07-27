@@ -24,6 +24,7 @@ use log
 # Variable checks
 # -----------------------------------------------------------------------------
 
+#[pub]
 # Check if variable is set and non-empty
 # Usage: is_set "varname" -> returns 0 (true) or 1 (false)
 is_set() {
@@ -32,6 +33,7 @@ is_set() {
     [[ -n "${!varname+x}" ]] && [[ -n "${!varname}" ]]
 }
 
+#[pub]
 # Check if variable is unset or empty
 # Usage: is_empty "varname" -> returns 0 (true) or 1 (false)
 is_empty() {
@@ -56,6 +58,7 @@ has_command() {
 # Type checks
 # -----------------------------------------------------------------------------
 
+#[pub]
 # Check if value is an integer (positive or negative)
 # Usage: is_integer "-42" -> returns 0 (true)
 is_integer() {
@@ -63,6 +66,7 @@ is_integer() {
     [[ "$val" =~ ^-?[0-9]+$ ]]
 }
 
+#[pub]
 # Check if value is a positive integer (> 0)
 # Usage: is_positive_integer "42" -> returns 0 (true)
 is_positive_integer() {
@@ -70,6 +74,7 @@ is_positive_integer() {
     [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -gt 0 ]]
 }
 
+#[pub]
 # Check if value is a non-negative integer (>= 0)
 # Usage: is_non_negative_integer "0" -> returns 0 (true)
 is_non_negative_integer() {
@@ -77,6 +82,7 @@ is_non_negative_integer() {
     [[ "$val" =~ ^[0-9]+$ ]]
 }
 
+#[pub]
 # Check if value is a boolean (true/false/yes/no/1/0/on/off)
 # Usage: is_boolean "yes" -> returns 0 (true)
 is_boolean() {
@@ -100,6 +106,7 @@ is_truthy() {
     esac
 }
 
+#[pub]
 # Check if value is falsy (0/false/no/off/n/empty)
 # Usage: is_falsy "no" -> returns 0 (true)
 is_falsy() {
@@ -115,6 +122,7 @@ is_falsy() {
 # Format checks
 # -----------------------------------------------------------------------------
 
+#[pub]
 # Check if value is a valid URL (http/https)
 # Usage: is_url "https://example.com" -> returns 0 (true)
 is_url() {
@@ -122,6 +130,7 @@ is_url() {
     [[ "$val" =~ ^https?://[^[:space:]]+$ ]]
 }
 
+#[pub]
 # Check if value looks like an email address
 # Usage: is_email "user@example.com" -> returns 0 (true)
 is_email() {
@@ -129,6 +138,7 @@ is_email() {
     [[ "$val" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
 }
 
+#[pub]
 # Check if value is a valid IPv4 address
 # Usage: is_ipv4 "192.168.1.1" -> returns 0 (true)
 is_ipv4() {
@@ -149,6 +159,7 @@ is_ipv4() {
     return 0
 }
 
+#[pub]
 # Check if value is a valid IPv6 address (simplified check)
 # Usage: is_ipv6 "::1" -> returns 0 (true)
 is_ipv6() {
@@ -159,6 +170,7 @@ is_ipv6() {
     [[ "$val" =~ ^[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){7}$ ]]
 }
 
+#[pub]
 # Check if value is a valid IP address (v4 or v6)
 # Usage: is_ip "192.168.1.1" -> returns 0 (true)
 is_ip() {
@@ -166,6 +178,7 @@ is_ip() {
     is_ipv4 "$val" || is_ipv6 "$val"
 }
 
+#[pub]
 # Check if value is a valid port number (1-65535)
 # Usage: is_port "8080" -> returns 0 (true)
 is_port() {
@@ -173,6 +186,7 @@ is_port() {
     [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -ge 1 ]] && [[ "$val" -le 65535 ]]
 }
 
+#[pub]
 # Check if value is a valid hostname
 # Usage: is_hostname "example.com" -> returns 0 (true)
 is_hostname() {
@@ -198,6 +212,7 @@ require_set() {
     fi
 }
 
+#[pub]
 # Require file to exist, exit with error if not
 # Usage: require_file "/path/to/file" "Error message"
 require_file() {
@@ -209,6 +224,7 @@ require_file() {
     fi
 }
 
+#[pub]
 # Require directory to exist, exit with error if not
 # Usage: require_dir "/path/to/dir" "Error message"
 require_dir() {
@@ -232,6 +248,7 @@ require_command() {
     fi
 }
 
+#[pub]
 # Require value to be non-empty, exit with error if empty
 # Usage: require_value "$value" "Value cannot be empty"
 require_value() {
@@ -276,6 +293,7 @@ ensure_value() {
     return 0
 }
 
+#[pub]
 # Ensure file exists, return 1 if not (caller handles failure)
 # Usage: ensure_file "/path/to/file" "Error message" || handle_missing
 ensure_file() {
@@ -289,6 +307,7 @@ ensure_file() {
     return 0
 }
 
+#[pub]
 # Ensure directory exists, return 1 if not (caller handles failure)
 # Usage: ensure_dir "/path/to/dir" "Error message" || handle_missing
 ensure_dir() {
@@ -302,6 +321,7 @@ ensure_dir() {
     return 0
 }
 
+#[pub]
 # Ensure command is available, return 1 if not (caller handles failure)
 # Usage: ensure_command "git" "Git not found" || handle_missing
 ensure_command() {

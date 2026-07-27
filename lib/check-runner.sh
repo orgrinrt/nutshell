@@ -36,7 +36,7 @@ NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/examples/configs/empty.nut.toml"
 # dependency from the module-contract check, which reads `use` lines. A module
 # that loads its dependencies invisibly is exactly the case that check exists
 # to catch, so the framework running it must not be the one exception.
-use log validate toml attr
+use log validate toml attr string
 
 # =============================================================================
 # PATHS - Determined after config is loaded
@@ -608,48 +608,6 @@ count_total_lines() {
     wc -l < "$file" 2>/dev/null | tr -d ' '
 }
 
-# Calculate Levenshtein distance between two strings
-#[pub]
-# Usage: levenshtein_distance "string1" "string2" -> prints distance
-levenshtein_distance() {
-    local s1="$1"
-    local s2="$2"
-    local len1=${#s1}
-    local len2=${#s2}
-    
-    # Quick shortcuts
-    [[ "$s1" == "$s2" ]] && { echo 0; return; }
-    [[ $len1 -eq 0 ]] && { echo "$len2"; return; }
-    [[ $len2 -eq 0 ]] && { echo "$len1"; return; }
-    
-    # Use awk for the matrix computation
-    awk -v s1="$s1" -v s2="$s2" 'BEGIN {
-        len1 = length(s1)
-        len2 = length(s2)
-        
-        for (i = 0; i <= len1; i++) d[i "_" 0] = i
-        for (j = 0; j <= len2; j++) d[0 "_" j] = j
-        
-        for (i = 1; i <= len1; i++) {
-            c1 = substr(s1, i, 1)
-            for (j = 1; j <= len2; j++) {
-                c2 = substr(s2, j, 1)
-                cost = (c1 == c2) ? 0 : 1
-                
-                del = d[(i-1) "_" j] + 1
-                ins = d[i "_" (j-1)] + 1
-                repl = d[(i-1) "_" (j-1)] + cost
-                
-                min = del
-                if (ins < min) min = ins
-                if (repl < min) min = repl
-                d[i "_" j] = min
-            }
-        }
-        print d[len1 "_" len2]
-    }'
-}
-
 # Calculate similarity score (0.0 to 1.0) based on Levenshtein distance
 #[pub]
 # Usage: similarity_score "string1" "string2" -> prints score (e.g., "0.850")
@@ -663,7 +621,7 @@ similarity_score() {
     [[ $max_len -eq 0 ]] && { echo "1.0"; return; }
     
     local distance
-    distance=$(levenshtein_distance "$s1" "$s2")
+    distance=$(str_distance "$s1" "$s2")
     
     awk -v dist="$distance" -v maxlen="$max_len" 'BEGIN {
         printf "%.3f", 1 - (dist / maxlen)

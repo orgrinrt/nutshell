@@ -16,6 +16,16 @@
 [[ -n "${_NUTSHELL_CORE_TOML_SH:-}" ]] && return 0
 readonly _NUTSHELL_CORE_TOML_SH=1
 
+# `_toml_clean_line` trims through `str_trim`. Undeclared until now, so a caller
+# that had not already loaded `string` got a toml module whose every read
+# silently failed, and nothing reported it because from inside bash a function
+# that is present is present.
+use string
+
+# `_toml_clean_line` trims through `str_trim`. Undeclared until now, so a
+# caller that had not loaded `string` got a toml module that silently failed.
+nut_requires string
+
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------

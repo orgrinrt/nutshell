@@ -54,6 +54,26 @@ declare -gA _NUTSHELL_MODULE_INIT=() 2>/dev/null || declare -A _NUTSHELL_MODULE_
 #
 # Returns 0 the first time a given file calls it, non-zero after, so the idiom
 # reads as "carry on, or stop".
+# nut_requires <module...>
+#
+# What this module needs, declared and loaded in one act so the two cannot
+# drift. `use` at the top of a script says what a *script* wants; this says
+# what a *module* cannot work without.
+#
+# The distinction is not decorative. `toml.sh` called `str_trim` for its whole
+# life while declaring nothing, so `toml_get` worked or failed depending on
+# whether something else had loaded `string` first. Nothing reported it,
+# because from inside bash a function that is present is present.
+#
+# Declaring it here makes the dependency load, and makes it checkable: the
+# module-contract check reads these and fails on a cross-module call that no
+# declaration covers. That is as close to sourcing without leaks as one global
+# function table permits, and it is honest about being a check rather than an
+# isolation boundary.
+nut_requires() {
+    use "$@"
+}
+
 nut_once() {
     local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
     local key="_NUT_ONCE_${src//[^A-Za-z0-9]/_}"
@@ -77,8 +97,20 @@ use() {
         # Find and source the module
         local mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
         if [[ -f "$mod_path" ]]; then
-            source "$mod_path"
+            # Marked before sourcing, not after. A module that declares its own
+            # dependencies can be part of a cycle, and marking afterwards means
+            # neither module in one is ever recorded as loaded while it is being
+            # loaded, so the pair recurses until the stack gives out. Marking
+            # first makes the second entry a no-op, which is what "already
+            # loading" should mean.
             _NUTSHELL_LOADED[$mod]=1
+            if ! source "$mod_path"; then
+                # Failed to load, so it is not loaded. Leaving the mark would
+                # make a later retry silently succeed against a module that was
+                # never sourced.
+                unset "_NUTSHELL_LOADED[$mod]"
+                return 1
+            fi
         else
             echo "nutshell: unknown module '$mod'" >&2
             echo "  Available: $(ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | tr '\n' ' ')" >&2

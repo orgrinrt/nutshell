@@ -16,8 +16,10 @@ readonly _NUTSHELL_CORE_VALIDATE_SH=1
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_VALIDATE_DIR="${BASH_SOURCE[0]%/*}"
-source "${_NUTSHELL_VALIDATE_DIR}/log.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use log
 
 # -----------------------------------------------------------------------------
 # Variable checks
@@ -187,6 +189,7 @@ is_hostname() {
 
 # Require variable to be set, exit with error if not
 # Usage: require_set "VAR_NAME" "Error message"
+#[pub]
 require_set() {
     local varname="${1:-}"
     local msg="${2:-Required variable '$varname' is not set}"
@@ -220,6 +223,7 @@ require_dir() {
 
 # Require command to be available, exit with error if not
 # Usage: require_command "git" "Git is required"
+#[pub]
 require_command() {
     local cmd="${1:-}"
     local msg="${2:-Required command '$cmd' not found}"
@@ -247,6 +251,7 @@ require_value() {
 
 # Ensure variable is set, return 1 if not (caller handles failure)
 # Usage: ensure_set "VAR_NAME" "Error message" || handle_missing_var
+#[pub]
 ensure_set() {
     local varname="${1:-}"
     local msg="${2:-Variable '$varname' is not set}"
@@ -260,6 +265,7 @@ ensure_set() {
 
 # Ensure value is non-empty, return 1 if empty (caller handles failure)
 # Usage: ensure_value "$value" "Error message" || handle_empty
+#[pub]
 ensure_value() {
     local val="${1:-}"
     local msg="${2:-Value is empty}"

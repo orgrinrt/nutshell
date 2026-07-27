@@ -28,7 +28,10 @@ readonly _NUTSHELL_CORE_TEXT_SH=1
 _NUTSHELL_TEXT_DIR="${BASH_SOURCE[0]%/*}"
 # Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
 [[ "$_NUTSHELL_TEXT_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_TEXT_DIR="."
-source "${_NUTSHELL_TEXT_DIR}/deps.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use deps
 
 # Path to impl directories
 readonly _TEXT_IMPL_DIR="${_NUTSHELL_TEXT_DIR}/text/impl"

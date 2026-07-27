@@ -92,7 +92,15 @@ use() {
     for mod in "$@"; do
         [[ -n "${_NUTSHELL_LOADED[$mod]:-}" ]] && continue
         
-        local mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
+        # A namespaced module comes from a library declared in nut.toml, so
+        # resolution goes through extern rather than nutshell's own lib.
+        local mod_path
+        if [[ "$mod" == *"::"* ]]; then
+            use extern || return 1
+            mod_path="$(extern_resolve "$mod")" || return 1
+        else
+            mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
+        fi
         if [[ -f "$mod_path" ]]; then
             # Marked before sourcing, not after. A module that declares its own
             # dependencies can be part of a cycle, and marking afterwards means

@@ -16,26 +16,12 @@
 [[ -n "${_NUTSHELL_CORE_TOML_SH:-}" ]] && return 0
 readonly _NUTSHELL_CORE_TOML_SH=1
 
-# `_toml_clean_line` trims through `str_trim`. Undeclared until now, so a caller
-# that had not already loaded `string` got a toml module whose every read
-# silently failed, and nothing reported it because from inside bash a function
-# that is present is present.
-use string validate
-
-# `_toml_clean_line` trims through `str_trim`. Undeclared until now, so a
-# caller that had not loaded `string` got a toml module that silently failed.
-nut_requires string
-
-# -----------------------------------------------------------------------------
-# Dependencies
-# -----------------------------------------------------------------------------
-
-_NUTSHELL_TOML_DIR="${BASH_SOURCE[0]%/*}"
-# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
-[[ "$_NUTSHELL_TOML_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_TOML_DIR="."
-source "${_NUTSHELL_TOML_DIR}/fs.sh"
-source "${_NUTSHELL_TOML_DIR}/string.sh"
-source "${_NUTSHELL_TOML_DIR}/validate.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once. `_toml_clean_line` trims through
+# `str_trim`, and until this line existed a caller that had not already loaded
+# `string` got a toml module whose every read silently failed.
+use fs string validate
 
 # -----------------------------------------------------------------------------
 # Internal helpers

@@ -31,9 +31,10 @@ readonly _NUTSHELL_CORE_XDG_SH=1
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_XDG_DIR="${BASH_SOURCE[0]%/*}"
-source "${_NUTSHELL_XDG_DIR}/os.sh"
-source "${_NUTSHELL_XDG_DIR}/validate.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use os validate
 
 # -----------------------------------------------------------------------------
 # XDG Base Directories (raw, without app name)

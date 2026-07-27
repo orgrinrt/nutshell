@@ -81,7 +81,7 @@ _MG_ROOT=""
 # files, which is not enough on its own: change how a module is read and every
 # cached graph is stale while still looking current, which is how a fixed
 # scanner kept reporting a fixed bug.
-readonly _MG_SCHEMA=3
+readonly _MG_SCHEMA=4
 
 _mg_fingerprint() {
     local dir="$1"
@@ -239,12 +239,24 @@ _mg_analyse() {
     done
 }
 
+# One record per fact, never one record per module with several payloads.
+#
+# The compact shape, `M <mod> <declares> <defines> <calls>`, read back wrong,
+# and did so silently. Tab is an IFS whitespace character, so bash collapses a
+# run of them into one delimiter: a module that declares nothing writes two
+# tabs in a row, `read` sees one, and every later field shifts left. The graph
+# reloaded with each module's defines sitting in its declares, which reads as
+# "everything is declared" and made the check report a clean library from a
+# cache while reporting the truth from a fresh build.
+#
+# Splitting it means the payload that can be empty is always the last field,
+# and a trailing empty field is the one case this does not bite.
 _mg_serialise() {
-    local mod
+    local mod fn
     for mod in "${_MG_MODULES[@]}"; do
-        printf 'M\t%s\t%s\t%s\t%s\n' "$mod" \
-            "${_MG_DECLARES[$mod]:-}" "${_MG_DEFINES[$mod]:-}" "${_MG_CALLS[$mod]:-}"
-        local fn
+        printf 'D\t%s\t%s\n' "$mod" "${_MG_DECLARES[$mod]:-}"
+        printf 'F\t%s\t%s\n' "$mod" "${_MG_DEFINES[$mod]:-}"
+        printf 'C\t%s\t%s\n' "$mod" "${_MG_CALLS[$mod]:-}"
         for fn in ${_MG_DEFINES[$mod]:-}; do
             [[ -n "${_MG_VIS[$fn]:-}" ]] && printf 'V\t%s\t%s\n' "$fn" "${_MG_VIS[$fn]}"
         done
@@ -252,19 +264,16 @@ _mg_serialise() {
 }
 
 _mg_load() {
-    local file="$1" tag mod declares defines calls fn
+    local file="$1" tag key payload fn
     _mg_reset
-    while IFS=$'\t' read -r tag mod declares defines calls; do
-        if [[ "$tag" == "V" ]]; then
-            _MG_VIS[$mod]="$declares"
-            continue
-        fi
-        [[ "$tag" == "M" ]] || continue
-        _MG_MODULES+=("$mod")
-        _MG_DECLARES[$mod]="$declares"
-        _MG_DEFINES[$mod]="$defines"
-        _MG_CALLS[$mod]="$calls"
-        for fn in $defines; do _MG_OWNER[$fn]="$mod"; done
+    while IFS=$'\t' read -r tag key payload; do
+        case "$tag" in
+            D) _MG_MODULES+=("$key"); _MG_DECLARES[$key]="$payload" ;;
+            F) _MG_DEFINES[$key]="$payload"
+               for fn in $payload; do _MG_OWNER[$fn]="$key"; done ;;
+            C) _MG_CALLS[$key]="$payload" ;;
+            V) _MG_VIS[$key]="$payload" ;;
+        esac
     done < "$file"
 }
 

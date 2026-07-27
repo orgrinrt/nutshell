@@ -31,14 +31,12 @@ NUTSHELL_ROOT="${NUTSHELL_ROOT:-$(cd "$_CHECK_RUNNER_DIR/.." && pwd)}"
 # The canonical defaults file - this is the ONLY source of defaults
 NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/examples/configs/empty.nut.toml"
 
-# Source nutshell core modules
-# We eat our own dogfood - the test framework uses nutshell itself
-source "${NUTSHELL_ROOT}/lib/os.sh"
-source "${NUTSHELL_ROOT}/lib/log.sh"
-source "${NUTSHELL_ROOT}/lib/fs.sh"
-source "${NUTSHELL_ROOT}/lib/string.sh"
-source "${NUTSHELL_ROOT}/lib/validate.sh"
-source "${NUTSHELL_ROOT}/lib/toml.sh"
+# We eat our own dogfood: the check framework loads its dependencies the way
+# every other module does. Sourcing the paths by hand worked, and hid the
+# dependency from the module-contract check, which reads `use` lines. A module
+# that loads its dependencies invisibly is exactly the case that check exists
+# to catch, so the framework running it must not be the one exception.
+use os log fs string validate toml
 
 # =============================================================================
 # PATHS - Determined after config is loaded

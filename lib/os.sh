@@ -17,6 +17,7 @@ readonly _NUTSHELL_CORE_OS_SH=1
 # -----------------------------------------------------------------------------
 
 # Returns the OS name: linux|macos|windows|unknown
+#[pub]
 os_name() {
     case "$(uname -s)" in
         Linux*)  echo "linux" ;;
@@ -32,6 +33,7 @@ os_is_linux() {
 }
 
 # Returns 0 (true) if running on macOS, 1 (false) otherwise
+#[pub]
 os_is_macos() {
     [[ "$(uname -s)" == Darwin* ]]
 }

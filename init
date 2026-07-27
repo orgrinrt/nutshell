@@ -54,26 +54,6 @@ declare -gA _NUTSHELL_MODULE_INIT=() 2>/dev/null || declare -A _NUTSHELL_MODULE_
 #
 # Returns 0 the first time a given file calls it, non-zero after, so the idiom
 # reads as "carry on, or stop".
-# nut_requires <module...>
-#
-# What this module needs, declared and loaded in one act so the two cannot
-# drift. `use` at the top of a script says what a *script* wants; this says
-# what a *module* cannot work without.
-#
-# The distinction is not decorative. `toml.sh` called `str_trim` for its whole
-# life while declaring nothing, so `toml_get` worked or failed depending on
-# whether something else had loaded `string` first. Nothing reported it,
-# because from inside bash a function that is present is present.
-#
-# Declaring it here makes the dependency load, and makes it checkable: the
-# module-contract check reads these and fails on a cross-module call that no
-# declaration covers. That is as close to sourcing without leaks as one global
-# function table permits, and it is honest about being a check rather than an
-# isolation boundary.
-nut_requires() {
-    use "$@"
-}
-
 nut_once() {
     local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
     local key="_NUT_ONCE_${src//[^A-Za-z0-9]/_}"
@@ -86,7 +66,24 @@ nut_once() {
 # Module loading (for script authors)
 # =============================================================================
 
-# Load one or more modules
+# use <module...>
+#
+# Load one or more modules. The same line in a script and at the top of a
+# module: a script says what it wants, a module says what it cannot work
+# without, and both are the same act, so there is nothing to keep in step.
+#
+# The distinction is not worth a second function. A wrapper that only forwards
+# to this one would be one more name to learn and one more place for the two
+# to drift, and the module-contract check reads `use` lines either way.
+#
+# Declaring is what makes the dependency checkable. `toml.sh` called `str_trim`
+# for its whole life while declaring nothing, so `toml_get` worked or silently
+# returned nothing depending on whether something else had loaded `string`
+# first. Nothing reported it, because from inside bash a function that is
+# present is present. That is as close to sourcing without leaks as one global
+# function table permits, and it is honest about being a check rather than an
+# isolation boundary.
+#
 # Usage: use os log json http
 use() {
     local mod
@@ -95,7 +92,15 @@ use() {
         [[ -n "${_NUTSHELL_LOADED[$mod]:-}" ]] && continue
         
         # Find and source the module
-        local mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
+        # A namespaced module comes from a library declared in nut.toml, so
+        # resolution goes through extern rather than nutshell's own lib.
+        local mod_path
+        if [[ "$mod" == *"::"* ]]; then
+            use extern || return 1
+            mod_path="$(extern_resolve "$mod")" || return 1
+        else
+            mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
+        fi
         if [[ -f "$mod_path" ]]; then
             # Marked before sourcing, not after. A module that declares its own
             # dependencies can be part of a cycle, and marking afterwards means

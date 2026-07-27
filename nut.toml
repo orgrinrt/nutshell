@@ -223,3 +223,26 @@ show_passing = false
 
 # Always show summary
 show_summary = true
+
+# -----------------------------------------------------------------------------
+# External libraries
+# -----------------------------------------------------------------------------
+# Name to source, resolved once into a shared cache and reused by everything
+# that names the same ref. Git is first-class because that is where these
+# actually live; a released tarball is a later concern.
+#
+#   [deps.<name>]
+#   git = "<url>"
+#   ref = "<branch, tag or sha>"    # optional, defaults to the default branch
+#
+# A module inside one is reached by namespacing the use:
+#
+#   use shebang::diagnostics/findings
+#
+# The bare form stays nutshell's own, because nutshell is the default and
+# prefixing the common path to disambiguate the rare one is friction on every
+# line to help a few.
+
+[deps.shebang]
+git = "https://github.com/orgrinrt/the-whole-shebang.git"
+ref = "main"

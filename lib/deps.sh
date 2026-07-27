@@ -35,10 +35,10 @@ readonly _NUTSHELL_CORE_DEPS_SH=1
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_DEPS_DIR="${BASH_SOURCE[0]%/*}"
-# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
-[[ "$_NUTSHELL_DEPS_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_DEPS_DIR="."
-source "${_NUTSHELL_DEPS_DIR}/os.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use os
 
 # -----------------------------------------------------------------------------
 # Configuration file location
@@ -48,7 +48,7 @@ source "${_NUTSHELL_DEPS_DIR}/os.sh"
 _deps_find_config() {
     local check_paths=(
         "${PWD}/nut.toml"
-        "${_NUTSHELL_DEPS_DIR}/../nut.toml"
+        "${NUTSHELL_ROOT}/nut.toml"
     )
     
     for path in "${check_paths[@]}"; do

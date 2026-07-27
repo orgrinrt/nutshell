@@ -23,7 +23,10 @@ readonly _NUTSHELL_CORE_FS_SH=1
 _NUTSHELL_FS_DIR="${BASH_SOURCE[0]%/*}"
 # Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
 [[ "$_NUTSHELL_FS_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_FS_DIR="."
-source "${_NUTSHELL_FS_DIR}/deps.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use deps
 
 # Path to impl directory
 readonly _FS_IMPL_DIR="${_NUTSHELL_FS_DIR}/fs/impl"

@@ -26,9 +26,10 @@ readonly _NUTSHELL_CORE_HTTP_SH=1
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_HTTP_DIR="${BASH_SOURCE[0]%/*}"
-[[ "$_NUTSHELL_HTTP_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_HTTP_DIR="."
-source "${_NUTSHELL_HTTP_DIR}/deps.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use deps
 
 # -----------------------------------------------------------------------------
 # Module Status

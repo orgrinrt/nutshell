@@ -25,9 +25,10 @@ readonly _NUTSHELL_CORE_PROMPT_SH=1
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_PROMPT_DIR="${BASH_SOURCE[0]%/*}"
-[[ "$_NUTSHELL_PROMPT_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_PROMPT_DIR="."
-source "${_NUTSHELL_PROMPT_DIR}/color.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use color
 
 # -----------------------------------------------------------------------------
 # Configuration

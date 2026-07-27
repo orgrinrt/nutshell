@@ -69,6 +69,7 @@ _log_format() {
 # Public API
 # -----------------------------------------------------------------------------
 
+#[pub]
 log_debug() {
     _log_should_emit debug || return 0
     local color="" reset=""
@@ -79,6 +80,7 @@ log_debug() {
     _log_format "DEBUG" "$color" "$reset" "$*" >&2
 }
 
+#[pub]
 log_info() {
     _log_should_emit info || return 0
     local color="" reset=""
@@ -89,6 +91,7 @@ log_info() {
     _log_format "INFO" "$color" "$reset" "$*"
 }
 
+#[pub]
 log_warn() {
     _log_should_emit warn || return 0
     local color="" reset=""
@@ -110,6 +113,7 @@ log_error() {
     _log_format "ERROR" "$color" "$reset" "$*" >&2
 }
 
+#[pub]
 log_success() {
     _log_should_emit info || return 0
     local color="" reset=""
@@ -120,6 +124,7 @@ log_success() {
     _log_format "OK" "$color" "$reset" "$*"
 }
 
+#[pub]
 log_step() {
     _log_should_emit info || return 0
     local color="" reset="" bold=""
@@ -131,6 +136,7 @@ log_step() {
     printf '%b==>%b %b%s%b\n' "$color" "$reset" "$bold" "$*" "$reset"
 }
 
+#[pub]
 log_substep() {
     _log_should_emit info || return 0
     local color="" reset=""
@@ -150,6 +156,7 @@ log_substep() {
 #
 # `colour` is a name from the palette below, or `none`. Colour is applied only
 # when the stream is a terminal, exactly as the level functions do it.
+#[pub]
 log_tagged() {
     local tag="$1" want="$2"; shift 2
     local color="" reset=""
@@ -169,6 +176,7 @@ log_tagged() {
     _log_format "$tag" "$color" "$reset" "$*"
 }
 
+#[pub]
 log_fatal() {
     local color="" reset=""
     if _log_should_color; then

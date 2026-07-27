@@ -36,7 +36,7 @@ NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/examples/configs/empty.nut.toml"
 # dependency from the module-contract check, which reads `use` lines. A module
 # that loads its dependencies invisibly is exactly the case that check exists
 # to catch, so the framework running it must not be the one exception.
-use os log fs string validate toml attr
+use log validate toml attr
 
 # =============================================================================
 # PATHS - Determined after config is loaded
@@ -501,8 +501,12 @@ get_script_files() {
 # b, so one check exempted almost nothing and the other found no public
 # functions at all in a library with more than a hundred of them.
 attr_name_of() {
-    [[ "$1" =~ ^#\[([a-z_][a-z0-9_]*)\]$ ]] || return 1
-    printf '%s' "${BASH_REMATCH[1]}"
+    [[ "$1" =~ ^#\[([a-z_][a-z0-9_]*)(\((.*)\))?\]$ ]] || return 1
+    # Name, then a tab, then the argument if there was one. The argument is
+    # part of the identity: `#[allow(trivial_wrapper)]` and `#[allow(loc = 400)]`
+    # are not the same marker, and matching on the name alone would let a size
+    # exemption excuse a wrapper.
+    printf '%s\t%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]:-}"
 }
 
 # has_annotation <file> <function> <annotation>
@@ -524,9 +528,13 @@ has_annotation() {
     local file="$1" func_name="$2" annotation="$3"
 
     # The configured form is the written form, `#[pub]`. attr works in names.
-    local name
-    if name="$(attr_name_of "$annotation")"; then
-        attr_has "$file" "$func_name" "$name"
+    local parsed name arg
+    if parsed="$(attr_name_of "$annotation")"; then
+        name="${parsed%%$'\t'*}"
+        arg="${parsed#*$'\t'}"
+        attr_has "$file" "$func_name" "$name" || return 1
+        [[ -z "$arg" ]] && return 0
+        [[ "$(attr_arg "$file" "$func_name" "$name")" == "$arg" ]]
         return $?
     fi
 

@@ -45,3 +45,12 @@ it_does_not_carry_an_attribute_past_real_code() {
 it_finds_every_definition_with_a_given_attribute() {
     assert_eq "$(attr_find "$FIXTURE" test | tr '\n' ' ')" "a_test_fn b_test_fn "
 }
+
+#[test]
+it_tells_two_arguments_of_one_attribute_apart() {
+    # `#[allow(trivial_wrapper)]` and `#[allow(loc = 400)]` are not the same
+    # marker. Matching on the name alone would let a size exemption excuse a
+    # wrapper, which is the check the argument exists to scope.
+    assert_eq "$(attr_arg "$FIXTURE" wrapper_allowed allow)" "trivial_wrapper"
+    assert_eq "$(attr_arg "$FIXTURE" big_but_allowed allow)" "loc = 400"
+}

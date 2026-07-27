@@ -24,10 +24,6 @@ nut_once || return 0
 # Dependencies
 # -----------------------------------------------------------------------------
 
-# Declared, not sourced by path. A hand-rolled `source` loads the module and
-# hides it from the module-contract check, which reads `use` lines, so the
-# dependency was real and unrecorded at once.
-use color
 
 # -----------------------------------------------------------------------------
 # Configuration

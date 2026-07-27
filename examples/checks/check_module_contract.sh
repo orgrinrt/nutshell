@@ -54,6 +54,11 @@ report() {
     local kind a b c
     while IFS=$'\t' read -r kind a b c; do
         case "$kind" in
+            unused)
+                note "${a} declares ${b} and calls nothing from it."
+                note "Drop the declaration, unless it is there for a variable"
+                note "${b} sets or for something it does when loaded."
+                ;;
             cycle)
                 fail "the declaration graph has a cycle: ${a}"
                 note "Cut one edge. The more general module should not depend on"

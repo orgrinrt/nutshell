@@ -119,3 +119,57 @@ it_keeps_the_other_entries_when_one_is_written() {
     assert_eq "$(extern_locked other)" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert_eq "$(extern_locked fixture)" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 }
+
+#[test]
+it_gives_two_projects_locked_apart_their_own_checkouts() {
+    # The case the pin exists for, and the one every other test here hides by
+    # giving itself a private cache. The cache is shared on purpose, so two
+    # projects naming one repository meet in it.
+    #
+    # With a single checkout per url and ref they took turns checking it out
+    # under each other: each got the commit it asked for at the moment it
+    # asked, and then read files from a directory the other had since moved.
+    _isolate
+    local fix work first second dep
+    fix="$(_extern_fixture)"
+    work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    second="${fix##* }"
+    dep="${work}/dep"
+
+    # Two projects, one shared cache, one repository, different locks.
+    mkdir -p "${work}/other"
+    cp "${work}/project/nut.toml" "${work}/other/nut.toml"
+
+    local dir_a dir_b
+    cd "${work}/project" || return 1
+    extern_lock_write fixture "$first"
+    dir_a="$(extern_path fixture)"
+
+    cd "${work}/other" || return 1
+    extern_lock_write fixture "$second"
+    dir_b="$(extern_path fixture)"
+
+    assert_ne "$dir_a" "$dir_b" "a checkout per commit, not per ref"
+    assert_contains "$(cat "${dir_a}/lib/greet.sh")" "hello"
+    assert_contains "$(cat "${dir_b}/lib/greet.sh")" "goodbye"
+}
+
+#[test]
+it_fetches_one_repository_once_for_two_projects() {
+    # The reason the cache is shared at all. Two projects on the same ref share
+    # the fetch; only the checkout is per commit.
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    mkdir -p "${work}/other"
+    cp "${work}/project/nut.toml" "${work}/other/nut.toml"
+
+    cd "${work}/project" || return 1
+    extern_path fixture >/dev/null
+
+    cd "${work}/other" || return 1
+    local out
+    out="$(extern_path fixture 2>&1 >/dev/null)"
+    assert_empty "$out" "the second project fetches nothing"
+}

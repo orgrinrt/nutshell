@@ -138,70 +138,88 @@ extern_declared() {
 #[pub]
 # Usage: extern_path shebang -> prints the checkout, fetching it once if needed
 extern_path() {
-    local name="$1" spec url ref key dir
+    local name="$1" spec url ref mirror commit dir
     spec="$(extern_declared "$name")" || return 1
     url="${spec%% *}"
     ref="${spec##* }"
 
-    # Keyed by url and ref together: two projects on the same ref share the
-    # checkout, and two refs of the same repository do not collide.
-    key="$(printf '%s@%s' "$url" "$ref" | cksum | tr -d ' ')"
-    dir="$(_extern_cache_root)/${key}"
+    mirror="$(_extern_mirror "$name" "$url" "$ref")" || return 1
 
-    if [[ ! -d "$dir/.git" ]]; then
-        # validate rather than deps: deps tracks the unix text tools and their
-        # variants, and git is not one of those.
-        require_command git "fetching an external library needs git" || return 1
-        fs_mkdir "${dir%/*}" || return 1
-
-        # To stderr: this function's stdout is its return value, and a progress
-        # line captured by command substitution becomes part of the path.
-        log_info "fetching ${name} from ${url} (${ref})" >&2
-        if ! git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$url" "$dir" 2>/dev/null; then
-            # A ref that is a sha rather than a branch cannot be cloned
-            # shallowly by name, so fall back rather than reporting the
-            # repository missing.
-            git clone --quiet "$url" "$dir" 2>/dev/null || {
-                log_error "could not fetch ${name} from ${url}"
-                return 1
-            }
-            git -C "$dir" checkout --quiet "$ref" 2>/dev/null || {
-                log_error "${name} has no ref '${ref}'"
-                return 1
-            }
-        fi
+    commit="$(extern_locked "$name")" || commit=""
+    if [[ -z "$commit" ]]; then
+        commit="$(git -C "$mirror" rev-parse HEAD 2>/dev/null)" || return 1
+        extern_lock_write "$name" "$commit"
     fi
 
-    _extern_pin "$name" "$dir" "$url" || return 1
+    dir="$(_extern_cache_root)/$(_extern_key "${url}@${commit}")"
+    if [[ ! -e "$dir" ]]; then
+        # A shallow clone of a branch does not contain an older commit on it,
+        # and taking an older commit is the ordinary case for a lockfile.
+        git -C "$mirror" fetch --quiet origin "$commit" 2>/dev/null
+        if ! git -C "$mirror" cat-file -e "${commit}^{commit}" 2>/dev/null; then
+            log_error "${name} is locked to ${commit}, which ${url} does not have"
+            log_error "delete its entry in nut.lock to take the newest commit instead"
+            return 1
+        fi
+        fs_mkdir "${dir%/*}" || return 1
+
+        # A worktree, not a second clone. Cloning the mirror was the obvious
+        # shape and it does not work: a commit fetched by hash is reachable
+        # from no ref, so a clone leaves it behind and the checkout fails on
+        # the exact commit the lockfile asked for. A worktree reads the
+        # mirror's object store, where it is.
+        git -C "$mirror" worktree add --quiet --detach "$dir" "$commit" 2>/dev/null || {
+            log_error "could not lay ${name} out at ${commit}"
+            git -C "$mirror" worktree prune 2>/dev/null
+            return 1
+        }
+    fi
+
     printf '%s' "$dir"
 }
 
-# _extern_pin <name> <dir> <url>
-#
-# Hold the checkout at the locked commit, or record the one it is at.
-#
-# Checked on every resolution, not only on the fetch. The cache is shared
-# between projects keyed by url and ref, so the checkout a project finds
-# already there was placed by somebody else, and "we cloned it, so it is what
-# we asked for" only holds the first time.
-_extern_pin() {
-    local name="$1" dir="$2" url="$3" locked head
-    head="$(git -C "$dir" rev-parse HEAD 2>/dev/null)" || return 0
+_extern_key() { printf '%s' "$1" | cksum | tr -d ' '; }
 
-    locked="$(extern_locked "$name")" || {
-        extern_lock_write "$name" "$head"
-        return 0
-    }
-    [[ -z "$locked" || "$locked" == "$head" ]] && return 0
+# _extern_mirror <name> <url> <ref> -> the fetch clone for that url and ref
+#
+# One clone per url and ref, shared between projects, because fetching the same
+# repository once per project that names it is the cost the shared cache exists
+# to avoid.
+#
+# Nothing reads code out of it. What a project gets back from `extern_path` is a
+# separate checkout keyed by the resolved commit, so the mirror is free to move
+# and no two projects are ever looking at one working tree.
+#
+# That separation is the whole point. With one shared checkout per url and ref,
+# two projects locked to different commits took turns checking it out under each
+# other: each got the commit it asked for at the moment it asked, and then read
+# files from a directory the other had since moved.
+_extern_mirror() {
+    local name="$1" url="$2" ref="$3" dir
+    dir="$(_extern_cache_root)/mirror-$(_extern_key "${url}@${ref}")"
+    [[ -d "$dir/.git" ]] && { printf '%s' "$dir"; return 0; }
 
-    # Fetch before checkout: a shallow clone of a branch does not contain an
-    # older commit on it, and that is the ordinary case rather than an edge.
-    git -C "$dir" fetch --quiet origin "$locked" 2>/dev/null
-    git -C "$dir" checkout --quiet "$locked" 2>/dev/null || {
-        log_error "${name} is locked to ${locked}, which ${url} does not have"
-        log_error "delete its entry in nut.lock to take the newest commit instead"
-        return 1
-    }
+    # validate rather than deps: deps tracks the unix text tools and their
+    # variants, and git is not one of those.
+    require_command git "fetching an external library needs git" || return 1
+    fs_mkdir "${dir%/*}" || return 1
+
+    # To stderr: this function's stdout is its return value, and a progress
+    # line captured by command substitution becomes part of the path.
+    log_info "fetching ${name} from ${url} (${ref})" >&2
+    if ! git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$url" "$dir" 2>/dev/null; then
+        # A ref that is a sha rather than a branch cannot be cloned shallowly
+        # by name, so fall back rather than reporting the repository missing.
+        git clone --quiet "$url" "$dir" 2>/dev/null || {
+            log_error "could not fetch ${name} from ${url}"
+            return 1
+        }
+        git -C "$dir" checkout --quiet "$ref" 2>/dev/null || {
+            log_error "${name} has no ref '${ref}'"
+            return 1
+        }
+    fi
+    printf '%s' "$dir"
 }
 
 #[pub]

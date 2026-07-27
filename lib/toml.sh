@@ -20,7 +20,7 @@ nut_once || return 0
 # dependency was real and unrecorded at once. `_toml_clean_line` trims through
 # `str_trim`, and until this line existed a caller that had not already loaded
 # `string` got a toml module whose every read silently failed.
-use fs string validate
+use string validate
 
 # -----------------------------------------------------------------------------
 # Internal helpers

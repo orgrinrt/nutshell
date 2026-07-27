@@ -142,6 +142,7 @@ find_public_api_functions() {
     # the check reported a pass on every one of them.
     local name func_name func_line
     name="$(attr_name_of "$PUBLIC_API_ANNOTATION")" || return
+    name="${name%%$'\t'*}"
 
     while IFS= read -r func_name; do
         [[ -z "$func_name" ]] && continue

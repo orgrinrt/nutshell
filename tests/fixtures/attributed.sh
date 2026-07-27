@@ -23,3 +23,9 @@ a_test_fn() { :; }
 
 #[test]
 b_test_fn() { :; }
+
+#[allow(trivial_wrapper)]
+wrapper_allowed() { :; }
+
+#[allow(loc = 400)]
+big_but_allowed() { :; }

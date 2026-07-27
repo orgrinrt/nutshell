@@ -51,7 +51,7 @@
 
 nut_once || return 0
 
-use fs xdg log deps
+use fs xdg deps
 
 # awk does the whole scan, so its absence is not a degraded mode to fall back
 # from. Said once, here, rather than discovered as an empty graph later.
@@ -88,6 +88,10 @@ _mg_fingerprint() {
           printf '%s:%s:%s\n' "${f##*/}" "$(fs_size "$f" 2>/dev/null)" "$(fs_mtime "$f" 2>/dev/null)"
       done
       printf 'schema:%s\n' "$_MG_SCHEMA"
+      # Which library, not only what is in it. Without this two libraries whose
+      # files happen to share names, sizes and modification times resolve to
+      # one cache file and each reads the other's graph.
+      printf 'dir:%s\n' "$dir"
     } | cksum | tr -d ' '
 }
 
@@ -168,6 +172,11 @@ _mg_scan() {
             # Turn command separators into line breaks, so "first word of a
             # command" becomes "first word of a segment".
             gsub(/\$\(/, "\n", code)
+            # Process substitution too. Without it `done < <(attr_find ...)`
+            # was not a call, so `test` recorded no calls into `attr` at all
+            # and a module reaching into another only that way passed the
+            # contract check untouched.
+            gsub(/[<>]\(/, "\n", code)
             gsub(/[;|&`]/, "\n", code)
             gsub(/\(\)/, "", code)
             n = split(code, segs, "\n")
@@ -391,6 +400,7 @@ modgraph_cycle() {
 #   undeclared  <module> <fn> <owner>   a cross-module call with no `use`
 #   private     <module> <fn> <owner>   a call to something not visible here
 #   unreachable <module>                nothing uses it and it exports nothing
+#   unused      <module> <dep>          declared, and nothing called from it
 #
 # One pass and direct reads, because the obvious shape is not viable. Asking
 # the accessors question by question means a command substitution per call
@@ -405,8 +415,10 @@ modgraph_cycle() {
 #     the text will know what they name.
 #   - functions a caller supplies. A module taking a callback calls something
 #     this library never defines, which is indistinguishable from a builtin.
-#   - whether a declared dependency is actually needed. An unused `use` is
-#     harmless and invisible here.
+#   - whether an unused declaration is really unused. `unused` means no call
+#     was seen, and a module can depend on another for a variable it sets or
+#     for something it does when loaded. That is why it is reported apart from
+#     the violations: it is a question, not a verdict.
 #   - anything about a module that failed to parse. A file is text to this.
 #
 #[pub]
@@ -448,6 +460,19 @@ modgraph_audit() {
                 printf 'private\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
                 found=1
             fi
+        done
+
+        # Declared and never called. Reported, not failed: a module can depend
+        # on another for a variable or for what it does when loaded, and
+        # neither is a call. Six of these were real, and had been invisible
+        # because nothing looked.
+        local dep used_dep
+        for dep in ${_MG_DECLARES[$mod]:-}; do
+            used_dep=0
+            for fn in ${_MG_CALLS[$mod]:-}; do
+                [[ "${_MG_OWNER[$fn]:-}" == "$dep" ]] && { used_dep=1; break; }
+            done
+            [[ "$used_dep" -eq 0 ]] && printf 'unused\t%s\t%s\n' "$mod" "$dep"
         done
     done
 

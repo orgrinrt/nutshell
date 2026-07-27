@@ -5,14 +5,14 @@
 # assertions stay true as nutshell changes. A test pinned to the real library
 # breaks whenever a module is added, which teaches everyone to ignore it.
 
-use modgraph test
+use modgraph test fs
 
 FIXTURE="${BASH_SOURCE[0]%/*}/fixtures/lib"
 
 #[test]
 it_finds_every_module() {
     MODGRAPH_NOCACHE=1 modgraph_build "$FIXTURE"
-    assert_eq "$(modgraph_modules | sort | tr '\n' ' ')" "alpha beta cyclic_a cyclic_b "
+    assert_eq "$(modgraph_modules | sort | tr '\n' ' ')" "alpha beta cyclic_a cyclic_b idle subst "
 }
 
 #[test]
@@ -91,4 +91,41 @@ it_finds_the_same_violations_cached_as_fresh() {
     modgraph_build "$FIXTURE"
 
     assert_eq "$(modgraph_audit | sort)" "$fresh" "the cache changes speed, not answers"
+}
+
+#[test]
+it_sees_a_call_made_through_process_substitution() {
+    # `done < <(alpha_public)` is a call. The scanner split on `$(`, on `;`,
+    # `|`, `&` and backtick, and not on `<(`, so a module reaching into another
+    # only that way recorded no calls and passed the contract check untouched.
+    MODGRAPH_NOCACHE=1 modgraph_build "$FIXTURE"
+    assert_contains "$(modgraph_calls subst)" "alpha_public"
+}
+
+#[test]
+it_keeps_two_libraries_cache_apart() {
+    # The cache path was the fingerprint of the files alone, so two libraries
+    # whose files share names, sizes and modification times resolved to one
+    # file and each read the other's graph.
+    local other
+    other="$(fs_temp_dir nutshell-mg)"
+    cp "$FIXTURE"/*.sh "$other/"
+
+    modgraph_build "$FIXTURE"
+    local a="${_MG_ROOT}"
+    modgraph_build "$other"
+
+    assert_ne "$(_mg_cache_file "$a")" "$(_mg_cache_file "$other")"
+}
+
+#[test]
+it_reports_a_declaration_nothing_uses() {
+    # `beta` declares `alpha` and does call into it, so the fixture needs a
+    # module that declares and does not call. `subst` declares `alpha` and
+    # calls it through process substitution, which is a call.
+    #
+    # Reported, never failed: a module can depend on another for a variable it
+    # sets or for what it does when loaded, and neither shows up as a call.
+    MODGRAPH_NOCACHE=1 modgraph_build "$FIXTURE"
+    assert_contains "$(modgraph_audit)" "unused	idle	alpha"
 }

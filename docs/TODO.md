@@ -1,18 +1,18 @@
 # nutshell TODO
 
-## v0.1.0 Release Checklist
+## v0.2.0
 
 - [x] Core library modules (os, log, deps, fs, text, json, http, etc.)
 - [x] Lazy-init stub pattern for tool-dependent functions
-- [x] New directory structure (init, bin/, lib/, qa/)
-- [x] `init` entry point for sourcing
-- [x] `bin/nutshell` interpreter for shebang support
-- [x] `use` function for selective module loading
-- [x] QA system with built-in checks
-- [x] Config-driven via nut.toml
-- [x] README with clear usage documentation
-- [ ] Test the full workflow end-to-end
-- [ ] Tag v0.1.0 release
+- [x] Directory structure (init, bin/, lib/, examples/, tests/)
+- [x] `init` entry point, `bin/nutshell` interpreter, `use` for loading
+- [x] QA system with built-in checks, config-driven via nut.toml
+- [x] Attributes (`#[pub]`, `#[test]`, `#[allow(...)]`), read by `attr`
+- [x] Test harness: `#[test]` functions, assertions, `./test`
+- [x] Module graph with cycle, declaration, visibility and reachability checks
+- [x] `cli` subcommand dispatch, `git` repository reading
+- [x] External libraries via `nut.toml` deps, pinned by `nut.lock`
+- [ ] Tag v0.2.0 release
 - [ ] Create GitHub release with tarball
 
 ## High Priority

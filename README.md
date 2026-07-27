@@ -4,7 +4,7 @@
 
 A minimal, portable bash library for shell scripting.
 
-**Version**: 0.1.0
+**Version**: 0.2.0
 
 ---
 
@@ -64,10 +64,14 @@ nutshell/
 │   └── checks/            # Built-in QA checks
 │       ├── run_builtins.sh
 │       └── check_*.sh
+├── tests/                 # The suite, run by ./test
 ├── schemas/               # JSON schema for nut.toml
+├── install                # Link bin/nutshell onto PATH
+├── test                   # Test entry point (executable)
 ├── nutshell.sh            # Alternative: load ALL modules at once
 ├── README.md
-└── nut.toml               # Nutshell's own config
+├── nut.toml               # Nutshell's own config
+└── nut.lock               # Resolved dependency commits
 ```
 
 A typical project setup:
@@ -196,85 +200,132 @@ use os log json http
 | `color` | Terminal colors (`color_red`, `color_green`, `color_bold`) |
 | `validate` | Validation (`is_set`, `is_integer`, `require_command`) |
 | `xdg` | XDG directories (`xdg_config`, `xdg_data`, `xdg_cache`) |
-| `check-runner` | Testing framework (`cfg_get`, `log_pass`, `log_fail`) |
+| `check-runner` | QA framework (`cfg_get`, `log_pass`, `log_fail`) |
+| `test` | Test harness (`assert_eq`, `test_run`, `test_summary`) |
+| `attr` | Attributes on definitions (`attr_has`, `attr_arg`, `attr_find`) |
+| `cli` | Subcommand dispatch with did-you-mean (`cli_command`, `cli_run`) |
+| `git` | Reading a repository (`git_trunk`, `git_changed_files`, `git_trailers`) |
+| `modgraph` | The module graph and its violations (`modgraph_build`, `modgraph_audit`) |
+| `extern` | Libraries from elsewhere (`extern_path`, `extern_resolve`) |
 
 ---
 
 ## For Module Authors
 
-### The `module` Function
-
-When creating new modules, use the `module` function to handle boilerplate:
+A module is a file in `lib/`. It guards against being sourced twice, declares
+what it needs, and marks what it offers.
 
 ```bash
 #!/usr/bin/env bash
 # lib/mymodule.sh
 
-# This handles:
-# - Guard variable to prevent double-sourcing
-# - Creates MYMODULE_ERROR variable for error tracking
-# - Creates MYMODULE_INIT variable (1 = ready, 0 = error)
-# - Registers module in nutshell's loaded modules list
-module mymodule || return 0
+nut_once || return 0
 
-# Your module code here...
+use log fs
 
+#[pub]
+# Usage: my_function -> greets
 my_function() {
-    echo "Hello from mymodule!"
+    log_info "Hello from mymodule!"
 }
-
-# If something goes wrong during init:
-# module_error mymodule "Failed to initialize: reason"
 ```
 
-The `module` function replaces this manual boilerplate:
+### The include guard
+
+`nut_once` returns 0 the first time a given file calls it and non-zero after,
+so the idiom reads as "carry on, or stop". It derives its key from the calling
+file, which is why there is no name to invent and no name to type twice.
+
+### Declaring dependencies
+
+`use` at the top of a module says what it cannot work without. It is the same
+`use` a script writes, because it is the same act.
+
+This is worth more than convenience. Bash has one global function table: once a
+module is sourced, everything it defined is callable from anywhere, whether the
+caller declared it or not. So a module that reaches into another without saying
+so works, right up until load order changes. `toml.sh` called `str_trim` for
+its whole life while declaring nothing, and `toml_get` returned either an
+answer or silence depending on whether something else had loaded `string`
+first. Nothing reported it, because from inside bash a function that is present
+is present.
+
+The `module_contract` check reads these declarations and reports the calls no
+declaration covers. It cannot make the boundary real, and it says so; what it
+can do is make crossing one visible.
+
+### Attributes
+
+An attribute is a comment, which is the whole reason for the shape. `#` is
+already bash's comment character, so `#[pub]` needs no cooperation from the
+parser: `bash -n`, shellcheck and editors keep working, and a file using
+attributes is still an ordinary shell file.
 
 ```bash
-# OLD WAY (manual):
-[[ -n "${_NUTSHELL_MODULE_MYMODULE_LOADED:-}" ]] && return 0
-declare -g _NUTSHELL_MODULE_MYMODULE_LOADED=1
-declare -g MYMODULE_ERROR=""
-declare -g MYMODULE_INIT=1
+#[pub]                       # part of the module's surface
+#[allow(loc = 400)]          # with an argument
+#[test]                      # a test, found by the harness
 ```
 
-### Module Helper Functions
+They attach downward to the next definition and accumulate, and a doc comment
+between an attribute and its definition does not break the run.
 
-```bash
-# Check if a module is ready
-module_ready mymodule && echo "Ready!"
+### Tests
 
-# Get a module's error message
-error=$(module_get_error mymodule)
-
-# Set an error (marks module as not ready)
-module_error mymodule "Something went wrong"
-```
-
-### The `impl` Function
-
-For modules with multiple implementations (e.g., using sed vs perl):
+A test is a function marked `#[test]`. Nothing registers it and there is no
+naming convention to remember, so a test that exists cannot be missing from the
+run and a renamed one cannot leave a stale entry behind.
 
 ```bash
 #!/usr/bin/env bash
-# lib/text/impl/sed_grep.sh
+# tests/string_test.sh
 
-# Check if required tools are available
-# Returns 0 if all deps available, 1 if not
-impl sed,grep || return 1
+use string test
 
-# Implementation using sed and grep
-text_replace() {
-    # ...
+#[test]
+it_trims_both_ends() {
+    assert_eq "$(str_trim "  x  ")" "x"
 }
 ```
 
-With explicit impl name:
+Run them with `./test`. Each runs in its own subshell, failures do not stop the
+run, and every assertion counts rather than only the last one the function
+happened to evaluate.
 
-```bash
-impl sed,grep sed_grep_combo || return 1
+The assertions are `assert_eq`, `assert_ne`, `assert_contains`, `assert_empty`,
+`assert_ok`, `assert_fails` and `assert_exits`. Each prints what it expected
+against what it got, because a bare "assertion failed" sends the reader back to
+the source to work out what the values even were.
+
+### Depending on another library
+
+A dependency is declared in `nut.toml`, not in the script that wants it:
+
+```toml
+[deps.shebang]
+git = "https://github.com/orgrinrt/the-whole-shebang.git"
+ref = "main"
 ```
 
----
+and a module inside it is reached by namespacing the `use`:
+
+```bash
+use shebang::diagnostics/findings
+```
+
+Declared in the manifest because a script that fetches its own dependencies
+decides for the whole project where code comes from, and does it somewhere
+nobody looks. One file answers "what does this project pull in".
+
+Resolution is cached globally by url and ref, so several projects naming the
+same ref share one checkout and the second pays nothing.
+
+`nut.lock` records the commit each dependency resolved to, and is written on
+first resolution and obeyed from then on. `ref = "main"` names a branch, and a
+branch moves; without the lock two checkouts of one project can be running
+different code and neither can say so. Commit it. Taking a newer commit means
+deleting the entry, which is a thing somebody does rather than a thing that
+happens.
 
 ## Examples
 
@@ -365,9 +416,9 @@ Every script needs this line:
 ```
 
 Breaking it down:
-- `.` — Source a file (same as `source`)
-- `"${0%/*}"` — Directory containing this script
-- `/lib/nutshell/init` — Path to nutshell's init file
+- `.` sources a file (same as `source`)
+- `"${0%/*}"` is the directory containing this script
+- `/lib/nutshell/init` is the path to nutshell's init file
 
 This works regardless of:
 - Where the script is called from (`./scripts/build.sh` or `scripts/build.sh`)
@@ -425,13 +476,14 @@ See `examples/configs/` for configuration templates:
 | `no_cruft` | Detect debug code, TODOs |
 | `public_api_docs` | Validate API documentation |
 | `config_schema` | Validate nut.toml structure |
+| `module_contract` | Cycles, undeclared calls, private calls, unreachable modules |
 
 ---
 
 ## Why This Design?
 
 **Q: Why not a global install?**  
-A: Nutshell is designed to be bundled with your project. When someone clones your repo and runs `npm run build`, it should just work—no "please install nutshell first".
+A: Nutshell is designed to be bundled with your project. When someone clones your repo and runs `npm run build`, it should just work, with no "please install nutshell first".
 
 **Q: Why not `#!/usr/bin/env nutshell` everywhere?**  
 A: That requires `nutshell` to be in PATH, which means global installation or setup steps for every developer. The source line is self-contained.

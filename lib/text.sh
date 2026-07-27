@@ -471,18 +471,18 @@ text_error() {
     echo "$_TEXT_ERROR"
 }
 
-#[pub]
 # Get which implementation was selected for text_replace
 # Usage: text_replace_impl -> "grep_sed" | "sed" | "perl" | "awk" | "none" | ""
 # Returns empty string if text_replace hasn't been called yet (stub not resolved)
+#[pub]
 text_replace_impl() {
     echo "$_TEXT_REPLACE_IMPL"
 }
 
-#[pub]
 # Get which implementation was selected for matching functions
 # Usage: text_match_impl -> "grep" | "perl" | "none" | ""
 # Returns empty string if matching functions haven't been called yet
+#[pub]
 text_match_impl() {
     echo "$_TEXT_MATCH_IMPL"
 }

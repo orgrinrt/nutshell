@@ -45,8 +45,10 @@ PROMPT_TIMEOUT=0
 # Internal Helpers
 # -----------------------------------------------------------------------------
 
+#[pub]
 # Check if we're in interactive mode
-_prompt_is_interactive() {
+# Usage: prompt_interactive -> returns 0 if interactive, 1 otherwise
+prompt_interactive() {
     [[ -t 0 && -t 1 ]]
 }
 
@@ -76,7 +78,7 @@ prompt_confirm() {
     local default="${2:-n}"
     
     # Non-interactive: use default
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         [[ "${default,,}" == "y"* ]] && return 0
         return 1
     fi
@@ -123,7 +125,7 @@ prompt_input() {
     local default="${2:-}"
     
     # Non-interactive: use default
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -151,7 +153,7 @@ prompt_password() {
     local message="${1:-Password:}"
     
     # Non-interactive: read from stdin anyway (for piped input)
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         local password
         read -r password
         echo "$password"
@@ -177,7 +179,7 @@ prompt_validated() {
     local default="${4:-}"
     
     # Non-interactive: return default (may not be valid, but that's the user's problem)
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -217,7 +219,7 @@ prompt_int() {
     error_msg+="."
     
     # Non-interactive
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "${default:-0}"
         return 0
     fi
@@ -266,7 +268,7 @@ prompt_select() {
     fi
     
     # Non-interactive: return first option
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "${options[0]}"
         return 0
     fi
@@ -311,7 +313,7 @@ prompt_menu() {
     fi
     
     # Non-interactive or no cursor control: fall back to numbered select
-    if ! _prompt_is_interactive || [[ "${TERM:-}" == "dumb" ]]; then
+    if ! prompt_interactive || [[ "${TERM:-}" == "dumb" ]]; then
         prompt_select "$message" "${options[@]}"
         return $?
     fi
@@ -394,7 +396,7 @@ prompt_multiselect() {
     fi
     
     # Non-interactive: return all options
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         printf '%s\n' "${options[@]}"
         return 0
     fi
@@ -488,7 +490,7 @@ prompt_file() {
     local default="${2:-}"
     local must_exist="${3:-false}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -519,7 +521,7 @@ prompt_dir() {
     local default="${2:-}"
     local must_exist="${3:-false}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -548,7 +550,7 @@ prompt_dir() {
 prompt_pause() {
     local message="${1:-Press any key to continue...}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         return 0
     fi
     
@@ -565,7 +567,7 @@ prompt_countdown() {
     local seconds="${1:-5}"
     local message="${2:-Continuing in}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         sleep "$seconds"
         return 0
     fi
@@ -593,7 +595,7 @@ prompt_choice() {
     local option1="${2:-a}"
     local option2="${3:-b}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$option1"
         return 0
     fi
@@ -627,23 +629,10 @@ prompt_choice() {
 # Public API - Utility Functions
 # -----------------------------------------------------------------------------
 
-#[pub]
-# Check if running in interactive mode
-# Usage: prompt_interactive -> returns 0 if interactive, 1 otherwise
-prompt_interactive() {
-    _prompt_is_interactive
-}
-
-#[pub]
-# Set the timeout for prompts (0 = no timeout)
-# Usage: prompt_set_timeout 30 -> sets 30 second timeout
-prompt_set_timeout() {
-    PROMPT_TIMEOUT="${1:-0}"
-}
-
-#[pub]
-# Set default value for confirm prompts in non-interactive mode
-# Usage: prompt_set_default_confirm "y" -> defaults to yes
-prompt_set_default_confirm() {
-    PROMPT_DEFAULT_CONFIRM="${1:-n}"
-}
+# Configuration is the variables, listed in this module's header:
+#
+#     PROMPT_TIMEOUT=30
+#     PROMPT_DEFAULT_CONFIRM=y
+#
+# The setters that stood here assigned one of them with a default and did
+# nothing else, so the module offered two ways to say one thing.

@@ -16,19 +16,19 @@ readonly _NUTSHELL_CORE_STRING_SH=1
 # Public API
 # -----------------------------------------------------------------------------
 
-#[pub]
 #[allow(trivial_wrapper)]
 # Convert string to lowercase
 # Usage: str_lower "HELLO" -> "hello"
+#[pub]
 str_lower() {
     local str="${1:-}"
     echo "${str,,}"
 }
 
-#[pub]
 #[allow(trivial_wrapper)]
 # Convert string to uppercase
 # Usage: str_upper "hello" -> "HELLO"
+#[pub]
 str_upper() {
     local str="${1:-}"
     echo "${str^^}"
@@ -151,10 +151,10 @@ str_join() {
     echo "$result"
 }
 
-#[pub]
 #[allow(trivial_wrapper)]
 # Get string length
 # Usage: str_length "hello" -> 5
+#[pub]
 str_length() {
     local str="${1:-}"
     echo "${#str}"

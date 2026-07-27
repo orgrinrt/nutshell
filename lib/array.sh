@@ -83,10 +83,10 @@ arr_reverse() {
     done
 }
 
-#[pub]
 #[allow(trivial_wrapper)]
 # Get array length
 # Usage: arr_length "${arr[@]}" -> prints count
+#[pub]
 arr_length() {
     echo "$#"
 }

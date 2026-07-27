@@ -36,7 +36,7 @@ NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/examples/configs/empty.nut.toml"
 # dependency from the module-contract check, which reads `use` lines. A module
 # that loads its dependencies invisibly is exactly the case that check exists
 # to catch, so the framework running it must not be the one exception.
-use os log fs string validate toml
+use os log fs string validate toml attr
 
 # =============================================================================
 # PATHS - Determined after config is loaded
@@ -187,10 +187,9 @@ cfg_section_exists() {
     return 1
 }
 
-#[pub]
-# DISABLED_ANNOTATION
 # Check if a test is enabled
 # Usage: cfg_test_enabled "syntax"
+#[pub]
 cfg_test_enabled() {
     local test_name="$1"
     cfg_is_true "tests.${test_name}"
@@ -490,32 +489,44 @@ get_script_files() {
 # Check if a function has a specific annotation
 #[pub]
 # Usage: has_annotation "file" "func_name" "annotation_pattern" -> returns 0/1
+# has_annotation <file> <function> <annotation>
+#
+# Whether that definition carries that annotation.
+#
+# Through the attr module, which is what reads attributes. The shape here was a
+# grep of the ten lines above the definition for `#.*${annotation}`, with the
+# annotation interpolated into an extended regular expression. `#[pub]` is a
+# valid ERE that matches a `#`, then anything, then a `#`, then one character
+# out of p, u and b, so it matched almost nothing it was meant to and the odd
+# thing it was not. Every function in the library was marked and every one of
+# them still counted as unannotated.
+#
+# The window was a second, quieter bug: ten lines is enough for a terse
+# function and not for a documented one, so whether an annotation was seen
+# depended on how much prose sat under it.
 has_annotation() {
-    local file="$1"
-    local func_name="$2"
-    local annotation="$3"
-    
-    # Find the line number of the function definition
+    local file="$1" func_name="$2" annotation="$3"
+
+    # The configured form is the written form, `#[pub]`. attr works in names.
+    local name="$annotation"
+    if [[ "$annotation" =~ ^#\[([a-z_][a-z0-9_]*)\]$ ]]; then
+        name="${BASH_REMATCH[1]}"
+        attr_has "$file" "$func_name" "$name"
+        return $?
+    fi
+
+    # Anything not in attribute shape is matched literally as a whole line, so
+    # a project naming its own marker still works and no metacharacter in it is
+    # read as one.
     local line_num
     line_num=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    
-    if [[ -z "$line_num" ]]; then
-        # Try alternate function syntax
-        line_num=$(grep -n "^[[:space:]]*function[[:space:]]\+${func_name}[[:space:]]*(" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    fi
-    
-    [[ -z "$line_num" ]] && return 1
-    [[ "$line_num" -lt 1 ]] && return 1
-    
-    # Check the 10 lines before the function definition
+    [[ -z "$line_num" || "$line_num" -lt 1 ]] && return 1
+
     local start_line=$((line_num - 10))
     [[ $start_line -lt 1 ]] && start_line=1
-    
-    if sed -n "${start_line},${line_num}p" "$file" 2>/dev/null | grep -qE "#.*${annotation}"; then
-        return 0
-    fi
-    
-    return 1
+    sed -n "${start_line},${line_num}p" "$file" 2>/dev/null \
+        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+        | grep -qxF -- "$annotation"
 }
 
 # Check if function has any of the configured exempt annotations for trivial wrappers

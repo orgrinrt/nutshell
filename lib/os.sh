@@ -46,10 +46,10 @@ os_is_windows() {
     esac
 }
 
-#[pub]
 #[allow(trivial_wrapper)]
 # Returns the CPU architecture: x86_64|arm64|i686|armv7l|...
 # Usage: os_arch -> "x86_64" | "arm64" | "i686" | "armv7l" | ...
+#[pub]
 os_arch() {
     uname -m
 }

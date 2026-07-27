@@ -518,20 +518,18 @@ http_upload() {
 # -----------------------------------------------------------------------------
 # Public API - Configuration
 # -----------------------------------------------------------------------------
-
-#[pub]
-# Set HTTP timeout in seconds
-# Usage: http_set_timeout 60
-http_set_timeout() {
-    HTTP_TIMEOUT="${1:-30}"
-}
-
-#[pub]
-# Set custom user agent
-# Usage: http_set_user_agent "MyApp/1.0"
-http_set_user_agent() {
-    HTTP_USER_AGENT="${1:-nutshell-http/1.0}"
-}
+#
+# Configuration is the variables, listed in this module's header. The setters
+# that stood here, `http_set_timeout` and friends, assigned one of them with a
+# default and did nothing else, so the module offered two ways to say one thing
+# and the reader had to learn both to be sure they agreed.
+#
+#     HTTP_TIMEOUT=60
+#     HTTP_USER_AGENT="MyApp/1.0"
+#     HTTP_MAX_REDIRECTS=5
+#
+# `http_follow_redirects` stays, because it does something an assignment does
+# not: it takes true and false and 1 and 0, and the variable holds only 1 or 0.
 
 #[pub]
 # Enable or disable following redirects
@@ -543,13 +541,6 @@ http_follow_redirects() {
     else
         HTTP_FOLLOW_REDIRECTS=0
     fi
-}
-
-#[pub]
-# Set maximum number of redirects to follow
-# Usage: http_max_redirects 5
-http_max_redirects() {
-    HTTP_MAX_REDIRECTS="${1:-10}"
 }
 
 # -----------------------------------------------------------------------------

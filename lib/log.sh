@@ -13,8 +13,7 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_LOG_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_LOG_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Configuration

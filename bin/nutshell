@@ -2,146 +2,52 @@
 # =============================================================================
 # nutshell - Interpreter for #!/usr/bin/env nutshell scripts
 # =============================================================================
-# This allows scripts to use the shebang:
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# A script starting with
+#
 #   #!/usr/bin/env nutshell
 #
-# When used as a shebang interpreter, this script:
-#   1. Sets up the nutshell environment
-#   2. Defines the 'use' function
-#   3. Sources the user's script
+# is run by this, which sets the environment up and sources it, so `use` is
+# available from its first line and the script needs no bootstrap of its own.
 #
-# Can also be used as a CLI:
-#   nutshell <script.sh>     Run a script with nutshell environment
-#   nutshell --version       Show version
-#   nutshell --help          Show help
+# Also a small CLI:
 #
+#   nutshell <script>       run a script with the nutshell environment
+#   nutshell --version      print the version
+#   nutshell --help         what is here
+#
+# The environment itself comes from `init`, sourced below rather than repeated.
+# This file used to carry its own copy of `use`, `nut_once` and the loaded-module
+# table, and the two had already drifted: the copy here had lost the module
+# error tracking, so which one you got depended on whether a script was run
+# through the shebang or sourced `init` directly.
 # =============================================================================
 
 set -uo pipefail
 
-# =============================================================================
-# Resolve our location
-# =============================================================================
-
-# Handle symlinks and find the real location
+# The shebang line names whatever is on PATH, which is normally a symlink into
+# a checkout. Follow it to the real file, because the library sits next to it.
 _resolve_path() {
-    local path="$1"
+    local path="$1" dir
     while [[ -L "$path" ]]; do
-        local dir="$(cd "$(dirname "$path")" && pwd)"
+        dir="$(cd "$(dirname "$path")" && pwd)"
         path="$(readlink "$path")"
         [[ "$path" != /* ]] && path="$dir/$path"
     done
-    echo "$path"
+    printf '%s' "$path"
 }
 
 _SELF="$(_resolve_path "${BASH_SOURCE[0]}")"
 _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-_NUTSHELL_ROOT="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
+_NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
 
-# =============================================================================
-# Environment setup
-# =============================================================================
-
-export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
-export NUTSHELL_VERSION="0.1.0"
-export PATH="${_NUTSHELL_BIN_DIR}:$PATH"
-
-# Track loaded modules
-declare -gA _NUTSHELL_LOADED=() 2>/dev/null || declare -A _NUTSHELL_LOADED=()
-
-# nut_once
-#
-# The include guard, deriving its own key from the file that calls it, so a
-# module says `nut_once || return 0` instead of inventing a unique variable
-# name and typing it twice. The name was always computable from the path; the
-# only reason it was written by hand is that nothing offered to compute it.
-#
-# Returns 0 the first time a given file calls it, non-zero after, so the idiom
-# reads as "carry on, or stop".
-# nut_requires <module...>
-#
-# What this module needs, declared and loaded in one act so the two cannot
-# drift. `use` at the top of a script says what a *script* wants; this says
-# what a *module* cannot work without.
-#
-# The distinction is not decorative. `toml.sh` called `str_trim` for its whole
-# life while declaring nothing, so `toml_get` worked or failed depending on
-# whether something else had loaded `string` first. Nothing reported it,
-# because from inside bash a function that is present is present.
-#
-# Declaring it here makes the dependency load, and makes it checkable: the
-# module-contract check reads these and fails on a cross-module call that no
-# declaration covers. That is as close to sourcing without leaks as one global
-# function table permits, and it is honest about being a check rather than an
-# isolation boundary.
-nut_requires() {
-    use "$@"
+# shellcheck source=/dev/null
+source "${_NUTSHELL_HOME}/init" || {
+    echo "nutshell: cannot load ${_NUTSHELL_HOME}/init" >&2
+    exit 1
 }
-
-nut_once() {
-    local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
-    local key="_NUT_ONCE_${src//[^A-Za-z0-9]/_}"
-    [[ -n "${!key:-}" ]] && return 1
-    printf -v "$key" '%s' 1
-    return 0
-}
-
-# The 'use' function - loads modules
-use() {
-    local mod
-    for mod in "$@"; do
-        [[ -n "${_NUTSHELL_LOADED[$mod]:-}" ]] && continue
-        
-        # A namespaced module comes from a library declared in nut.toml, so
-        # resolution goes through extern rather than nutshell's own lib.
-        local mod_path
-        if [[ "$mod" == *"::"* ]]; then
-            use extern || return 1
-            mod_path="$(extern_resolve "$mod")" || return 1
-        else
-            mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
-        fi
-        if [[ -f "$mod_path" ]]; then
-            # Marked before sourcing, not after. A module that declares its own
-            # dependencies can be part of a cycle, and marking afterwards means
-            # neither module in one is ever recorded as loaded while it is being
-            # loaded, so the pair recurses until the stack gives out. Marking
-            # first makes the second entry a no-op, which is what "already
-            # loading" should mean.
-            _NUTSHELL_LOADED[$mod]=1
-            if ! source "$mod_path"; then
-                # Failed to load, so it is not loaded. Leaving the mark would
-                # make a later retry silently succeed against a module that was
-                # never sourced.
-                unset "_NUTSHELL_LOADED[$mod]"
-                return 1
-            fi
-        else
-            echo "nutshell: unknown module '$mod'" >&2
-            return 1
-        fi
-    done
-}
-export -f use
-
-# Check if module is loaded
-nutshell_loaded() {
-    [[ -n "${_NUTSHELL_LOADED[$1]:-}" ]]
-}
-export -f nutshell_loaded
-
-# List loaded modules
-nutshell_modules() {
-    local mod
-    for mod in "${!_NUTSHELL_LOADED[@]}"; do
-        echo "$mod"
-    done | sort
-}
-export -f nutshell_modules
-
-# =============================================================================
-# CLI handling
-# =============================================================================
 
 _show_help() {
     cat <<EOF
@@ -158,19 +64,11 @@ As a shebang:
   log_info "Hello!"
 
 Available modules:
-  $(ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | tr '\n' ' ')
+  $(nutshell_available | tr '\n' ' ')
 
 For more information: https://github.com/orgrinrt/nutshell
 EOF
 }
-
-_show_version() {
-    echo "nutshell ${NUTSHELL_VERSION}"
-}
-
-# =============================================================================
-# Main
-# =============================================================================
 
 case "${1:-}" in
     --help|-h)
@@ -178,7 +76,7 @@ case "${1:-}" in
         exit 0
         ;;
     --version|-v)
-        _show_version
+        echo "nutshell ${NUTSHELL_VERSION}"
         exit 0
         ;;
     "")
@@ -186,16 +84,17 @@ case "${1:-}" in
         exit 1
         ;;
     *)
-        # Run the script
         _SCRIPT="$1"
         shift
-        
+
         if [[ ! -f "$_SCRIPT" ]]; then
             echo "nutshell: script not found: $_SCRIPT" >&2
             exit 1
         fi
-        
-        # Source the script (so it runs in our environment with 'use' available)
+
+        # Sourced, not executed, so the script runs in this environment with
+        # `use` already defined.
+        # shellcheck source=/dev/null
         source "$_SCRIPT"
         ;;
 esac

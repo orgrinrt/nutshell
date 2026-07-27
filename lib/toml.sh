@@ -13,8 +13,7 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_TOML_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_TOML_SH=1
+nut_once || return 0
 
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the

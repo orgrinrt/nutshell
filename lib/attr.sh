@@ -38,8 +38,7 @@
 #   attr_find lib/foo.sh    test          # every definition marked #[test]
 # =============================================================================
 
-[[ -n "${_NUTSHELL_LIB_ATTR_SH:-}" ]] && return 0
-readonly _NUTSHELL_LIB_ATTR_SH=1
+nut_once || return 0
 
 # The shape of an attribute line: optional indent, `#[`, a name, an optional
 # parenthesised argument, `]`. Anything else is an ordinary comment.

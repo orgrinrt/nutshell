@@ -35,8 +35,7 @@
 #   TEST_FILTER - only run tests whose name contains this
 # =============================================================================
 
-[[ -n "${_NUTSHELL_LIB_TEST_SH:-}" ]] && return 0
-readonly _NUTSHELL_LIB_TEST_SH=1
+nut_once || return 0
 
 use attr log fs
 

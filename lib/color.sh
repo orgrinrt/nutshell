@@ -20,8 +20,7 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_COLOR_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_COLOR_SH=1
+nut_once || return 0
 
 # =============================================================================
 # Color Support Detection

@@ -9,8 +9,7 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_ARRAY_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_ARRAY_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Public API

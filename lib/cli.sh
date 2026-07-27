@@ -29,8 +29,7 @@
 #                      which is EX_USAGE from sysexits.h)
 # =============================================================================
 
-[[ -n "${_NUTSHELL_LIB_CLI_SH:-}" ]] && return 0
-readonly _NUTSHELL_LIB_CLI_SH=1
+nut_once || return 0
 
 CLI_EXIT_UNKNOWN="${CLI_EXIT_UNKNOWN:-64}"
 

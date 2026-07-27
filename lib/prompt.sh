@@ -18,8 +18,7 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_PROMPT_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_PROMPT_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Dependencies

@@ -25,8 +25,7 @@
 #   git_changed_files "$base" | while read -r f; do ...; done
 # =============================================================================
 
-[[ -n "${_NUTSHELL_LIB_GIT_SH:-}" ]] && return 0
-readonly _NUTSHELL_LIB_GIT_SH=1
+nut_once || return 0
 
 use log
 

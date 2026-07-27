@@ -49,8 +49,7 @@
 #   MODGRAPH_NOCACHE - set to 1 to rebuild every time (for developing a check)
 # =============================================================================
 
-[[ -n "${_NUTSHELL_LIB_MODGRAPH_SH:-}" ]] && return 0
-readonly _NUTSHELL_LIB_MODGRAPH_SH=1
+nut_once || return 0
 
 use fs xdg log deps
 

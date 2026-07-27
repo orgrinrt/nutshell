@@ -37,8 +37,7 @@
 #   extern_resolve shebang/diagnostics/findings
 # =============================================================================
 
-[[ -n "${_NUTSHELL_LIB_EXTERN_SH:-}" ]] && return 0
-readonly _NUTSHELL_LIB_EXTERN_SH=1
+nut_once || return 0
 
 use toml xdg fs log validate
 

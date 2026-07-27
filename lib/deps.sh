@@ -191,17 +191,24 @@ _deps_find_tool() {
 # Internal: Variant detection
 # -----------------------------------------------------------------------------
 
+# A probe never reads stdin.
+#
+# Detection runs a tool with a flag it may not recognise, and a tool given an
+# unrecognised flag can fall back to reading a program or a file from standard
+# input. When standard input is a terminal, or a pipe nothing ever closes, the
+# probe waits there forever and the whole script appears to hang after having
+# already printed its output. Closing stdin costs nothing and removes the class.
 _deps_detect_sed_variant() {
     local cmd="$1"
     
     # GNU sed has --version
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi
     
     # BSD sed errors on --version
-    if "$cmd" --version 2>&1 | grep -qE "(illegal|invalid) option"; then
+    if "$cmd" --version </dev/null 2>&1 | grep -qE "(illegal|invalid) option"; then
         echo "bsd"
         return
     fi
@@ -213,13 +220,13 @@ _deps_detect_awk_variant() {
     local cmd="$1"
     
     # GNU awk (gawk)
-    if "$cmd" --version 2>/dev/null | grep -qi "GNU Awk"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -qi "GNU Awk"; then
         echo "gawk"
         return
     fi
     
     # mawk
-    if "$cmd" -W version 2>/dev/null | grep -qi "mawk"; then
+    if "$cmd" -W version </dev/null 2>/dev/null | grep -qi "mawk"; then
         echo "mawk"
         return
     fi
@@ -237,7 +244,7 @@ _deps_detect_awk_variant() {
 _deps_detect_grep_variant() {
     local cmd="$1"
     
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi
@@ -249,13 +256,13 @@ _deps_detect_stat_variant() {
     local cmd="$1"
     
     # GNU stat has --version
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi
     
     # BSD stat uses -f for format
-    if "$cmd" -f%z / 2>/dev/null >/dev/null; then
+    if "$cmd" -f%z / </dev/null 2>/dev/null >/dev/null; then
         echo "bsd"
         return
     fi
@@ -266,7 +273,7 @@ _deps_detect_stat_variant() {
 _deps_detect_find_variant() {
     local cmd="$1"
     
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi

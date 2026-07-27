@@ -34,6 +34,17 @@
 #   modgraph_calls     toml              # prefixed functions toml invokes
 #   modgraph_owner     str_trim          # which module defines it
 #
+# Portability: the scan is one awk program, written to POSIX awk only, so it
+# runs the same under gawk, mawk, BSD awk and busybox awk. Nothing here reaches
+# for a GNU extension, because the one place a module graph is most useful is a
+# machine somebody else set up.
+#
+# The constructs used are all POSIX: bracket character classes, ERE grouping,
+# `match` with RSTART and RLENGTH, `sub`, `gsub`, `split`, `substr`, `printf`.
+# `for (k in array)` is POSIX too, though its order is unspecified, so the
+# serialised graph may list a module's functions differently between awks. That
+# changes the cache file's bytes and nothing about its meaning.
+#
 # Environment:
 #   MODGRAPH_NOCACHE - set to 1 to rebuild every time (for developing a check)
 # =============================================================================
@@ -41,12 +52,18 @@
 [[ -n "${_NUTSHELL_LIB_MODGRAPH_SH:-}" ]] && return 0
 readonly _NUTSHELL_LIB_MODGRAPH_SH=1
 
-use fs xdg log
+use fs xdg log deps
+
+# awk does the whole scan, so its absence is not a degraded mode to fall back
+# from. Said once, here, rather than discovered as an empty graph later.
+deps_require awk "modgraph needs awk to read a library" || return 1
 
 declare -gA _MG_DECLARES=()
 declare -gA _MG_DEFINES=()
 declare -gA _MG_CALLS=()
 declare -gA _MG_OWNER=()
+# Visibility per function: `pub`, `lib`, or absent for module-private.
+declare -gA _MG_VIS=()
 declare -ga _MG_MODULES=()
 _MG_ROOT=""
 
@@ -79,28 +96,82 @@ _mg_cache_file() {
 # Reading a module
 # -----------------------------------------------------------------------------
 
-# _mg_scan <file> -> declares|defines|calls, one section per line
+# _mg_scan <file> -> four tab-separated sections
 #
-# One pass, three collections. Comments are stripped first so that a line
-# discussing `use foo` does not read as one performing it, which is the same
-# distinction that decides whether a repository looks contaminated.
+# One awk pass per file. The shape this replaced asked the file a question at a
+# time: a sed, then three grep pipelines, then `attr_has` and `attr_arg` for
+# every function found, each of which read the whole file again in bash. Around
+# seven hundred full reads for a library this size, and the analysis is a
+# single linear scan of the text.
+#
+# Attributes are tracked as pending state as the scan walks, which is the same
+# thing `attr_on` does, done once for every definition rather than once per
+# definition per query.
 _mg_scan() {
-    local file="$1"
-    local body
-    body="$(sed -e 's/#.*$//' "$file" 2>/dev/null)"
+    awk '
+        # An attribute line: remember it, do not clear anything.
+        /^[[:space:]]*#\[[a-z_][a-z0-9_]*(\(.*\))?\][[:space:]]*$/ {
+            line = $0
+            sub(/^[[:space:]]*#\[/, "", line)
+            sub(/\][[:space:]]*$/, "", line)
+            name = line; arg = ""
+            if (match(line, /\(.*\)$/)) {
+                arg  = substr(line, RSTART + 1, RLENGTH - 2)
+                name = substr(line, 1, RSTART - 1)
+            }
+            if (name == "pub") pending_pub = (arg == "" ? "pub" : arg)
+            next
+        }
 
-    printf 'declares\t%s\n' "$(printf '%s\n' "$body" \
-        | grep -oE '^[[:space:]]*use[[:space:]]+[a-z0-9_ -]+' \
-        | sed -E 's/^[[:space:]]*use[[:space:]]+//' | tr ' ' '\n' \
-        | grep -v '^$' | sort -u | tr '\n' ' ')"
+        # A declaration of intent.
+        /^[[:space:]]*use[[:space:]]+/ {
+            line = $0
+            sub(/^[[:space:]]*use[[:space:]]+/, "", line)
+            sub(/#.*$/, "", line)
+            n = split(line, parts, /[[:space:]]+/)
+            for (i = 1; i <= n; i++) if (parts[i] != "") declares[parts[i]] = 1
+            next
+        }
 
-    printf 'defines\t%s\n' "$(printf '%s\n' "$body" \
-        | grep -oE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\(\)' \
-        | sed -E 's/[[:space:]]*//; s/\(\)//' | sort -u | tr '\n' ' ')"
+        # A definition. Consumes whatever attributes were pending.
+        /^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\(\)/ {
+            fn = $0
+            sub(/^[[:space:]]*/, "", fn)
+            sub(/\(\).*$/, "", fn)
+            defines[fn] = 1
+            if (pending_pub != "") vis[fn] = pending_pub
+            pending_pub = ""
+        }
 
-    printf 'calls\t%s\n' "$(printf '%s\n' "$body" \
-        | grep -oE '\b_?[a-z][a-z0-9]*_[a-z0-9_]+\b' \
-        | sort -u | tr '\n' ' ')"
+        # Prose and blank lines do not break a run of attributes; anything else
+        # does, so a stray marker cannot drift onto an unrelated definition.
+        {
+            stripped = $0
+            gsub(/[[:space:]]/, "", stripped)
+            if (stripped != "" && $0 !~ /^[[:space:]]*#/) pending_pub = ""
+        }
+
+        # Every module-prefixed call, from the code with comments removed.
+        {
+            code = $0
+            sub(/#.*$/, "", code)
+            while (match(code, /_?[a-z][a-z0-9]*_[a-z0-9_]+/)) {
+                calls[substr(code, RSTART, RLENGTH)] = 1
+                code = substr(code, RSTART + RLENGTH)
+            }
+        }
+
+        END {
+            d = ""; for (k in declares) d = d k " "
+            f = ""; for (k in defines)  f = f k " "
+            c = ""; for (k in calls)    c = c k " "
+            v = ""; for (k in vis)      v = v k "=" vis[k] " "
+            printf "declares\t%s\n", d
+            printf "defines\t%s\n",  f
+            printf "calls\t%s\n",    c
+            printf "vis\t%s\n",      v
+        }
+    ' "$1" 2>/dev/null
 }
 
 # -----------------------------------------------------------------------------
@@ -108,7 +179,7 @@ _mg_scan() {
 # -----------------------------------------------------------------------------
 
 _mg_reset() {
-    _MG_DECLARES=(); _MG_DEFINES=(); _MG_CALLS=(); _MG_OWNER=(); _MG_MODULES=()
+    _MG_DECLARES=(); _MG_DEFINES=(); _MG_CALLS=(); _MG_OWNER=(); _MG_VIS=(); _MG_MODULES=()
 }
 
 _mg_analyse() {
@@ -122,13 +193,21 @@ _mg_analyse() {
                 declares) _MG_DECLARES[$mod]="$values" ;;
                 defines)  _MG_DEFINES[$mod]="$values" ;;
                 calls)    _MG_CALLS[$mod]="$values" ;;
+                vis)      _MG_VISRAW="$values" ;;
             esac
         done < <(_mg_scan "$file")
 
-        local fn
+        local fn pair
         for fn in ${_MG_DEFINES[$mod]:-}; do
             _MG_OWNER[$fn]="$mod"
         done
+        # Visibility is read from the file rather than inferred from the name.
+        # A leading underscore is a convention people follow most of the time,
+        # and "most of the time" is not something a resolver can be built on.
+        for pair in ${_MG_VISRAW:-}; do
+            _MG_VIS[${pair%%=*}]="${pair#*=}"
+        done
+        _MG_VISRAW=""
     done
 }
 
@@ -137,6 +216,10 @@ _mg_serialise() {
     for mod in "${_MG_MODULES[@]}"; do
         printf 'M\t%s\t%s\t%s\t%s\n' "$mod" \
             "${_MG_DECLARES[$mod]:-}" "${_MG_DEFINES[$mod]:-}" "${_MG_CALLS[$mod]:-}"
+        local fn
+        for fn in ${_MG_DEFINES[$mod]:-}; do
+            [[ -n "${_MG_VIS[$fn]:-}" ]] && printf 'V\t%s\t%s\n' "$fn" "${_MG_VIS[$fn]}"
+        done
     done
 }
 
@@ -144,6 +227,10 @@ _mg_load() {
     local file="$1" tag mod declares defines calls fn
     _mg_reset
     while IFS=$'\t' read -r tag mod declares defines calls; do
+        if [[ "$tag" == "V" ]]; then
+            _MG_VIS[$mod]="$declares"
+            continue
+        fi
         [[ "$tag" == "M" ]] || continue
         _MG_MODULES+=("$mod")
         _MG_DECLARES[$mod]="$declares"
@@ -203,6 +290,15 @@ modgraph_calls() { printf '%s' "${_MG_CALLS[$1]:-}"; }
 # Usage: modgraph_owner str_trim -> prints the module defining it, if any
 modgraph_owner() { printf '%s' "${_MG_OWNER[$1]:-}"; }
 
+# modgraph_visibility <function>
+#
+# `pub` when consumers may call it, `lib` when only other modules in the same
+# library may, and nothing at all when it is module-private.
+#
+# @@PUBLIC_API@@
+# Usage: modgraph_visibility str_trim -> prints "pub", "lib", or nothing
+modgraph_visibility() { printf '%s' "${_MG_VIS[$1]:-}"; }
+
 # -----------------------------------------------------------------------------
 # Cycles
 # -----------------------------------------------------------------------------
@@ -245,4 +341,94 @@ modgraph_cycle() {
     [[ -z "$found" ]] && return 1
     printf '%s' "${found# -> }"
     return 0
+}
+
+# -----------------------------------------------------------------------------
+# The audit
+# -----------------------------------------------------------------------------
+
+# modgraph_audit
+#
+# Every violation the graph can see, one per line, in a single pass:
+#
+#   cycle       <path>                  the declaration graph loops
+#   undeclared  <module> <fn> <owner>   a cross-module call with no `use`
+#   private     <module> <fn> <owner>   a call to something not visible here
+#   unreachable <module>                nothing uses it and it exports nothing
+#
+# One pass and direct reads, because the obvious shape is not viable. Asking
+# the accessors question by question means a command substitution per call
+# site, and a library of this size has around nine hundred of them: the forks
+# cost more than the analysis. Reachability written as "for each module, scan
+# every other" is quadratic on top of that. Here the used-set is built once and
+# membership is a lookup.
+#
+# What it cannot see, stated plainly so nobody reads silence as approval:
+#
+#   - dynamic calls. `$cmd arg` or `eval` resolve at runtime and no pass over
+#     the text will know what they name.
+#   - functions a caller supplies. A module taking a callback calls something
+#     this library never defines, which is indistinguishable from a builtin.
+#   - whether a declared dependency is actually needed. An unused `use` is
+#     harmless and invisible here.
+#   - anything about a module that failed to parse. A file is text to this.
+#
+# @@PUBLIC_API@@
+# Usage: modgraph_audit -> prints violations, one per line. Returns 1 if any.
+modgraph_audit() {
+    local found=0 mod fn owner vis declared
+    local -A used=()
+
+    local cycle
+    if cycle="$(modgraph_cycle)"; then
+        printf 'cycle\t%s\n' "$cycle"
+        found=1
+    fi
+
+    # One pass for the used-set, so reachability is a lookup rather than a
+    # second nested walk.
+    for mod in "${_MG_MODULES[@]}"; do
+        for fn in ${_MG_DECLARES[$mod]:-}; do
+            used[$fn]=1
+        done
+    done
+
+    for mod in "${_MG_MODULES[@]}"; do
+        declared=" ${_MG_DECLARES[$mod]:-} "
+
+        for fn in ${_MG_CALLS[$mod]:-}; do
+            owner="${_MG_OWNER[$fn]:-}"
+            # Undefined in this library: a builtin, an external command, or a
+            # function the caller supplies. Not ours to judge.
+            [[ -z "$owner" || "$owner" == "$mod" ]] && continue
+
+            if [[ "$declared" != *" $owner "* ]]; then
+                printf 'undeclared\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
+                found=1
+            fi
+
+            vis="${_MG_VIS[$fn]:-}"
+            if [[ "$vis" != "pub" && "$vis" != "lib" ]]; then
+                printf 'private\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
+                found=1
+            fi
+        done
+    done
+
+    for mod in "${_MG_MODULES[@]}"; do
+        [[ -n "${used[$mod]:-}" ]] && continue
+        # Nothing declares it. That alone is fine: a module consumers load
+        # directly is exactly what a library is for. It is unreachable only if
+        # it also exports nothing.
+        local exported=0
+        for fn in ${_MG_DEFINES[$mod]:-}; do
+            [[ -n "${_MG_VIS[$fn]:-}" ]] && { exported=1; break; }
+        done
+        if [[ "$exported" -eq 0 ]]; then
+            printf 'unreachable\t%s\n' "$mod"
+            found=1
+        fi
+    done
+
+    return $(( found ))
 }

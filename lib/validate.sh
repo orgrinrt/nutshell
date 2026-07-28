@@ -140,7 +140,21 @@ is_url() {
 # Usage: is_email "user@example.com" -> returns 0 (true)
 is_email() {
     local val="${1:-}"
-    [[ "$val" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
+    [[ "$val" == *@* ]] || return 1
+
+    local local_part="${val%@*}" domain="${val##*@}"
+
+    # More than one @, or nothing on one side of it.
+    [[ "$local_part" == *@* ]] && return 1
+    [[ -z "$local_part" || -z "$domain" ]] && return 1
+    [[ "$local_part" == *[[:space:]]* ]] && return 1
+
+    # The domain is a hostname, judged by the one function that knows what one
+    # is. The pattern this replaced matched `[^@[:space:]]+\.[^@[:space:]]+`,
+    # which accepts `b..c`: a dot can sit inside either half, so an empty label
+    # was invisible to it.
+    [[ "$domain" == *.* ]] || return 1
+    is_hostname "$domain"
 }
 
 #[pub]
@@ -179,6 +193,26 @@ is_ipv6() {
     # An address is eight groups. `::` stands for a run of all-zero groups and
     # may appear once, so with it there are at most seven written groups and
     # without it exactly eight.
+    # A single colon at either end is not an address. Word splitting drops a
+    # trailing empty field while the count keeps it, so `1:2:3:4:5:6:7:` came
+    # out as eight groups with seven of them checked, and `::1:` and `1::2:3:`
+    # went the same way. Checked here rather than left to the split.
+    [[ "$val" == :* && "$val" != ::* ]] && return 1
+    [[ "$val" == *: && "$val" != *:: ]] && return 1
+
+    # The IPv4-mapped form, `::ffff:192.168.1.1`. The dotted part is one
+    # address occupying the last two groups.
+    local mapped=0
+    if [[ "$val" == *.* ]]; then
+        local quad="${val##*:}"
+        is_ipv4 "$quad" || return 1
+        val="${val%:*}:"
+        mapped=2
+        # Trimming left a trailing colon that is not `::`; put the shape back
+        # so the rest reads it as a compression or as a separator.
+        [[ "$val" == *:: ]] || val="${val%:}"
+    fi
+
     local head tail
     if [[ "$val" == *::* ]]; then
         # Once only. `1::2::3` says nothing about where the zeroes go.
@@ -189,12 +223,12 @@ is_ipv6() {
         head="$val"
         tail=""
         # No `::`, so every one of the eight has to be written.
-        [[ "$(_v6_count "$head")" -eq 8 ]] || return 1
+        [[ $(( $(_v6_count "$head") + mapped )) -eq 8 ]] || return 1
         _v6_groups_ok "$head"
         return $?
     fi
 
-    local n=$(( $(_v6_count "$head") + $(_v6_count "$tail") ))
+    local n=$(( $(_v6_count "$head") + $(_v6_count "$tail") + mapped ))
     [[ "$n" -le 7 ]] || return 1
     _v6_groups_ok "$head" || return 1
     _v6_groups_ok "$tail"

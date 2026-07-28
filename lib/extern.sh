@@ -156,8 +156,8 @@ extern_path() {
     # whose mirror has been deleted is still a directory, and returning it
     # handed the caller a path that git refuses to answer any question about,
     # permanently, with nothing to do about it but find the cache by hand.
-    if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
-        [[ -e "$dir" ]] && { rm -rf "$dir"; git -C "$mirror" worktree prune 2>/dev/null; }
+    if ! _extern_is_repo "$dir"; then
+        [[ -e "$dir" ]] && git -C "$mirror" worktree prune 2>/dev/null
         _extern_guard "$dir" _extern_lay_out "$name" "$mirror" "$url" "$commit" "$dir" || return 1
     fi
 
@@ -192,42 +192,85 @@ _extern_lay_out() {
 
 _extern_key() { printf '%s' "$1" | cksum | tr -d ' '; }
 
+# _extern_is_repo <dir> -> 0 when that directory is a working git checkout
+#
+# The readiness test for everything here. Both a mirror and a worktree are
+# ready when git will answer a question about them, and neither is ready
+# merely by existing.
+_extern_is_repo() {
+    git -C "$1" rev-parse --git-dir >/dev/null 2>&1
+}
+
 # _extern_guard <dir> <command...>
 #
-# Run the command with one process at a time laying out that directory, and
-# only if it is still absent by the time this process wins.
+# Lay that directory out once, with one process doing it, and wait for whoever
+# is already doing it rather than joining in.
 #
 # The cache is shared, so several processes resolving at once is the ordinary
 # case rather than a corner: four of them on a cold cache had three fail with
-# "could not fetch", because `git clone` was writing into a directory another
-# clone was already populating.
+# "could not fetch", because git was cloning into a directory another clone was
+# already populating.
 #
-# `mkdir` is the lock. It is one syscall, it is atomic on every filesystem
-# worth the name, and it needs no tool beyond the shell. A stale lock older
-# than an hour is taken over, since the alternative is a cache that stays
-# wedged after one interrupted fetch.
+# Readiness is `_extern_is_repo`, never existence. Both defects this has had
+# were the same mistake in different places: a waiter that returned as soon as
+# the directory appeared handed back a path the winner was still writing into,
+# and a guard that skipped the work because the directory existed left an
+# interrupted fetch in place forever, since the empty directory it stopped for
+# was exactly the thing that needed repairing.
+#
+# A partial directory is removed rather than left. Whatever is in it is the
+# wreckage of a failed attempt, and keeping it only means the next call decides
+# there is nothing to do.
+#
+# `mkdir` is the lock: one syscall, atomic on any filesystem worth the name,
+# and no tool beyond the shell. A lock older than the wait is taken over, since
+# the alternative is a cache that stays wedged after one interrupted fetch.
+# Not readonly. A caller, and the tests in particular, has to be able to say
+# "do not wait eleven minutes for this one", and an assignment to a readonly
+# fails silently enough that the first version of that test simply sat through
+# the full wait.
+_EXTERN_LOCK_STALE_MINUTES="${_EXTERN_LOCK_STALE_MINUTES:-10}"
+_EXTERN_LOCK_WAIT_SECONDS="${_EXTERN_LOCK_WAIT_SECONDS:-660}"
+
 _extern_guard() {
     local dir="$1"; shift
     local lock="${dir}.lock" waited=0
 
     while ! mkdir "$lock" 2>/dev/null; do
-        if [[ -d "$lock" ]] && [[ -z "$(find "$lock" -maxdepth 0 -mmin -60 2>/dev/null)" ]]; then
+        # Ready means ready, so a waiter never returns a half-written tree.
+        _extern_is_repo "$dir" && return 0
+
+        # A lock nobody is holding. Taken over rather than waited on, because
+        # the process that made it is gone and nothing else will clear it.
+        if [[ -d "$lock" ]] &&
+           [[ -z "$(find "$lock" -maxdepth 0 -mmin "-${_EXTERN_LOCK_STALE_MINUTES}" 2>/dev/null)" ]]; then
             rm -rf "$lock"
             continue
         fi
+
         sleep 1
         waited=$((waited + 1))
-        if [[ "$waited" -ge 120 ]]; then
-            log_error "gave up waiting for another process to lay out ${dir}"
+        if [[ "$waited" -ge "$_EXTERN_LOCK_WAIT_SECONDS" ]]; then
+            log_error "waited ${waited}s for another process to lay out ${dir}"
+            log_error "if nothing else is running, remove ${lock}"
             return 1
         fi
-        # Somebody else finished it while this process waited.
-        [[ -e "$dir" ]] && return 0
     done
 
     local rc=0
-    if [[ ! -e "$dir" ]]; then
+    if ! _extern_is_repo "$dir"; then
+        # Anything already here is the wreckage of an attempt that did not
+        # finish, and git will not clone into a directory that is not empty.
+        [[ -e "$dir" ]] && rm -rf "$dir"
+
         "$@" || rc=$?
+
+        # The command reporting success is not the same as the directory being
+        # usable, and the difference is what a later call would inherit.
+        if [[ "$rc" -eq 0 ]] && ! _extern_is_repo "$dir"; then
+            rc=1
+            [[ -e "$dir" ]] && rm -rf "$dir"
+        fi
     fi
     rmdir "$lock" 2>/dev/null
     return "$rc"
@@ -250,7 +293,7 @@ _extern_guard() {
 _extern_mirror() {
     local name="$1" url="$2" ref="$3" dir
     dir="$(_extern_cache_root)/mirror-$(_extern_key "${url}@${ref}")"
-    [[ -d "$dir/.git" ]] && { printf '%s' "$dir"; return 0; }
+    _extern_is_repo "$dir" && { printf '%s' "$dir"; return 0; }
 
     # validate rather than deps: deps tracks the unix text tools and their
     # variants, and git is not one of those.

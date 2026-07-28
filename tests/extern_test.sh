@@ -213,3 +213,79 @@ it_relays_out_a_checkout_whose_mirror_is_gone() {
     dir="$(extern_path fixture)"
     assert_ok git -C "$dir" rev-parse --git-dir
 }
+
+#[test]
+it_repairs_a_mirror_left_without_a_repository() {
+    # An interrupted fetch leaves a directory that is not a checkout. The guard
+    # skipped the work because the path existed, and the empty directory it
+    # stopped for was exactly the thing that needed repairing, so every later
+    # call failed and nothing ever fixed it.
+    _isolate
+    local fix work mirror
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    extern_path fixture >/dev/null
+    mirror="$(printf '%s\n' "$(_extern_cache_root)"/mirror-*)"
+    rm -rf "${mirror}/.git"
+
+    assert_ok extern_path fixture
+    assert_ok git -C "$(extern_path fixture)" rev-parse --git-dir
+}
+
+#[test]
+it_makes_a_waiter_wait_for_a_finished_checkout() {
+    # The waiter returned as soon as the directory appeared, which is when the
+    # winner is still writing into it, so a caller could be handed a path with
+    # nothing in it yet.
+    _isolate
+    local fix work dir lock
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    # Stand where a winner would: the lock held, the target present but not a
+    # checkout. A waiter must not take that for done.
+    dir="$(_extern_cache_root)/pretend"
+    fs_mkdir "$dir"
+    lock="${dir}.lock"
+    fs_mkdir "$lock"
+
+    # It cannot return 0 here, so a short wait is enough to tell the two
+    # answers apart: the old shape returned immediately.
+    local rc=0
+    _EXTERN_LOCK_WAIT_SECONDS=2 _extern_guard "$dir" true || rc=$?
+    rmdir "$lock" 2>/dev/null
+
+    assert_ne "$rc" "0" "an unfinished directory is not a finished one"
+}
+
+#[test]
+it_resolves_a_namespaced_module_to_a_file() {
+    # What a namespaced `use` turns into. Kept separate from loading so the
+    # resolution can be asked about without sourcing anything.
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    assert_contains "$(extern_resolve 'fixture::greet')" "/lib/greet.sh"
+    assert_ok test -f "$(extern_resolve 'fixture::greet')"
+}
+
+#[test]
+it_refuses_a_module_the_library_does_not_have() {
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    assert_fails extern_resolve 'fixture::nothing_here'
+}
+
+#[test]
+it_refuses_a_spec_that_names_no_library() {
+    # A bare name is nutshell's own module, not an extern's, so this must not
+    # quietly resolve it against some library.
+    _isolate
+    assert_fails extern_resolve 'greet'
+}

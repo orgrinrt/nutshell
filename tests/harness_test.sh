@@ -77,3 +77,14 @@ it_fails_a_test_that_dies_part_way_through() {
     assert_contains "$out" "[FAIL] it_dies_part_way_through"
     assert_contains "$out" "did not finish"
 }
+
+#[test]
+it_does_not_charge_one_test_with_another_s_failure() {
+    # A test that forks leaves a child able to write to the tally after the
+    # runner has moved on. With one shared file the failure landed on whichever
+    # test ran next, so the guilty one passed and an innocent one failed.
+    local out
+    out="$(_harness_run "${FIXTURES}/harness_shapes_test.sh")"
+    assert_contains "$out" "[PASS] it_forks_a_child_that_fails_late"
+    assert_contains "$out" "[PASS] it_is_the_innocent_one_after_the_fork"
+}

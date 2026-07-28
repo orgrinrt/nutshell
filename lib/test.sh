@@ -166,14 +166,17 @@ assert_exits() {
 # Running
 # -----------------------------------------------------------------------------
 
-# _test_mark_file -> a path the subshells can append a failure to
+# _test_mark_dir -> a directory to keep one tally per test in
 #
-# One file for the whole run, truncated between tests, rather than one per
-# test: the runner has to clean up after itself either way, and a single path
-# is one thing to remove rather than a list to keep.
-_test_mark_file() {
-    [[ -n "${_TEST_MARK:-}" ]] && { printf '%s' "$_TEST_MARK"; return 0; }
-    fs_temp_file nutshell-test
+# One file per test, not one file truncated between them. The shared file was
+# smaller and it was wrong: a test that forks leaves a child able to write to
+# the tally after the runner has moved on, and the failure was charged to
+# whichever test came next. The guilty one passed and an innocent one failed.
+#
+# A directory is still one thing to remove at the end.
+_test_mark_dir() {
+    [[ -n "${_TEST_MARK_DIR:-}" ]] && { printf '%s' "$_TEST_MARK_DIR"; return 0; }
+    fs_temp_dir nutshell-test
 }
 
 #[pub]
@@ -183,14 +186,15 @@ test_run() {
     [[ -f "$file" ]] || { log_error "no test file: ${file}"; return 1; }
 
     local name output rc
-    _TEST_MARK="$(_test_mark_file)" || return 1
+    _TEST_MARK_DIR="$(_test_mark_dir)" || return 1
 
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
         [[ -n "${TEST_FILTER:-}" && "$name" != *"$TEST_FILTER"* ]] && continue
 
-        # Truncated per test, so one test's failures cannot be read as the
-        # next one's.
+        # Its own file, so nothing a previous test left behind, and nothing a
+        # previous test is still doing, can be read as this one's.
+        _TEST_MARK="${_TEST_MARK_DIR}/$(( _TEST_PASSED + _TEST_FAILED )).${name}"
         : > "$_TEST_MARK"
 
         # A subshell per test. Bash has one global namespace, so without this a
@@ -251,7 +255,7 @@ test_run_dir() {
 # Also the end of the run, so the mark file goes here. A trap would fire on
 # every subshell exit as well, and there is exactly one place the run is over.
 test_summary() {
-    [[ -n "${_TEST_MARK:-}" ]] && rm -f "$_TEST_MARK"
+    [[ -n "${_TEST_MARK_DIR:-}" ]] && rm -rf "$_TEST_MARK_DIR"
     printf '\n'
     if [[ "$_TEST_FAILED" -gt 0 ]]; then
         local f

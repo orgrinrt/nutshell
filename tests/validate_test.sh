@@ -139,3 +139,51 @@ it_answers_about_a_name_even_when_handed_a_value() {
     filled="x"
     assert_ok is_empty "$filled"
 }
+
+#[test]
+it_refuses_a_stray_colon_at_either_end() {
+    # Word splitting drops a trailing empty field while the count keeps it, so
+    # `1:2:3:4:5:6:7:` came out as eight groups with seven of them checked.
+    # Leading colons were already rejected; trailing were not.
+    assert_fails is_ipv6 "1:2:3:4:5:6:7:"
+    assert_fails is_ipv6 "::1:"
+    assert_fails is_ipv6 "1::2:3:"
+    assert_fails is_ipv6 ":1:2:3:4:5:6:7"
+    assert_fails is_ipv6 "1:2:3:4:5:6:7:8:9"
+}
+
+#[test]
+it_accepts_the_ipv4_mapped_form() {
+    # `::ffff:192.168.1.1` is an address, and the dotted part occupies the last
+    # two groups.
+    assert_ok is_ipv6 "::ffff:192.168.1.1"
+    assert_ok is_ipv6 "::192.168.1.1"
+    assert_fails is_ipv6 "::ffff:999.1.1.1"
+    assert_fails is_ipv6 "1:2:3:4:5:6:7:192.168.1.1"
+}
+
+#[test]
+it_refuses_a_zone_identifier() {
+    # `fe80::1%eth0` names an address and an interface. The interface is not
+    # part of the address, and nothing here is asked to strip it, so the whole
+    # string is not one. Pinned so the shape is a decision rather than an
+    # accident.
+    assert_fails is_ipv6 "fe80::1%eth0"
+}
+
+#[test]
+it_judges_an_address_by_its_domain() {
+    # The pattern this replaced matched `[^@ ]+\.[^@ ]+`, and a dot may sit
+    # inside either half of that, so `a@b..c` passed with an empty label in the
+    # middle of its domain. The domain is a hostname, judged by the one
+    # function that knows what one is.
+    assert_ok is_email "a@b.c"
+    assert_ok is_email "first.last@example.co.uk"
+    assert_fails is_email "a@b..c"
+    assert_fails is_email "a@@b.c"
+    assert_fails is_email "@b.c"
+    assert_fails is_email "a@"
+    assert_fails is_email "a@b"
+    assert_fails is_email "a b@c.d"
+    assert_fails is_email "a@-b.c"
+}

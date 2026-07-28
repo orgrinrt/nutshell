@@ -22,3 +22,17 @@ it_dies_part_way_through() {
     assert_eq "x" "x"
     exit 3
 }
+
+#[test]
+it_forks_a_child_that_fails_late() {
+    # The child outlives the test and writes its failure after the runner has
+    # moved on. With one shared tally that landed on whichever test came next:
+    # this one passed and an innocent one failed.
+    ( sleep 1; assert_eq "a" "b" ) >/dev/null 2>&1 &
+    assert_eq "x" "x"
+}
+
+#[test]
+it_is_the_innocent_one_after_the_fork() {
+    assert_eq "y" "y"
+}

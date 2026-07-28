@@ -12,235 +12,159 @@
 # Sourced by json.sh when perl is present. All available backends are loaded
 # rather than only the selected one, so a caller (or a test) can move
 # `_JSON_IMPL` and get the implementation it named.
+#
+# The last resort of the three, and the one whose defaults fight the contract
+# hardest. Three of them, each of which made this backend answer differently
+# from the others:
+#
+#   - a hash has no order and its iteration order is randomised per process, so
+#     `canonical` is not a nicety here, it is the only way two runs agree
+#   - `encode_json` returns a character string, and printing it to a stream
+#     with no encoding layer produced mojibake for anything outside ASCII
+#   - a JSON boolean is an object that stringifies to 1 and the empty string,
+#     so `true` came back as `1` and `false` as `0`
+#
+# One program, taking the operation and its arguments on argv.
 # =============================================================================
 
 nut_once || return 0
 
-# Perl implementation of json_get
-_json_get_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
+# _json_pl <operation> <arguments...>
+_json_pl() {
     "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        if (ref($data) eq "HASH" || ref($data) eq "ARRAY") {
-            print JSON::PP->new->canonical->encode($data);
-        } elsif (defined $data) {
-            print $data;
-        } else {
-            print "null";
-        }
-    ' "$json" "$path" 2>/dev/null
-}
+        use strict;
+        use warnings;
 
-# Perl implementation of json_set
-_json_set_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local value="${3:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        my $value_str = $ARGV[2];
-        
-        my $data = decode_json($json_text);
-        
-        # Parse value
-        my $value;
-        eval { $value = decode_json($value_str); };
-        $value = $value_str if $@;
-        
-        # Navigate to parent
-        my @parts = grep { $_ ne "" } split /\./, $path;
-        my $current = $data;
-        for my $i (0 .. $#parts - 1) {
-            my $part = $parts[$i];
-            if ($part =~ /^\d+$/) {
-                $current = $current->[$part];
-            } else {
-                $current = $current->{$part};
-            }
-        }
-        
-        # Set value
-        my $last = $parts[-1];
-        if ($last =~ /^\d+$/) {
-            $current->[$last] = $value;
-        } else {
-            $current->{$last} = $value;
-        }
-        
-        print JSON::PP->new->canonical->encode($data);
-    ' "$json" "$path" "$value" 2>/dev/null
-}
+        # UTF-8 out. Without it a character string is written byte by byte and
+        # anything outside ASCII arrives mangled.
+        binmode(STDOUT, ":encoding(UTF-8)");
 
-# Perl implementation of json_keys
-_json_keys_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        if (ref($data) eq "HASH") {
-            # Sorted. A perl hash has no order, and its iteration order is
-            # randomised per process, so this returned the same keys in a
-            # different order on every run while jq and python were stable.
-            print "$_\n" for sort keys %$data;
-        } elsif (ref($data) eq "ARRAY") {
-            print "$_\n" for 0 .. $#$data;
-        }
-    ' "$json" "$path" 2>/dev/null
-}
+        # Two coders, because the two directions see different things. What
+        # arrives on argv is UTF-8 bytes, so the decoder is told so and hands
+        # back characters; the encoder then produces characters, which the
+        # output layer encodes once. One coder for both double-encoded: `café`
+        # came back as `cafÃ©`, the UTF-8 bytes read as latin-1 and encoded
+        # again.
+        my $in    = JSON::PP->new->utf8->allow_nonref;
+        my $coder = JSON::PP->new->canonical->allow_nonref;
 
-# Perl implementation of json_valid
-_json_valid_perl() {
-    local json="${1:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        eval { decode_json($ARGV[0]); };
-        exit($@ ? 1 : 0);
-    ' "$json" 2>/dev/null
-}
+        my ($op, @args) = @ARGV;
 
-# Perl implementation of json_pretty
-_json_pretty_perl() {
-    local json="${1:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $coder = JSON::PP->new->pretty->canonical;
-        print $coder->encode(decode_json($ARGV[0]));
-    ' "$json" 2>/dev/null
-}
-
-# Perl implementation of json_compact
-_json_compact_perl() {
-    local json="${1:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        print JSON::PP->new->canonical->encode(decode_json($ARGV[0]));
-    ' "$json" 2>/dev/null
-}
-
-# Perl implementation of json_type
-_json_type_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        my $ref = ref($data);
-        if ($ref eq "HASH") { print "object"; }
-        elsif ($ref eq "ARRAY") { print "array"; }
-        elsif (!defined $data) { print "null"; }
-        elsif (JSON::PP::is_bool($data)) { print "boolean"; }
-        elsif ($data =~ /^-?\d+(\.\d+)?$/) { print "number"; }
-        else { print "string"; }
-    ' "$json" "$path" 2>/dev/null
-}
-
-# Perl implementation of json_length
-_json_length_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        if (ref($data) eq "HASH") { print scalar keys %$data; }
-        elsif (ref($data) eq "ARRAY") { print scalar @$data; }
-        elsif (defined $data) { print length($data); }
-        else { print 0; }
-    ' "$json" "$path" 2>/dev/null
-}
-
-_json_merge_perl() {
-    local json1="$1" json2="$2"
-        # Perl fallback
-        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-            my $a = decode_json($ARGV[0]);
-            my $b = decode_json($ARGV[1]);
-            @{$a}{keys %$b} = values %$b;
-            print JSON::PP->new->canonical->encode($a);
-        ' "$json1" "$json2" 2>/dev/null
-}
-
-_json_delete_perl() {
-    local json="$1" path="$2"
-        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-            my $data = decode_json($ARGV[0]);
-            my $path = $ARGV[1];
-            $path =~ s/^\.//;
-            
-            my @parts = grep { $_ ne "" } split /\./, $path;
-            my $current = $data;
-            for my $i (0 .. $#parts - 1) {
-                my $part = $parts[$i];
-                if ($part =~ /^\d+$/) {
-                    $current = $current->[$part];
+        # Walk a dotted path. Returns (found, value) so an absent key is told
+        # apart from one present and holding null, which the caller turns into
+        # a status. Answering "null" for both is what the other two backends
+        # were made to stop doing.
+        sub walk {
+            my ($data, $path) = @_;
+            for my $part (grep { $_ ne "" } split /\./, $path) {
+                if (ref($data) eq "ARRAY") {
+                    return (0, undef) unless $part =~ /^\d+$/ && $part < scalar(@$data);
+                    $data = $data->[$part];
+                } elsif (ref($data) eq "HASH") {
+                    return (0, undef) unless exists $data->{$part};
+                    $data = $data->{$part};
                 } else {
-                    $current = $current->{$part};
+                    return (0, undef);
                 }
             }
-            
-            my $last = $parts[-1];
-            if ($last =~ /^\d+$/) {
-                splice @$current, $last, 1;
-            } else {
-                delete $current->{$last};
+            return (1, $data);
+        }
+
+        sub kind {
+            my ($v) = @_;
+            return "null"    unless defined $v;
+            return "boolean" if JSON::PP::is_bool($v);
+            return "object"  if ref($v) eq "HASH";
+            return "array"   if ref($v) eq "ARRAY";
+            # A scalar that has been used as a number is one. Perl does not
+            # otherwise distinguish, and the document said which it was.
+            return "number"  if $v =~ /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$/;
+            return "string";
+        }
+
+        sub emit {
+            my ($v) = @_;
+            if (!defined $v)                { print "null\n"; }
+            elsif (JSON::PP::is_bool($v))   { print($v ? "true\n" : "false\n"); }
+            elsif (ref($v))                 { print $coder->encode($v), "\n"; }
+            elsif (kind($v) eq "number")    { print "$v\n"; }
+            else                            { print "$v\n"; }
+        }
+
+        if ($op eq "valid") {
+            eval { $in->decode($args[0]); 1 } or exit 1;
+            exit 0;
+        }
+
+        my $data = eval { $in->decode($args[0]) };
+        exit 1 unless defined $data || !$@;
+        exit 1 if $@;
+
+        my $path = defined $args[1] ? $args[1] : "";
+
+        if ($op eq "get") {
+            my ($found, $v) = walk($data, $path);
+            exit 1 unless $found;
+            emit($v);
+        } elsif ($op eq "keys") {
+            my ($found, $v) = walk($data, $path);
+            exit 1 unless $found;
+            if (ref($v) eq "HASH")     { print "$_\n" for sort keys %$v; }
+            elsif (ref($v) eq "ARRAY") { print "$_\n" for 0 .. $#$v; }
+        } elsif ($op eq "type") {
+            my ($found, $v) = walk($data, $path);
+            exit 1 unless $found;
+            print kind($v), "\n";
+        } elsif ($op eq "length") {
+            my ($found, $v) = walk($data, $path);
+            exit 1 unless $found;
+            if (ref($v) eq "ARRAY")   { print scalar(@$v), "\n"; }
+            elsif (ref($v) eq "HASH") { print scalar(keys %$v), "\n"; }
+            else                      { print length($v), "\n"; }
+        } elsif ($op eq "pretty") {
+            print JSON::PP->new->canonical->pretty->encode($data);
+        } elsif ($op eq "compact") {
+            print $coder->encode($data), "\n";
+        } elsif ($op eq "set" || $op eq "delete") {
+            my @parts = grep { $_ ne "" } split /\./, $path;
+            exit 1 unless @parts;
+            my $last = pop @parts;
+            my $current = $data;
+            for my $part (@parts) {
+                if (ref($current) eq "ARRAY") { $current = $current->[$part]; }
+                else                          { $current = $current->{$part}; }
             }
-            
-            print JSON::PP->new->canonical->encode($data);
-        ' "$json" "$path" 2>/dev/null
+            if ($op eq "set") {
+                my $raw = $args[2];
+                my $value = eval { $in->decode($raw) };
+                $value = $raw if $@;
+                if (ref($current) eq "ARRAY") { $current->[$last] = $value; }
+                else                          { $current->{$last} = $value; }
+            } else {
+                if (ref($current) eq "ARRAY") { splice(@$current, $last, 1); }
+                else                          { delete $current->{$last}; }
+            }
+            print $coder->encode($data), "\n";
+        } elsif ($op eq "merge") {
+            my $other = $in->decode($args[1]);
+            # Shallow, matching the other two: the right operand replaces a key
+            # rather than merging into it.
+            @{$data}{keys %$other} = values %$other;
+            print $coder->encode($data), "\n";
+        } else {
+            exit 2;
+        }
+        exit 0;
+    ' "$@" 2>/dev/null
 }
+
+_json_get_perl()     { _json_pl get "$1" "${2:-}"; }
+_json_set_perl()     { _json_pl set "$1" "$2" "$3"; }
+_json_keys_perl()    { _json_pl keys "$1" "${2:-}"; }
+_json_valid_perl()   { _json_pl valid "$1"; }
+_json_pretty_perl()  { _json_pl pretty "$1"; }
+_json_compact_perl() { _json_pl compact "$1"; }
+_json_type_perl()    { _json_pl type "$1" "${2:-}"; }
+_json_length_perl()  { _json_pl length "$1" "${2:-}"; }
+_json_merge_perl()   { _json_pl merge "$1" "$2"; }
+_json_delete_perl()  { _json_pl delete "$1" "$2"; }

@@ -119,23 +119,24 @@ it_deletes_a_key() {
 
 # _agrees <function> <args...>
 #
-# Assert every available backend returns the same text for that call.
+# Assert every available backend returns the same text and the same status for
+# that call.
 #
-# The arguments are passed through, not assembled into a string and eval'd.
-# The first version of this did eval, and `{"a":1,"b":2}` on a command line is
-# a brace expansion: bash tore the document into separate words before the
-# function saw it, every backend was handed the same nonsense, they agreed
-# about it, and the test passed with the bug it was written for put back.
+# The arguments are passed through, not assembled into a string and eval'd. The
+# first version of this did eval, and `{"a":1,"b":2}` on a command line is a
+# brace expansion: bash tore the document into words before the function saw
+# it, every backend was handed the same nonsense, they agreed about it, and the
+# test passed with the bug it was written for put back.
 _agrees() {
-    local impl first="" seen=0 got
+    local impl first="" seen=0 got rc
     while IFS= read -r impl; do
         _JSON_IMPL="$impl"
-        got="$("$@")"
+        got="$("$@" 2>/dev/null)"; rc=$?
         if [[ "$seen" -eq 0 ]]; then
-            first="$got"
+            first="${got}|${rc}"
             seen=1
         else
-            assert_eq "$got" "$first" "${impl} on: $*"
+            assert_eq "${got}|${rc}" "$first" "${impl} on: $*"
         fi
     done < <(_impls)
     assert_eq "$seen" "1" "at least one backend ran"
@@ -143,13 +144,13 @@ _agrees() {
 
 #[test]
 it_returns_the_same_text_from_every_backend() {
-    # The strongest test here. Three separate implementations of one contract
-    # have to agree character for character, and two of them had never run on
-    # any machine until the tool detection was fixed.
+    # The whole matrix, not a document chosen because it worked.
     #
-    # Both disagreements found this way: jq's `del` printed formatted where the
-    # others printed compact, and python's `json.dumps` puts a space after
-    # every colon unless told not to.
+    # The first version of this test asserted agreement over one hand-picked
+    # object and passed, and the PR body then said the backends were
+    # interchangeable. They were not: seven classes of disagreement were
+    # sitting behind that green, and each is below. Choosing which inputs to
+    # assert over is choosing what not to find out.
     local doc='{"a":1,"b":{"c":[1,2,3]},"d":"x"}'
 
     _agrees json_get "$doc" b.c
@@ -161,4 +162,44 @@ it_returns_the_same_text_from_every_backend() {
     _agrees json_merge "$doc" '{"e":5}'
     _agrees json_compact "$doc"
     _agrees json_set "$doc" a 9
+
+    # A merge is shallow. jq's `*` recurses into objects where python's
+    # `update` and perl's slice assignment replace, so one call built a
+    # different document depending on the tool installed.
+    _agrees json_merge '{"a":{"b":1}}' '{"a":{"c":2}}'
+
+    # Text outside ASCII. jq emits UTF-8, python escaped it to `\u00e9`, and
+    # perl printed the bytes of a character string and produced mojibake.
+    _agrees json_compact '{"k":"café"}'
+    _agrees json_get '{"k":"café"}' k
+
+    # An integer path segment indexes an array. jq built its path by putting a
+    # dot in front, and `.1` is not the second element, it is the number 0.1.
+    _agrees json_get '[10,20]' 1
+    _agrees json_get '{"a":[10,20]}' a.1
+
+    # An absent key is absent. jq and perl said `null` with a zero status,
+    # which cannot be told from a key that is present and null, and python said
+    # nothing with a status of 1.
+    _agrees json_get '{"a":1}' zzz
+    _agrees json_get '{"a":{"b":1}}' a.zzz
+
+    # Scalars come back as JSON, not as whatever the tool's own language
+    # prints. Python said `True` and perl said `1`.
+    _agrees json_get '{"a":true}' a
+    _agrees json_get '{"a":false}' a
+    _agrees json_get '{"a":null}' a
+    _agrees json_get '{"a":1.5}' a
+
+    # A quote inside a string. Python returned nothing at all.
+    _agrees json_get '{"a":"he said \"hi\""}' a
+
+    # Empty containers, and a value that is one.
+    _agrees json_compact '{}'
+    _agrees json_compact '[]'
+    _agrees json_compact '{"a":[[1,2],[3]]}'
+    _agrees json_type '{"a":null}' a
+    _agrees json_keys '{"a":[1,2]}' a
+    _agrees json_set '{"a":{"b":1}}' a.b 9
+    _agrees json_delete '{"a":{"b":1,"c":2}}' a.b
 }

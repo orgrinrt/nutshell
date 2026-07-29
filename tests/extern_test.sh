@@ -289,3 +289,65 @@ it_refuses_a_spec_that_names_no_library() {
     _isolate
     assert_fails extern_resolve 'greet'
 }
+
+# -----------------------------------------------------------------------------
+# Which nut.toml answers for a script
+# -----------------------------------------------------------------------------
+#
+# A script's dependencies belong to the script, the way a crate's belong to its
+# Cargo.toml. Resolving from the working directory alone meant a script run
+# against another repository found that repository's manifest, or none, and
+# never its own.
+
+# _manifest_fixture -> prints "<root>"
+#
+# A unit directory holding a manifest and a script, a sibling with no manifest
+# to be called from, and a project with a manifest of its own further down.
+_manifest_fixture() {
+    local root
+    # Normalised through cd, because TMPDIR may carry a trailing slash and
+    # fs_temp_dir passes it through, while a path that has been cd'd into comes
+    # back single-slashed. Comparing one against the other fails on the slash
+    # rather than on the behaviour.
+    root="$(cd "$(fs_temp_dir nutshell-manifest)" && pwd)"
+    mkdir -p "${root}/unit" "${root}/elsewhere" "${root}/project/sub" "${root}/loose"
+    printf '[deps.a]\ngit = "x"\n' > "${root}/unit/nut.toml"
+    printf '[deps.b]\ngit = "y"\n' > "${root}/project/nut.toml"
+    printf '%s' "$root"
+}
+
+#[test]
+it_prefers_the_scripts_own_manifest_over_the_working_directory() {
+    local root
+    root="$(_manifest_fixture)"
+    cd "${root}/project/sub" || return 1
+
+    NUTSHELL_SCRIPT_DIR="${root}/unit"
+    assert_eq "$(_extern_manifest)" "${root}/unit/nut.toml" \
+        "the script's own manifest wins over the one above the caller"
+}
+
+#[test]
+it_falls_back_to_the_working_directory_when_the_script_has_no_manifest() {
+    local root
+    root="$(_manifest_fixture)"
+    cd "${root}/project/sub" || return 1
+
+    # A scratch script with no unit of its own: the project in front of it is
+    # the right answer.
+    NUTSHELL_SCRIPT_DIR="${root}/loose"
+    assert_eq "$(_extern_manifest)" "${root}/project/nut.toml" \
+        "no manifest above the script, so the caller's project answers"
+}
+
+#[test]
+it_still_resolves_from_the_working_directory_when_nothing_names_a_script() {
+    local root
+    root="$(_manifest_fixture)"
+    cd "${root}/project/sub" || return 1
+
+    # Sourced `init` rather than run through the interpreter, so the variable
+    # is unset. The old behaviour has to keep working.
+    unset NUTSHELL_SCRIPT_DIR
+    assert_eq "$(_extern_manifest)" "${root}/project/nut.toml"
+}

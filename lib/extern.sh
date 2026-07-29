@@ -43,14 +43,27 @@ use toml xdg fs log validate
 
 # _extern_manifest
 #
-# The nearest `nut.toml`, walking up from the working directory. A project's
-# dependencies belong to the project, so the answer is found from where the
-# work is rather than from where nutshell happens to be installed.
+# The nearest `nut.toml`, from the script's own directory first and the working
+# directory second.
+#
+# A script's dependencies belong to the script, the way a crate's belong to its
+# Cargo.toml. Resolving from the working directory alone means a script run
+# against some other repository cannot find its own manifest, and instead finds
+# that repository's, or nothing. The interpreter knows where the script lives,
+# so the unit that declares the `use` is the unit that answers for it.
+#
+# The working directory stays as the fallback, because a scratch script inside
+# the project you are working in has no unit of its own and the project's
+# manifest is the right answer for it.
 _extern_manifest() {
-    local dir="${PWD}"
-    while [[ "$dir" != "/" ]]; do
-        [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
-        dir="$(dirname "$dir")"
+    local start dir
+    for start in "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
+        [[ -z "$start" ]] && continue
+        dir="$start"
+        while [[ "$dir" != "/" && -n "$dir" ]]; do
+            [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
+            dir="$(dirname "$dir")"
+        done
     done
     return 1
 }

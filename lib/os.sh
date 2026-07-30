@@ -9,14 +9,15 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_OS_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_OS_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Public API
 # -----------------------------------------------------------------------------
 
 # Returns the OS name: linux|macos|windows|unknown
+#[pub]
+# Usage: os_name -> "linux", "macos", "windows" or "unknown"
 os_name() {
     case "$(uname -s)" in
         Linux*)  echo "linux" ;;
@@ -32,6 +33,8 @@ os_is_linux() {
 }
 
 # Returns 0 (true) if running on macOS, 1 (false) otherwise
+#[pub]
+# Usage: os_is_macos -> returns 0 on macOS, 1 elsewhere
 os_is_macos() {
     [[ "$(uname -s)" == Darwin* ]]
 }
@@ -44,10 +47,10 @@ os_is_windows() {
     esac
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[allow(trivial_wrapper)]
 # Returns the CPU architecture: x86_64|arm64|i686|armv7l|...
 # Usage: os_arch -> "x86_64" | "arm64" | "i686" | "armv7l" | ...
+#[pub]
 os_arch() {
     uname -m
 }

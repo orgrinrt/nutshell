@@ -108,7 +108,7 @@ parse_test_output() {
         if [[ "$line" =~ $warn_pattern ]]; then
             local file="${BASH_REMATCH[1]}"
             local loc="${BASH_REMATCH[2]}"
-            local hint="consider splitting or add @@ALLOW_LOC_${loc}@@"
+            local hint="consider splitting or add #[allow(loc = ${loc})]"
             echo "warn|${file}|${loc} LOC|${hint}" >> "$DIAG_FILE"
         elif [[ "$line" =~ $fail_pattern ]]; then
             echo "error|${BASH_REMATCH[2]}|${BASH_REMATCH[3]}|" >> "$DIAG_FILE"

@@ -1,0 +1,16 @@
+[meta]
+name = "sample"
+version = "1.0.0"  # a real comment, which must still be stripped
+
+[annotations]
+public_api = "#[pub]"
+
+[lists]
+with_trailing_comma = [
+    "one",
+    "two",
+]
+attributes = [
+    "#[pub]",
+    "#[allow(trivial_wrapper)]",
+]

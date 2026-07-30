@@ -24,23 +24,23 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_XDG_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_XDG_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_XDG_DIR="${BASH_SOURCE[0]%/*}"
-source "${_NUTSHELL_XDG_DIR}/os.sh"
-source "${_NUTSHELL_XDG_DIR}/validate.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use os validate
 
 # -----------------------------------------------------------------------------
 # XDG Base Directories (raw, without app name)
 # These are safe to use without XDG_APP_NAME being set.
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get XDG_DATA_HOME (user data files)
 # Default: ~/.local/share (Linux), ~/Library/Application Support (macOS)
 # Usage: xdg_data_home -> prints path
@@ -54,7 +54,7 @@ xdg_data_home() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get XDG_CONFIG_HOME (user configuration)
 # Default: ~/.config (Linux), ~/Library/Preferences (macOS)
 # Usage: xdg_config_home -> prints path
@@ -68,7 +68,7 @@ xdg_config_home() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get XDG_STATE_HOME (user state data - logs, history, etc.)
 # Default: ~/.local/state (Linux), ~/Library/Application Support (macOS)
 # Usage: xdg_state_home -> prints path
@@ -82,7 +82,7 @@ xdg_state_home() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get XDG_CACHE_HOME (user cache data)
 # Default: ~/.cache (Linux), ~/Library/Caches (macOS)
 # Usage: xdg_cache_home -> prints path
@@ -96,7 +96,7 @@ xdg_cache_home() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get XDG_RUNTIME_DIR (runtime files - sockets, etc.)
 # Default: $XDG_RUNTIME_DIR or $TMPDIR or /tmp
 # Usage: xdg_runtime_dir -> prints path
@@ -113,7 +113,7 @@ xdg_runtime_dir() {
 # REQUIRE XDG_APP_NAME to be set - will FAIL if not configured.
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get application data directory
 # Usage: xdg_app_data -> ~/.local/share/$XDG_APP_NAME
 xdg_app_data() {
@@ -121,7 +121,7 @@ xdg_app_data() {
     echo "$(xdg_data_home)/${XDG_APP_NAME}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get application config directory
 # Usage: xdg_app_config -> ~/.config/$XDG_APP_NAME
 xdg_app_config() {
@@ -129,7 +129,7 @@ xdg_app_config() {
     echo "$(xdg_config_home)/${XDG_APP_NAME}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get application state directory
 # Usage: xdg_app_state -> ~/.local/state/$XDG_APP_NAME
 xdg_app_state() {
@@ -137,7 +137,7 @@ xdg_app_state() {
     echo "$(xdg_state_home)/${XDG_APP_NAME}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get application cache directory
 # Usage: xdg_app_cache -> ~/.cache/$XDG_APP_NAME
 xdg_app_cache() {
@@ -145,7 +145,7 @@ xdg_app_cache() {
     echo "$(xdg_cache_home)/${XDG_APP_NAME}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get application runtime directory
 # Usage: xdg_app_runtime -> /run/user/$UID/$XDG_APP_NAME
 xdg_app_runtime() {
@@ -158,7 +158,7 @@ xdg_app_runtime() {
 # REQUIRE XDG_APP_NAME to be set.
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a subdirectory under app data
 # Usage: xdg_app_data_subdir "backups" -> ~/.local/share/$XDG_APP_NAME/backups
 xdg_app_data_subdir() {
@@ -172,7 +172,7 @@ xdg_app_data_subdir() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a subdirectory under app config
 # Usage: xdg_app_config_subdir "hosts" -> ~/.config/$XDG_APP_NAME/hosts
 xdg_app_config_subdir() {
@@ -186,7 +186,7 @@ xdg_app_config_subdir() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a subdirectory under app state
 # Usage: xdg_app_state_subdir "logs" -> ~/.local/state/$XDG_APP_NAME/logs
 xdg_app_state_subdir() {
@@ -200,7 +200,7 @@ xdg_app_state_subdir() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a subdirectory under app cache
 # Usage: xdg_app_cache_subdir "downloads" -> ~/.cache/$XDG_APP_NAME/downloads
 xdg_app_cache_subdir() {
@@ -218,7 +218,7 @@ xdg_app_cache_subdir() {
 # Configuration helper
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Set the application name for XDG paths
 # Usage: xdg_set_app_name "my-app"
 # This MUST be called before using any xdg_app_* functions.
@@ -228,8 +228,8 @@ xdg_set_app_name() {
     export XDG_APP_NAME="$name"
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if app name is configured
 # Usage: xdg_has_app_name -> returns 0 if configured
 xdg_has_app_name() {

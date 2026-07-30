@@ -1,18 +1,23 @@
 # nutshell TODO
 
-## v0.1.0 Release Checklist
+## v0.2.0
 
 - [x] Core library modules (os, log, deps, fs, text, json, http, etc.)
 - [x] Lazy-init stub pattern for tool-dependent functions
-- [x] New directory structure (init, bin/, lib/, qa/)
-- [x] `init` entry point for sourcing
-- [x] `bin/nutshell` interpreter for shebang support
-- [x] `use` function for selective module loading
-- [x] QA system with built-in checks
-- [x] Config-driven via nut.toml
-- [x] README with clear usage documentation
-- [ ] Test the full workflow end-to-end
-- [ ] Tag v0.1.0 release
+- [x] Directory structure (init, bin/, lib/, examples/, tests/)
+- [x] `init` entry point, `bin/nutshell` interpreter, `use` for loading
+- [x] QA system with built-in checks, config-driven via nut.toml
+- [x] Attributes (`#[pub]`, `#[test]`, `#[allow(...)]`), read by `attr`
+- [x] Test harness: `#[test]` functions, assertions, `./test`
+- [x] Module graph with cycle, declaration, visibility and reachability checks
+- [x] `cli` subcommand dispatch, `git` repository reading
+- [x] External libraries via `nut.toml` deps, pinned by `nut.lock`
+- [ ] Tag v0.2.0 release
+- [ ] `cli` and `git` ship with no consumer in this repository. They exist for
+      the pr-review and work-in-mockspace tools being built on nutshell, which
+      is where they get one. `bin/nutshell` is not that consumer: it takes a
+      script path and flags, not subcommands, and routing it through a
+      subcommand dispatcher would be a worse interface, not dogfood.
 - [ ] Create GitHub release with tarball
 
 ## High Priority
@@ -24,10 +29,11 @@
 - [ ] Add CONTRIBUTING.md
 
 ### QA System
-- [ ] Fix qa/check_*.sh scripts to use new paths (lib/ not core/)
-- [ ] Fix qa/run_builtins.sh to work with new structure
-- [ ] Ensure check.sh runs correctly from project root
+- [x] Checks live in examples/checks/ and run from the project root
 - [ ] Add custom_checks support testing
+- [x] Split lib/json.sh along its backend seam into json/impl/
+- [ ] Six modules sit between 336 and 426 LOC against a 300 warn: check-runner,
+      color, deps, http, prompt, toml. Each wants its own seam followed.
 
 ### Testing
 - [ ] Add integration tests for the init/use workflow
@@ -70,12 +76,12 @@
 - [x] Core architecture with lazy-init stubs
 - [x] deps.sh with tool detection and capabilities
 - [x] All core modules: os, log, deps, color, validate, string, array, fs, text, toml, json, http, prompt, xdg
-- [x] QA framework (lib/qa.sh)
-- [x] Built-in QA checks (qa/check_*.sh)
+- [x] QA framework (lib/check-runner.sh)
+- [x] Built-in QA checks (examples/checks/check_*.sh)
 - [x] Config templates (empty, default, tough)
 - [x] JSON Schema for nut.toml
 - [x] New init/use pattern for module loading
 - [x] bin/nutshell interpreter
 - [x] Restructured from core/ to lib/
-- [x] Moved tests/ to qa/
+- [x] Checks in examples/checks/, tests in tests/
 - [x] README with usage patterns and examples

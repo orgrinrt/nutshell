@@ -9,32 +9,31 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_STRING_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_STRING_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Public API
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[allow(trivial_wrapper)]
 # Convert string to lowercase
 # Usage: str_lower "HELLO" -> "hello"
+#[pub]
 str_lower() {
     local str="${1:-}"
     echo "${str,,}"
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[allow(trivial_wrapper)]
 # Convert string to uppercase
 # Usage: str_upper "hello" -> "HELLO"
+#[pub]
 str_upper() {
     local str="${1:-}"
     echo "${str^^}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Trim whitespace from both ends
 # Usage: str_trim "  hello  " -> "hello"
 str_trim() {
@@ -46,7 +45,7 @@ str_trim() {
     echo "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Trim whitespace from left side
 # Usage: str_ltrim "  hello" -> "hello"
 str_ltrim() {
@@ -55,7 +54,7 @@ str_ltrim() {
     echo "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Trim whitespace from right side
 # Usage: str_rtrim "hello  " -> "hello"
 str_rtrim() {
@@ -64,7 +63,7 @@ str_rtrim() {
     echo "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Replace all occurrences of a substring
 # Usage: str_replace "hello world" "world" "bash" -> "hello bash"
 str_replace() {
@@ -76,7 +75,7 @@ str_replace() {
     echo "${str//$from/$to}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if string contains substring
 # Usage: str_contains "hello world" "world" -> returns 0 (true)
 str_contains() {
@@ -87,7 +86,7 @@ str_contains() {
     [[ "$str" == *"$substr"* ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if string starts with prefix
 # Usage: str_starts_with "hello world" "hello" -> returns 0 (true)
 str_starts_with() {
@@ -98,7 +97,7 @@ str_starts_with() {
     [[ "$str" == "$prefix"* ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if string ends with suffix
 # Usage: str_ends_with "hello world" "world" -> returns 0 (true)
 str_ends_with() {
@@ -109,7 +108,7 @@ str_ends_with() {
     [[ "$str" == *"$suffix" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Split string by delimiter into array
 # Usage: str_split ":" "a:b:c" arr -> arr=("a" "b" "c")
 str_split() {
@@ -129,7 +128,7 @@ str_split() {
     read -ra _arr <<< "$str"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Join array elements with delimiter
 # Usage: str_join "," "a" "b" "c" -> "a,b,c"
 str_join() {
@@ -151,16 +150,16 @@ str_join() {
     echo "$result"
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[allow(trivial_wrapper)]
 # Get string length
 # Usage: str_length "hello" -> 5
+#[pub]
 str_length() {
     local str="${1:-}"
     echo "${#str}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Extract substring
 # Usage: str_substr "hello world" 0 5 -> "hello"
 str_substr() {
@@ -175,7 +174,7 @@ str_substr() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Repeat string N times
 # Usage: str_repeat "-" 5 -> "-----"
 str_repeat() {
@@ -189,4 +188,43 @@ str_repeat() {
         result="${result}${str}"
     done
     echo "$result"
+}
+
+# str_distance <a> <b>
+#
+# Levenshtein distance: how many single-character edits turn one into the
+# other. For suggesting what somebody meant, so a caller applies its own
+# threshold; this only measures.
+#
+# One row rather than the full matrix, and no subprocess. There were two of
+# these, one here in spirit and one in the check framework, and the other was
+# an awk invocation per comparison: a `cli` module offering did-you-mean would
+# have had to depend on the QA framework to reach it, which is backwards.
+#[pub]
+# Usage: str_distance build buidl -> 2
+str_distance() {
+    local a="$1" b="$2"
+    local -i alen=${#a} blen=${#b} i j cost prev tmp
+    local -a row=()
+
+    for (( j = 0; j <= blen; j++ )); do row[j]=$j; done
+
+    for (( i = 1; i <= alen; i++ )); do
+        prev=${row[0]}
+        row[0]=$i
+        for (( j = 1; j <= blen; j++ )); do
+            tmp=${row[j]}
+            cost=1
+            [[ "${a:i-1:1}" == "${b:j-1:1}" ]] && cost=0
+            local -i del=$(( row[j] + 1 ))
+            local -i ins=$(( row[j-1] + 1 ))
+            local -i sub=$(( prev + cost ))
+            local -i best=$del
+            (( ins < best )) && best=$ins
+            (( sub < best )) && best=$sub
+            row[j]=$best
+            prev=$tmp
+        done
+    done
+    printf '%d' "${row[blen]}"
 }

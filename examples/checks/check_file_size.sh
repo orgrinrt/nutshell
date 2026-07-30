@@ -12,9 +12,9 @@
 # See examples/configs/empty.nut.toml for all available options.
 #
 # Per-file override:
-#   Add # @@ALLOW_LOC_NNN@@ at the top of a file (within first 10 lines)
+#   Add # #[allow(loc = N)] at the top of a file (within first 10 lines)
 #   to set a custom limit for that specific file. For example:
-#     # @@ALLOW_LOC_600@@
+#     # #[allow(loc = 600)]
 #   This MUST be set explicitly - there is no "skip" option.
 #   The file will still fail if it exceeds the custom limit.
 #
@@ -37,7 +37,7 @@ use check-runner
 # Thresholds (will be loaded from config)
 MAX_LOC=300
 MAX_TOTAL_LINES=500
-EXEMPT_ANNOTATION_PATTERN="@@ALLOW_LOC_([0-9]+)@@"
+EXEMPT_ANNOTATION_PATTERN="#\[allow\(loc = ([0-9]+)\)\]"
 
 # Arrays for patterns
 declare -a EXEMPT_PATTERNS=()
@@ -52,7 +52,7 @@ load_config() {
     # Load thresholds from config
     MAX_LOC="$(cfg_get_or "tests.file_size.max_loc" "300")"
     MAX_TOTAL_LINES="$(cfg_get_or "tests.file_size.max_total_lines" "500")"
-    EXEMPT_ANNOTATION_PATTERN="$(cfg_get_or "tests.file_size.exempt_annotation_pattern" "@@ALLOW_LOC_([0-9]+)@@")"
+    EXEMPT_ANNOTATION_PATTERN="$(cfg_get_or "tests.file_size.exempt_annotation_pattern" "#\[allow\(loc = ([0-9]+)\)\]")"
     
     # Load exempt patterns
     cfg_get_array "tests.file_size.exempt_patterns" EXEMPT_PATTERNS || EXEMPT_PATTERNS=()
@@ -161,7 +161,7 @@ test_file_sizes() {
         if [[ $loc -ge $effective_fail_threshold ]]; then
             if [[ "$has_custom_limit" == "true" ]]; then
                 log_fail "$rel_path: $loc LOC (total: $total lines) - EXCEEDS CUSTOM LIMIT of $custom_limit"
-                echo -e "       ${RED}File has # @@ALLOW_LOC_${custom_limit}@@ but still exceeds it!${NC}"
+                echo -e "       ${RED}File has # #[allow(loc = ${custom_limit})] but still exceeds it!${NC}"
             else
                 log_fail "$rel_path: $loc LOC (total: $total lines)"
                 echo -e "       ${RED}Exceeds fail threshold of $MAX_TOTAL_LINES LOC${NC}"
@@ -217,8 +217,8 @@ test_file_sizes() {
     
     echo ""
     echo "To set a custom limit for a file that has been manually reviewed:"
-    echo "  Add # @@ALLOW_LOC_NNN@@ in the first 10 lines of the file"
-    echo "  Example: # @@ALLOW_LOC_600@@ allows up to 600 LOC"
+    echo "  Add # #[allow(loc = N)] in the first 10 lines of the file"
+    echo "  Example: # #[allow(loc = 600)] allows up to 600 LOC"
     echo ""
     echo "Note: Custom limits must be explicitly set - there is no 'skip' option."
     echo "      Files will still fail if they exceed their custom limit."
@@ -249,7 +249,13 @@ main() {
     exit_with_status
 }
 
-# Run if executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# A check script is an entry point, so it runs.
+#
+# This used to be guarded by `[[ "${BASH_SOURCE[0]}" == "${0}" ]]`, the ordinary
+# "executed, not sourced" test. Under nutshell it is never true: the `#!/usr/bin/env
+# nutshell` shebang runs the interpreter, and the interpreter *sources* the
+# script, which is what makes `use` available from its first line. So `$0` is
+# the interpreter and `BASH_SOURCE[0]` is this file, and `main` was never
+# called. Six of the eight built-in checks exited 0 having done nothing, and
+# `./check` read that as a pass and printed one.
+main "$@"

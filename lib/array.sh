@@ -9,14 +9,13 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_ARRAY_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_ARRAY_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Public API
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if array contains element
 # Usage: arr_contains "needle" "${haystack[@]}" -> returns 0 (true) or 1 (false)
 arr_contains() {
@@ -30,7 +29,7 @@ arr_contains() {
     return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Find index of element in array (returns 255 if not found)
 # Usage: arr_index "needle" "${haystack[@]}" -> prints index or 255
 arr_index() {
@@ -47,7 +46,7 @@ arr_index() {
     return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Remove duplicates from array (preserves order)
 # Usage: arr_unique arr
 arr_unique() {
@@ -66,7 +65,7 @@ arr_unique() {
     _arr=("${result[@]}")
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Reverse array in place
 # Usage: arr_reverse arr
 arr_reverse() {
@@ -83,39 +82,39 @@ arr_reverse() {
     done
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[allow(trivial_wrapper)]
 # Get array length
 # Usage: arr_length "${arr[@]}" -> prints count
+#[pub]
 arr_length() {
     echo "$#"
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if array is empty
 # Usage: arr_is_empty "${arr[@]}" -> returns 0 (true) if empty
 arr_is_empty() {
     [[ $# -eq 0 ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Get first element of array
 # Usage: arr_first "${arr[@]}" -> prints first element
 arr_first() {
     [[ $# -gt 0 ]] && echo "$1"
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Get last element of array
 # Usage: arr_last "${arr[@]}" -> prints last element
 arr_last() {
     [[ $# -gt 0 ]] && echo "${!#}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Sort array in place (lexicographic)
 # Usage: arr_sort arr
 arr_sort() {
@@ -128,7 +127,7 @@ arr_sort() {
     _arr=("${sorted[@]}")
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Filter array by pattern
 # Usage: arr_filter "pattern" "${arr[@]}" -> prints matching elements
 arr_filter() {

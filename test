@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell/test - Run the test suite
+# =============================================================================
+# Every `#[test]` function under tests/. An entry point, so it bootstraps
+# nutshell itself rather than relying on the interpreter being installed.
+#
+# Usage:
+#   ./test                    everything
+#   ./test tests/toml_test.sh one file
+#   TEST_FILTER=trim ./test   only tests whose name contains "trim"
+# =============================================================================
+
+set -uo pipefail
+. "${BASH_SOURCE[0]%/*}/init"
+
+use test log
+
+if [[ $# -gt 0 ]]; then
+    for f in "$@"; do
+        log_step "${f##*/}"
+        test_run "$f"
+    done
+else
+    test_run_dir "${BASH_SOURCE[0]%/*}/tests"
+fi
+
+test_summary

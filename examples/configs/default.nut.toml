@@ -28,9 +28,9 @@ include = ["*.sh"]
 # Annotations
 # -----------------------------------------------------------------------------
 [annotations]
-public_api = "@@PUBLIC_API@@"
-allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
-allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
+public_api = "#[pub]"
+allow_trivial_wrapper_ergonomics = "#[allow(trivial_wrapper)]"
+allow_large_file = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 
 # -----------------------------------------------------------------------------
 # Test Enable/Disable
@@ -63,8 +63,8 @@ token_complexity_pass = 4
 warn_threshold = 10
 fail_threshold = 50
 exempt_annotations = [
-    "@@PUBLIC_API@@",
-    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@",
+    "#[pub]",
+    "#[allow(trivial_wrapper)]",
 ]
 
 # -----------------------------------------------------------------------------
@@ -73,7 +73,7 @@ exempt_annotations = [
 [tests.file_size]
 max_loc = 500
 max_total_lines = 800
-exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
+exempt_annotation_pattern = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 exempt_patterns = []
 
 # -----------------------------------------------------------------------------
@@ -104,7 +104,7 @@ max_todos = 0  # Unlimited TODOs allowed
 # Public API Docs (disabled by default, but configured if enabled)
 # -----------------------------------------------------------------------------
 [tests.public_api_docs]
-public_api_annotation = "@@PUBLIC_API@@"
+public_api_annotation = "#[pub]"
 required_elements = ["Usage:"]
 recommended_elements = ["->"]
 min_doc_lines = 1

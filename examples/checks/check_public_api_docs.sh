@@ -5,14 +5,14 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Verifies that all functions marked with @@PUBLIC_API@@ annotation have
+# Verifies that all functions marked with #[pub] annotation have
 # proper documentation including usage examples.
 #
 # FULLY CONFIG-DRIVEN: All settings come from nut.toml.
 # See examples/configs/empty.nut.toml for all available options.
 #
 # Checks:
-#   - Functions with @@PUBLIC_API@@ must have a Usage: line
+#   - Functions with #[pub] must have a Usage: line
 #   - Optionally checks for return value documentation (->)
 #
 # Usage: ./examples/checks/check_public_api_docs.sh
@@ -32,7 +32,7 @@ use check-runner
 # =============================================================================
 
 # Settings (will be loaded from config)
-PUBLIC_API_ANNOTATION="@@PUBLIC_API@@"
+PUBLIC_API_ANNOTATION="#[pub]"
 declare -a REQUIRED_ELEMENTS=()
 declare -a RECOMMENDED_ELEMENTS=()
 MIN_DOC_LINES=1
@@ -45,7 +45,7 @@ load_config() {
     fi
     
     # Load settings from config
-    PUBLIC_API_ANNOTATION="$(cfg_get_or "tests.public_api_docs.public_api_annotation" "@@PUBLIC_API@@")"
+    PUBLIC_API_ANNOTATION="$(cfg_get_or "tests.public_api_docs.public_api_annotation" "#[pub]")"
     MIN_DOC_LINES="$(cfg_get_or "tests.public_api_docs.min_doc_lines" "1")"
     
     # Load required elements
@@ -135,39 +135,20 @@ find_public_api_functions() {
     local file="$1"
     local rel_path="${file#$REPO_ROOT/}"
     
-    # Find lines with the annotation
-    local annotation_lines
-    annotation_lines=$(grep -n "$PUBLIC_API_ANNOTATION" "$file" 2>/dev/null | cut -d: -f1)
-    
-    [[ -z "$annotation_lines" ]] && return
-    
-    # For each annotation, find the next function definition
-    while IFS= read -r anno_line; do
-        [[ -z "$anno_line" ]] && continue
-        
-        # Look forward to find the function definition
-        local search_start=$((anno_line + 1))
-        local search_end=$((anno_line + 10))
-        
-        local func_def
-        func_def=$(sed -n "${search_start},${search_end}p" "$file" 2>/dev/null | \
-            grep -E '^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\([[:space:]]*\)' | head -1)
-        
-        if [[ -n "$func_def" ]]; then
-            # Extract function name
-            local func_name
-            func_name=$(echo "$func_def" | sed -E 's/^[[:space:]]*(function[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(.*/\2/')
-            
-            # Find the actual line number of this function
-            local func_line
-            func_line=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-            if [[ -z "$func_line" ]]; then
-                func_line=$(grep -n "^[[:space:]]*function[[:space:]]\+${func_name}[[:space:]]*(" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-            fi
-            
-            echo "${func_name}|${func_line:-$anno_line}|${rel_path}"
-        fi
-    done <<< "$annotation_lines"
+    # Through attr, which parses attributes, rather than a grep for the marker.
+    # The grep interpolated `#[pub]` into a basic regular expression, where
+    # `[pub]` is a bracket expression matching one character out of p, u and b.
+    # It found no public functions in a library with more than a hundred, and
+    # the check reported a pass on every one of them.
+    local name func_name func_line
+    name="$(attr_name_of "$PUBLIC_API_ANNOTATION")" || return
+    name="${name%%$'\t'*}"
+
+    while IFS= read -r func_name; do
+        [[ -z "$func_name" ]] && continue
+        func_line=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+        echo "${func_name}|${func_line:-0}|${rel_path}"
+    done < <(attr_find "$file" "$name")
 }
 
 # =============================================================================
@@ -313,7 +294,7 @@ test_public_api_docs() {
         echo ""
         echo "Example of well-documented public API function:"
         echo ""
-        echo "  # @@PUBLIC_API@@"
+        echo "  # #[pub]"
         echo "  # Brief description of what the function does"
         echo "  # Usage: function_name \"arg1\" \"arg2\" -> \"result\""
         echo "  function_name() {"
@@ -355,7 +336,13 @@ main() {
     exit_with_status
 }
 
-# Run if executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# A check script is an entry point, so it runs.
+#
+# This used to be guarded by `[[ "${BASH_SOURCE[0]}" == "${0}" ]]`, the ordinary
+# "executed, not sourced" test. Under nutshell it is never true: the `#!/usr/bin/env
+# nutshell` shebang runs the interpreter, and the interpreter *sources* the
+# script, which is what makes `use` available from its first line. So `$0` is
+# the interpreter and `BASH_SOURCE[0]` is this file, and `main` was never
+# called. Six of the eight built-in checks exited 0 having done nothing, and
+# `./check` read that as a pass and printed one.
+main "$@"

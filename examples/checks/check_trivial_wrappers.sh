@@ -50,8 +50,8 @@ load_config() {
     FAIL_THRESHOLD="$(cfg_get_or "tests.trivial_wrappers.fail_threshold" "20")"
     
     # Load annotation patterns from config
-    PUBLIC_API_ANNOTATION="$(cfg_get_or "annotations.public_api" "@@PUBLIC_API@@")"
-    ERGONOMICS_ANNOTATION="$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@")"
+    PUBLIC_API_ANNOTATION="$(cfg_get_or "annotations.public_api" "#[pub]")"
+    ERGONOMICS_ANNOTATION="$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "#[allow(trivial_wrapper)]")"
 }
 
 # =============================================================================

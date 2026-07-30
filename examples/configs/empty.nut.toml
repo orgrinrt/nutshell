@@ -54,19 +54,19 @@ include = ["*.sh"]
 
 # Public API marker - function is part of the public interface
 # Used for: documentation generation, trivial wrapper exemption
-# Example: # @@PUBLIC_API@@
-public_api = "@@PUBLIC_API@@"
+# Example: # #[pub]
+public_api = "#[pub]"
 
 # Trivial wrapper allowed for ergonomics
 # Used for: trivial wrapper test exemption
-# Example: # @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
-allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+# Example: # #[allow(trivial_wrapper)]
+allow_trivial_wrapper_ergonomics = "#[allow(trivial_wrapper)]"
 
 # Large file allowed with reason
 # Used for: file size test exemption
-# Format: # @@ALLOW_LOC_<number>@@
-# Example: # @@ALLOW_LOC_600@@
-allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
+# Format: #[allow(loc = <number>)]
+# Example: #[allow(loc = 600)]
+allow_large_file = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 
 # -----------------------------------------------------------------------------
 # [tests] - Master test enable/disable switches
@@ -141,8 +141,8 @@ fail_threshold = 20
 # Annotations that exempt a function from this check
 # These are matched in the 5 lines preceding the function definition
 exempt_annotations = [
-    "@@PUBLIC_API@@",
-    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@",
+    "#[pub]",
+    "#[allow(trivial_wrapper)]",
 ]
 
 # -----------------------------------------------------------------------------
@@ -159,8 +159,8 @@ max_total_lines = 500
 
 # Annotation pattern for per-file exemption
 # The captured number becomes the new limit for that file
-# Example: # @@ALLOW_LOC_600@@ allows up to 600 LOC
-exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
+# Example: #[allow(loc = 600)] allows up to 600 LOC
+exempt_annotation_pattern = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 
 # Files matching these patterns are exempt from size limits
 exempt_patterns = []
@@ -226,7 +226,7 @@ max_todos = 0
 # -----------------------------------------------------------------------------
 [tests.public_api_docs]
 # Annotation that marks a function as public API
-public_api_annotation = "@@PUBLIC_API@@"
+public_api_annotation = "#[pub]"
 
 # Required documentation elements
 # Each element must be present in the comment block above the function

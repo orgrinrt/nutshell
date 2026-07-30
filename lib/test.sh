@@ -166,6 +166,19 @@ assert_exits() {
 # Running
 # -----------------------------------------------------------------------------
 
+# _test_now_us -> the time in whole microseconds, or nothing
+#
+# EPOCHREALTIME spells its decimal separator per locale, so feeding it to awk
+# under a comma locale truncated at the comma and every tenth printed as zero.
+# The digits alone are seconds followed by exactly six digits of microseconds,
+# so stripping the separator leaves an integer that subtracts cleanly. Empty
+# under bash older than 5.0, and the caller then prints no timing rather than
+# a wrong one.
+_test_now_us() {
+    local t="${EPOCHREALTIME:-}"
+    [[ -n "$t" ]] && printf '%s' "${t//[!0-9]/}"
+}
+
 # _test_mark_dir -> a directory to keep one tally per test in
 #
 # One file per test, not one file truncated between them. The shared file was
@@ -204,10 +217,12 @@ test_run() {
         # from one that died part way through. It runs whatever the function's
         # status, because a test is allowed to end on a command that returns
         # non-zero and half this library returns non-zero on purpose.
-        local start_time="$EPOCHREALTIME"
+        local start_us end_us took=""
+        start_us="$(_test_now_us)"
         output="$( set +e; . "$file" >/dev/null 2>&1; "$name" 2>&1; _test_mark z )"
-        local elapsed
-        elapsed="$(awk -v s="$start_time" -v e="$EPOCHREALTIME" 'BEGIN { printf "%.1f", e - s }')"
+        end_us="$(_test_now_us)"
+        [[ -n "$start_us" && -n "$end_us" ]] &&
+            took=" ($(( (end_us - start_us) / 1000000 )).$(( (end_us - start_us) / 100000 % 10 ))s)"
 
         # The tally decides, not the exit status. A test whose last command
         # happened to return non-zero used to fail with every assertion in it
@@ -229,11 +244,11 @@ test_run() {
 
         if [[ $rc -eq 0 ]]; then
             _TEST_PASSED+=1
-            log_tagged "PASS" green "$name (${elapsed}s)"
+            log_tagged "PASS" green "$name${took}"
         else
             _TEST_FAILED+=1
             _TEST_FAILURES+=("${file##*/}: ${name}")
-            log_tagged "FAIL" red "$name (${elapsed}s)"
+            log_tagged "FAIL" red "$name${took}"
             [[ -n "$output" ]] && printf '%s\n' "$output" | while IFS= read -r l; do
                 log_substep "$l"
             done

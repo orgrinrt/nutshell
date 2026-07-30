@@ -204,7 +204,10 @@ test_run() {
         # from one that died part way through. It runs whatever the function's
         # status, because a test is allowed to end on a command that returns
         # non-zero and half this library returns non-zero on purpose.
+        local start_time="$EPOCHREALTIME"
         output="$( set +e; . "$file" >/dev/null 2>&1; "$name" 2>&1; _test_mark z )"
+        local elapsed
+        elapsed="$(awk -v s="$start_time" -v e="$EPOCHREALTIME" 'BEGIN { printf "%.1f", e - s }')"
 
         # The tally decides, not the exit status. A test whose last command
         # happened to return non-zero used to fail with every assertion in it
@@ -226,11 +229,11 @@ test_run() {
 
         if [[ $rc -eq 0 ]]; then
             _TEST_PASSED+=1
-            log_tagged "PASS" green "$name"
+            log_tagged "PASS" green "$name (${elapsed}s)"
         else
             _TEST_FAILED+=1
             _TEST_FAILURES+=("${file##*/}: ${name}")
-            log_tagged "FAIL" red "$name"
+            log_tagged "FAIL" red "$name (${elapsed}s)"
             [[ -n "$output" ]] && printf '%s\n' "$output" | while IFS= read -r l; do
                 log_substep "$l"
             done

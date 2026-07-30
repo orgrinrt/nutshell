@@ -28,6 +28,13 @@ _NUTSHELL_ROOT="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
 export NUTSHELL_VERSION="0.2.0"
 
+# Script identity belongs to the interpreter invocation, not to ancestry. The
+# interpreter exports NUTSHELL_SCRIPT and NUTSHELL_SCRIPT_DIR after this file
+# runs, so its own script keeps them; a process that sources init directly
+# would otherwise inherit an ancestor's values and resolve that ancestor's
+# nut.toml as if it were its own.
+unset NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
+
 # Add our bin to PATH so the shebang #!/usr/bin/env nutshell works
 # for any scripts called after this init
 export PATH="${_NUTSHELL_ROOT}/bin:$PATH"

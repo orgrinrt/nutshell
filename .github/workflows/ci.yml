@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
-  check:
-    name: QA Checks
+  test:
+    name: Test Suite
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -19,10 +19,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # The system bash on macOS is 3.2, which lacks associative arrays and
+      # EPOCHREALTIME. The shebang resolves through env, so a newer bash on
+      # PATH is all the suite needs.
+      - name: Ensure bash 4 or newer on macOS
+        if: runner.os == 'macOS'
+        run: brew install bash
+
+      - name: Run the test suite
+        run: ./test
+
+  check:
+    name: QA Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Run QA checks
-        run: |
-          chmod +x ./check
-          ./check -v
+        run: ./check
 
   shellcheck:
     name: ShellCheck
@@ -35,40 +51,11 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get install -y shellcheck
 
-      - name: Run ShellCheck on lib/
-        run: |
-          find lib -name '*.sh' -type f -print0 | xargs -0 shellcheck --severity=warning || true
+      # Blocking at error severity, which the tree passes today; the gate is
+      # real and can fail. Raising to warning severity is tracked work, not a
+      # silent `|| true`.
+      - name: ShellCheck lib
+        run: find lib -name '*.sh' -type f -print0 | xargs -0 shellcheck --severity=error
 
-      - name: Run ShellCheck on main files
-        run: |
-          shellcheck --severity=warning nutshell.sh init check || true
-
-  test-source:
-    name: Test Sourcing
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Test init sourcing
-        run: |
-          source ./init
-          echo "Successfully sourced init"
-
-      - name: Test module loading
-        run: |
-          source ./init
-          use os log deps
-          echo "OS: $(os_name)"
-          log_info "Module loading works"
-
-      - name: Test full library
-        run: |
-          source ./init
-          use os log deps string array fs text
-          log_info "Full library loaded successfully"
+      - name: ShellCheck entry points
+        run: shellcheck --severity=error init check test bin/nutshell

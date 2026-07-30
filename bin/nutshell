@@ -92,6 +92,16 @@ case "${1:-}" in
             exit 1
         fi
 
+        # Where the script lives, absolute, for anything that has to resolve
+        # against the unit the script belongs to rather than against wherever
+        # it was called from. `nut.toml` is the case that matters: a script's
+        # dependencies belong to its project the way a crate's belong to its
+        # Cargo.toml, and a script run from inside some other repository must
+        # still find its own.
+        NUTSHELL_SCRIPT="$(cd "$(dirname "$_SCRIPT")" && pwd)/$(basename "$_SCRIPT")"
+        NUTSHELL_SCRIPT_DIR="${NUTSHELL_SCRIPT%/*}"
+        export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
+
         # Sourced, not executed, so the script runs in this environment with
         # `use` already defined.
         # shellcheck source=/dev/null

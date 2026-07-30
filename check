@@ -213,12 +213,22 @@ _run_check() {
         ((FAILED_CHECKS++))
     fi
     
-    # In quiet mode, we don't dump the full output - the tree summary is enough
-    # Only show output if there was a hard failure (exit code != 0)
-    # and even then, just show the essential failure lines
+    # The tree summary is the report; a failing check adds the first few
+    # failure lines so the reader knows what kind of failure it was without
+    # re-running it.
+    #
+    # Truncating silently made three runs of the same check look like three
+    # different answers, and cost an afternoon to work out that they were the
+    # same answer shown five lines at a time. Say how many are not shown.
     if [[ $exit_code -ne 0 ]]; then
-        # Extract just the failure lines (✗) and any actual errors
-        echo "$output" | grep -E "^\s*(✗|FAIL|ERROR|\[FAIL\]|\[ERROR\])" | head -5 | sed 's/^/      /'
+        local failures shown total
+        failures="$(echo "$output" | grep -E "^\s*(✗|FAIL|ERROR|\[FAIL\]|\[ERROR\])")"
+        total=$(printf '%s' "$failures" | grep -c . || true)
+        shown=5
+        printf '%s' "$failures" | head -"$shown" | sed 's/^/      /'
+        if [[ "$total" -gt "$shown" ]]; then
+            echo "      ... and $((total - shown)) more; run ${check_script#"${NUTSHELL_ROOT}"/} to see them"
+        fi
     fi
 }
 

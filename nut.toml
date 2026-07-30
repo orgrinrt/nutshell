@@ -35,13 +35,13 @@ include = ["*.sh"]
 # -----------------------------------------------------------------------------
 [annotations]
 # Public API - intentional interface, must be documented
-public_api = "@@PUBLIC_API@@"
+public_api = "#[pub]"
 
 # Trivial wrapper kept for API ergonomics/consistency
-allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+allow_trivial_wrapper_ergonomics = "#[allow(trivial_wrapper)]"
 
 # File exceeds normal size limit with explicit justification
-allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
+allow_large_file = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 
 # -----------------------------------------------------------------------------
 # Tests Configuration
@@ -93,8 +93,8 @@ fail_threshold = 20
 
 # Only these explicit annotations can exempt a function
 exempt_annotations = [
-    "@@PUBLIC_API@@",
-    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@",
+    "#[pub]",
+    "#[allow(trivial_wrapper)]",
 ]
 
 # -----------------------------------------------------------------------------
@@ -108,7 +108,7 @@ max_loc = 300
 max_total_lines = 500
 
 # Per-file exemption requires explicit annotation with justification
-exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
+exempt_annotation_pattern = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 
 # Files matching these patterns are exempt from size limits
 # deps.sh is large due to comprehensive tool detection
@@ -191,7 +191,7 @@ max_todos = 10
 # -----------------------------------------------------------------------------
 [tests.public_api_docs]
 # This annotation marks functions as public API
-public_api_annotation = "@@PUBLIC_API@@"
+public_api_annotation = "#[pub]"
 
 # Required: must have a usage example
 required_elements = [
@@ -223,3 +223,26 @@ show_passing = false
 
 # Always show summary
 show_summary = true
+
+# -----------------------------------------------------------------------------
+# External libraries
+# -----------------------------------------------------------------------------
+# Name to source, resolved once into a shared cache and reused by everything
+# that names the same ref. Git is first-class because that is where these
+# actually live; a released tarball is a later concern.
+#
+#   [deps.<name>]
+#   git = "<url>"
+#   ref = "<branch, tag or sha>"    # optional, defaults to the default branch
+#
+# A module inside one is reached by namespacing the use:
+#
+#   use shebang::diagnostics/findings
+#
+# The bare form stays nutshell's own, because nutshell is the default and
+# prefixing the common path to disambiguate the rare one is friction on every
+# line to help a few.
+
+[deps.shebang]
+git = "https://github.com/orgrinrt/the-whole-shebang.git"
+ref = "main"

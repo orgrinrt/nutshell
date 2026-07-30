@@ -5,7 +5,7 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# @@ALLOW_LOC_450@@
+#[allow(loc = 450)]
 # Layer -1 (Foundation): Depends only on os.sh
 #
 # This module detects what external tools are available and collects
@@ -28,17 +28,16 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_DEPS_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_DEPS_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_DEPS_DIR="${BASH_SOURCE[0]%/*}"
-# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
-[[ "$_NUTSHELL_DEPS_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_DEPS_DIR="."
-source "${_NUTSHELL_DEPS_DIR}/os.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use os
 
 # -----------------------------------------------------------------------------
 # Configuration file location
@@ -48,7 +47,7 @@ source "${_NUTSHELL_DEPS_DIR}/os.sh"
 _deps_find_config() {
     local check_paths=(
         "${PWD}/nut.toml"
-        "${_NUTSHELL_DEPS_DIR}/../nut.toml"
+        "${NUTSHELL_ROOT}/nut.toml"
     )
     
     for path in "${check_paths[@]}"; do
@@ -136,6 +135,12 @@ declare -gA _TOOL_VARIANT=() 2>/dev/null || declare -A _TOOL_VARIANT=()
 # Capabilities are named as tool_capability, e.g., sed_inplace, grep_pcre
 declare -gA _TOOL_CAN=() 2>/dev/null || declare -A _TOOL_CAN=()
 
+# Tools looked for and not found, so a miss is paid for once.
+declare -gA _TOOL_MISSING=() 2>/dev/null || declare -A _TOOL_MISSING=()
+
+# The config file, found once at init rather than on every lookup.
+declare -g _DEPS_CONFIG=""
+
 # -----------------------------------------------------------------------------
 # Internal: Path resolution
 # -----------------------------------------------------------------------------
@@ -191,17 +196,24 @@ _deps_find_tool() {
 # Internal: Variant detection
 # -----------------------------------------------------------------------------
 
+# A probe never reads stdin.
+#
+# Detection runs a tool with a flag it may not recognise, and a tool given an
+# unrecognised flag can fall back to reading a program or a file from standard
+# input. When standard input is a terminal, or a pipe nothing ever closes, the
+# probe waits there forever and the whole script appears to hang after having
+# already printed its output. Closing stdin costs nothing and removes the class.
 _deps_detect_sed_variant() {
     local cmd="$1"
     
     # GNU sed has --version
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi
     
     # BSD sed errors on --version
-    if "$cmd" --version 2>&1 | grep -qE "(illegal|invalid) option"; then
+    if "$cmd" --version </dev/null 2>&1 | grep -qE "(illegal|invalid) option"; then
         echo "bsd"
         return
     fi
@@ -213,13 +225,13 @@ _deps_detect_awk_variant() {
     local cmd="$1"
     
     # GNU awk (gawk)
-    if "$cmd" --version 2>/dev/null | grep -qi "GNU Awk"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -qi "GNU Awk"; then
         echo "gawk"
         return
     fi
     
     # mawk
-    if "$cmd" -W version 2>/dev/null | grep -qi "mawk"; then
+    if "$cmd" -W version </dev/null 2>/dev/null | grep -qi "mawk"; then
         echo "mawk"
         return
     fi
@@ -237,7 +249,7 @@ _deps_detect_awk_variant() {
 _deps_detect_grep_variant() {
     local cmd="$1"
     
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi
@@ -249,13 +261,13 @@ _deps_detect_stat_variant() {
     local cmd="$1"
     
     # GNU stat has --version
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi
     
     # BSD stat uses -f for format
-    if "$cmd" -f%z / 2>/dev/null >/dev/null; then
+    if "$cmd" -f%z / </dev/null 2>/dev/null >/dev/null; then
         echo "bsd"
         return
     fi
@@ -266,7 +278,7 @@ _deps_detect_stat_variant() {
 _deps_detect_find_variant() {
     local cmd="$1"
     
-    if "$cmd" --version 2>/dev/null | grep -q "GNU"; then
+    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
         echo "gnu"
         return
     fi
@@ -407,6 +419,7 @@ _deps_detect_capabilities() {
 _deps_init() {
     local config_file
     config_file="$(_deps_find_config)" || config_file=""
+    _DEPS_CONFIG="$config_file"
     
     # List of tools to detect
     local tools=(
@@ -444,46 +457,75 @@ _deps_init() {
 # Run initialization immediately
 _deps_init
 
-# Make arrays readonly after init (bash 4.2+)
-# Note: associative arrays can't be made readonly in all bash versions,
-# but we document that these should not be modified
-declare -gr _TOOLS_AVAILABLE 2>/dev/null || declare -r _TOOLS_AVAILABLE
+# Not readonly, deliberately. It was, and that froze the answer rather than the
+# source of truth: init scans a fixed list of unix text tools, so a tool found
+# later by `deps_has` could never join the list of what is available. An
+# immutable cache is a bug wherever the cache is allowed to be incomplete, and
+# this one is incomplete by construction.
+#
+# The associative arrays beside it were never readonly either, since bash
+# cannot always make one so. They are written by this module and read by
+# everyone; treat them as read-only from outside.
 
 # -----------------------------------------------------------------------------
 # Public API - Availability checks
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a tool is available
 # Usage: deps_has "sed" -> returns 0 (true) or 1 (false)
 deps_has() {
     local tool="${1:-}"
-    [[ -n "${_TOOL_PATH[$tool]:-}" ]]
+    [[ -z "$tool" ]] && return 1
+    [[ -n "${_TOOL_PATH[$tool]:-}" ]] && return 0
+    [[ -n "${_TOOL_MISSING[$tool]:-}" ]] && return 1
+
+    # Anything not in the eager list is looked for now, once, and remembered.
+    #
+    # Without this, `deps_has` answered no for every tool init did not scan
+    # for, and init scans for the unix text tools. So `json.sh` asked for jq
+    # and was told no on a machine with jq, and fell through its documented
+    # "jq, then python, then perl" preference to perl every time; `http.sh`
+    # asked for curl and for wget, was told no to both, and reported itself
+    # unavailable on every machine there has ever been. Neither module was
+    # wrong to ask. The answer was.
+    local path
+    if path="$(_deps_find_tool "$tool" "$_DEPS_CONFIG")"; then
+        _TOOL_PATH[$tool]="$path"
+        _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"
+        return 0
+    fi
+    _TOOL_MISSING[$tool]=1
+    return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if multiple tools are all available
 # Usage: deps_has_all "sed" "awk" "grep" -> returns 0 if all present
 deps_has_all() {
     local tool
     for tool in "$@"; do
-        [[ -z "${_TOOL_PATH[$tool]:-}" ]] && return 1
+        # Through deps_has, so a tool outside the eager list is looked for.
+        # Reading the table straight made the answer depend on whether
+        # something else had asked about the tool first, and the whole point of
+        # this module is that the answer does not depend on load order.
+        deps_has "$tool" || return 1
     done
     return 0
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if at least one of the tools is available
 # Usage: deps_has_any "perl" "sed" -> returns 0 if any present
 deps_has_any() {
     local tool
     for tool in "$@"; do
-        [[ -n "${_TOOL_PATH[$tool]:-}" ]] && return 0
+        deps_has "$tool" && return 0
     done
     return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the list of available tools (space-separated)
 # Usage: deps_available -> "sed awk grep perl stat..."
 deps_available() {
@@ -494,22 +536,20 @@ deps_available() {
 # Public API - Path and variant access
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the path to a tool
 # Usage: deps_path "sed" -> "/usr/bin/sed"
 deps_path() {
     local tool="${1:-}"
-    local path="${_TOOL_PATH[$tool]:-}"
-    
-    if [[ -n "$path" ]]; then
-        echo "$path"
-        return 0
-    fi
-    
-    return 1
+    # Through deps_has, so a tool outside the eager list resolves here too. The
+    # two used to disagree: asking whether a tool was there found it, and
+    # asking where it was did not, because only the first had been taught to
+    # look.
+    deps_has "$tool" || return 1
+    printf '%s\n' "${_TOOL_PATH[$tool]}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the variant of a tool
 # Usage: deps_variant "sed" -> "gnu" or "bsd"
 deps_variant() {
@@ -517,7 +557,7 @@ deps_variant() {
     echo "${_TOOL_VARIANT[$tool]:-unknown}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if tool is GNU variant
 # Usage: deps_is_gnu "sed" -> returns 0 or 1
 deps_is_gnu() {
@@ -526,7 +566,7 @@ deps_is_gnu() {
     [[ "$variant" == "gnu" ]] || [[ "$variant" == "gawk" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if tool is BSD variant
 # Usage: deps_is_bsd "sed" -> returns 0 or 1
 deps_is_bsd() {
@@ -539,7 +579,7 @@ deps_is_bsd() {
 # Public API - Capability checks
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a capability is available
 # Usage: deps_can "grep_pcre" -> returns 0 or 1
 deps_can() {
@@ -547,7 +587,7 @@ deps_can() {
     [[ "${_TOOL_CAN[$cap]:-0}" == "1" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get capability value (1 or 0)
 # Usage: deps_cap "grep_pcre" -> "1" or "0"
 deps_cap() {
@@ -555,7 +595,7 @@ deps_cap() {
     echo "${_TOOL_CAN[$cap]:-0}"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # List all capabilities (one per line: cap=value)
 # Usage: deps_caps -> "sed_inplace=1\ngrep_pcre=1\n..."
 deps_caps() {
@@ -569,7 +609,7 @@ deps_caps() {
 # Public API - Requirement enforcement
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Require a tool to be present; exit if not
 # Usage: deps_require "sed" ["Custom error message"]
 deps_require() {
@@ -582,7 +622,7 @@ deps_require() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Require multiple tools; exit if any missing
 # Usage: deps_require_all "sed" "awk" "grep"
 deps_require_all() {
@@ -599,7 +639,7 @@ deps_require_all() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Require a capability; exit if not available
 # Usage: deps_require_cap "grep_pcre" ["Custom error message"]
 deps_require_cap() {
@@ -616,7 +656,7 @@ deps_require_cap() {
 # Public API - Diagnostics
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Print dependency information for debugging
 # Usage: deps_info -> prints formatted tool info
 deps_info() {
@@ -650,7 +690,7 @@ deps_info() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check all common tools and report status
 # Usage: deps_check -> returns 0 if all basic tools present
 deps_check() {
@@ -674,19 +714,19 @@ deps_check() {
 # Convenience: Direct tool execution with resolved path
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Run a tool using its detected path
 # Usage: deps_run "sed" -i 's/a/b/' file.txt
 deps_run() {
     local tool="${1:-}"
     shift
-    
-    local path="${_TOOL_PATH[$tool]:-}"
-    if [[ -z "$path" ]]; then
+
+    local path
+    if ! path="$(deps_path "$tool")"; then
         echo "[ERROR] Tool '$tool' not available" >&2
         return 1
     fi
-    
+
     "$path" "$@"
 }
 
@@ -695,7 +735,7 @@ deps_run() {
 # These are convenience functions; modules can also access _TOOL_PATH directly
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Portable sed in-place edit
 # Usage: deps_sed_inplace "s/old/new/g" "file.txt"
 deps_sed_inplace() {
@@ -711,7 +751,7 @@ deps_sed_inplace() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Portable stat for file size in bytes
 # Usage: deps_stat_size "file" -> "12345"
 deps_stat_size() {
@@ -725,7 +765,7 @@ deps_stat_size() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Portable stat for modification time (epoch seconds)
 # Usage: deps_stat_mtime "file" -> "1234567890"
 deps_stat_mtime() {

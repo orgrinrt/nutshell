@@ -5,7 +5,7 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# @@ALLOW_LOC_400@@
+#[allow(loc = 400)]
 # Layer 0 (Core): Depends on fs.sh, string.sh, validate.sh
 #
 # Pure TOML parsing functions. No caching, no config semantics.
@@ -13,19 +13,14 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_TOML_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_TOML_SH=1
+nut_once || return 0
 
-# -----------------------------------------------------------------------------
-# Dependencies
-# -----------------------------------------------------------------------------
-
-_NUTSHELL_TOML_DIR="${BASH_SOURCE[0]%/*}"
-# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
-[[ "$_NUTSHELL_TOML_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_TOML_DIR="."
-source "${_NUTSHELL_TOML_DIR}/fs.sh"
-source "${_NUTSHELL_TOML_DIR}/string.sh"
-source "${_NUTSHELL_TOML_DIR}/validate.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once. `_toml_clean_line` trims through
+# `str_trim`, and until this line existed a caller that had not already loaded
+# `string` got a toml module whose every read silently failed.
+use string validate
 
 # -----------------------------------------------------------------------------
 # Internal helpers
@@ -34,9 +29,27 @@ source "${_NUTSHELL_TOML_DIR}/validate.sh"
 # Remove inline comments and trim whitespace from a line
 _toml_clean_line() {
     local line="$1"
-    # Remove inline comments (# not inside quotes - simplified)
-    line="${line%%#*}"
-    str_trim "$line"
+
+    # A `#` inside a quoted string is part of the value, not the start of a
+    # comment. Truncating at the first one regardless, which is what this did,
+    # silently emptied any value containing one: `public_api = "#[pub]"` parsed
+    # as `public_api =` and every consumer got an empty string with no error to
+    # explain it.
+    local out="" i char in_quotes=0 quote=""
+    for (( i = 0; i < ${#line}; i++ )); do
+        char="${line:i:1}"
+        if [[ "$in_quotes" -eq 1 ]]; then
+            [[ "$char" == "$quote" ]] && in_quotes=0
+        elif [[ "$char" == '"' || "$char" == "'" ]]; then
+            in_quotes=1
+            quote="$char"
+        elif [[ "$char" == "#" ]]; then
+            break
+        fi
+        out+="$char"
+    done
+
+    str_trim "$out"
 }
 
 # Extract value, handling quotes
@@ -64,7 +77,7 @@ _toml_extract_value() {
 # Public API
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a value from a TOML file
 # Usage: toml_get "file.toml" "key" -> prints value
 # Usage: toml_get "file.toml" "section.key" -> prints value from [section]
@@ -174,7 +187,7 @@ toml_get() {
     return 1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a value with a default if not found
 # Usage: toml_get_or "file.toml" "key" "default"
 toml_get_or() {
@@ -190,7 +203,7 @@ toml_get_or() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a key exists in a TOML file
 # Usage: toml_has "file.toml" "key" -> returns 0 (true) or 1 (false)
 toml_has() {
@@ -200,7 +213,7 @@ toml_has() {
     toml_get "$file" "$key" >/dev/null 2>&1
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # List all section names in a TOML file
 # Usage: toml_sections "file.toml" -> prints section names, one per line
 toml_sections() {
@@ -216,7 +229,7 @@ toml_sections() {
     done < "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # List all keys in a section (or root if no section specified)
 # Usage: toml_keys "file.toml" [section]
 toml_keys() {
@@ -261,7 +274,7 @@ toml_keys() {
     done < "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Parse a TOML array value into a bash array
 # Usage: toml_array "file.toml" "key" arr
 toml_array() {
@@ -309,9 +322,16 @@ toml_array() {
         # Single value, treat as single-element array
         _arr+=("$value")
     fi
+
+    # Explicit, because the last statement above is a test. A trailing comma
+    # leaves the final element empty, that test is false, and the function
+    # would report failure having just populated the array correctly. TOML
+    # permits the trailing comma, so this was every well-formed multi-line
+    # array whose author used one.
+    return 0
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a TOML value is true (handles various boolean representations)
 # Usage: toml_is_true "file.toml" "key" -> returns 0 (true) or 1 (false)
 toml_is_true() {
@@ -324,7 +344,7 @@ toml_is_true() {
     is_truthy "$value"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Convert a TOML file to JSON
 # Usage: toml_to_json "file.toml" -> prints JSON
 toml_to_json() {
@@ -483,7 +503,7 @@ _toml_value_to_json() {
     echo "\"${val}\""
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get all key=value pairs from a section as "key=value" lines
 # Usage: toml_section_pairs "file.toml" "section"
 toml_section_pairs() {

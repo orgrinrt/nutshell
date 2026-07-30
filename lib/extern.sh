@@ -43,14 +43,27 @@ use toml xdg fs log validate
 
 # _extern_manifest
 #
-# The nearest `nut.toml`, walking up from the working directory. A project's
-# dependencies belong to the project, so the answer is found from where the
-# work is rather than from where nutshell happens to be installed.
+# The nearest `nut.toml`, from the script's own directory first and the working
+# directory second.
+#
+# A script's dependencies belong to the script, the way a crate's belong to its
+# Cargo.toml. Resolving from the working directory alone means a script run
+# against some other repository cannot find its own manifest, and instead finds
+# that repository's, or nothing. The interpreter knows where the script lives,
+# so the unit that declares the `use` is the unit that answers for it.
+#
+# The working directory stays as the fallback, because a scratch script inside
+# the project you are working in has no unit of its own and the project's
+# manifest is the right answer for it.
 _extern_manifest() {
-    local dir="${PWD}"
-    while [[ "$dir" != "/" ]]; do
-        [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
-        dir="$(dirname "$dir")"
+    local start dir
+    for start in "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
+        [[ -z "$start" ]] && continue
+        dir="$start"
+        while [[ "$dir" != "/" && -n "$dir" ]]; do
+            [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
+            dir="$(dirname "$dir")"
+        done
     done
     return 1
 }
@@ -223,8 +236,11 @@ _extern_is_repo() {
 # there is nothing to do.
 #
 # `mkdir` is the lock: one syscall, atomic on any filesystem worth the name,
-# and no tool beyond the shell. A lock older than the wait is taken over, since
-# the alternative is a cache that stays wedged after one interrupted fetch.
+# and no tool beyond the shell. The winner writes its pid inside, so a waiter
+# can tell a working holder from a dead one and take over a corpse's lock at
+# once instead of sitting out a clock. The age check stays as the fallback for
+# a lock with no pid in it, since the alternative is a cache that stays wedged
+# after one interrupted fetch.
 # Not readonly. A caller, and the tests in particular, has to be able to say
 # "do not wait eleven minutes for this one", and an assignment to a readonly
 # fails silently enough that the first version of that test simply sat through
@@ -240,8 +256,19 @@ _extern_guard() {
         # Ready means ready, so a waiter never returns a half-written tree.
         _extern_is_repo "$dir" && return 0
 
-        # A lock nobody is holding. Taken over rather than waited on, because
-        # the process that made it is gone and nothing else will clear it.
+        # A lock whose holder is dead. Taken over at once, because the process
+        # that made it is gone and nothing else will clear it. `kill -0` asks
+        # whether the pid is alive without signalling it; the cache is
+        # per-user, so a permission refusal is not a concern here.
+        local holder
+        holder="$(cat "${lock}/pid" 2>/dev/null)"
+        if [[ "$holder" =~ ^[0-9]+$ ]] && ! kill -0 "$holder" 2>/dev/null; then
+            rm -rf "$lock"
+            continue
+        fi
+
+        # A lock with no pid in it: brand new, mid-write, or left by hand.
+        # Those age out on the clock instead.
         if [[ -d "$lock" ]] &&
            [[ -z "$(find "$lock" -maxdepth 0 -mmin "-${_EXTERN_LOCK_STALE_MINUTES}" 2>/dev/null)" ]]; then
             rm -rf "$lock"
@@ -256,6 +283,8 @@ _extern_guard() {
             return 1
         fi
     done
+
+    printf '%s' "$$" > "${lock}/pid" 2>/dev/null
 
     local rc=0
     if ! _extern_is_repo "$dir"; then
@@ -272,7 +301,10 @@ _extern_guard() {
             [[ -e "$dir" ]] && rm -rf "$dir"
         fi
     fi
-    rmdir "$lock" 2>/dev/null
+    # Not rmdir: the lock holds the pid file now, and rmdir on a non-empty
+    # directory fails silently here, which would leave every later caller
+    # waiting on a lock whose holder finished long ago.
+    rm -rf "$lock"
     return "$rc"
 }
 

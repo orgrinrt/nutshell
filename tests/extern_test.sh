@@ -260,6 +260,31 @@ it_makes_a_waiter_wait_for_a_finished_checkout() {
 }
 
 #[test]
+it_takes_over_a_lock_whose_holder_died() {
+    # An interrupted process leaves its lock behind, and before the holder's
+    # pid lived in the lock the only way past it was to sit out a ten minute
+    # clock. The wait here is capped at 3 seconds, so this passes only if the
+    # dead holder's lock is reclaimed rather than waited on.
+    _isolate
+    local fix work dir lock corpse
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    dir="$(_extern_cache_root)/pretend"
+    lock="${dir}.lock"
+    fs_mkdir "$lock"
+    bash -c ':' & corpse=$!
+    wait "$corpse"
+    printf '%s' "$corpse" > "${lock}/pid"
+
+    local rc=0
+    _EXTERN_LOCK_WAIT_SECONDS=3 _extern_guard "$dir" git init --quiet "$dir" || rc=$?
+
+    assert_eq "$rc" "0" "a dead holder's lock is taken over, not waited out"
+    assert_ok git -C "$dir" rev-parse --git-dir
+}
+
+#[test]
 it_resolves_a_namespaced_module_to_a_file() {
     # What a namespaced `use` turns into. Kept separate from loading so the
     # resolution can be asked about without sourcing anything.
@@ -288,4 +313,83 @@ it_refuses_a_spec_that_names_no_library() {
     # quietly resolve it against some library.
     _isolate
     assert_fails extern_resolve 'greet'
+}
+
+# -----------------------------------------------------------------------------
+# Which nut.toml answers for a script
+# -----------------------------------------------------------------------------
+#
+# A script's dependencies belong to the script, the way a crate's belong to its
+# Cargo.toml. Resolving from the working directory alone meant a script run
+# against another repository found that repository's manifest, or none, and
+# never its own.
+
+# _manifest_fixture -> prints "<root>"
+#
+# A unit directory holding a manifest and a script, a sibling with no manifest
+# to be called from, and a project with a manifest of its own further down.
+_manifest_fixture() {
+    local root
+    # Normalised through cd, because TMPDIR may carry a trailing slash and
+    # fs_temp_dir passes it through, while a path that has been cd'd into comes
+    # back single-slashed. Comparing one against the other fails on the slash
+    # rather than on the behaviour.
+    root="$(cd "$(fs_temp_dir nutshell-manifest)" && pwd)"
+    mkdir -p "${root}/unit" "${root}/elsewhere" "${root}/project/sub" "${root}/loose"
+    printf '[deps.a]\ngit = "x"\n' > "${root}/unit/nut.toml"
+    printf '[deps.b]\ngit = "y"\n' > "${root}/project/nut.toml"
+    printf '%s' "$root"
+}
+
+#[test]
+it_prefers_the_scripts_own_manifest_over_the_working_directory() {
+    local root
+    root="$(_manifest_fixture)"
+    cd "${root}/project/sub" || return 1
+
+    NUTSHELL_SCRIPT_DIR="${root}/unit"
+    assert_eq "$(_extern_manifest)" "${root}/unit/nut.toml" \
+        "the script's own manifest wins over the one above the caller"
+}
+
+#[test]
+it_falls_back_to_the_working_directory_when_the_script_has_no_manifest() {
+    local root
+    root="$(_manifest_fixture)"
+    cd "${root}/project/sub" || return 1
+
+    # A scratch script with no unit of its own: the project in front of it is
+    # the right answer.
+    NUTSHELL_SCRIPT_DIR="${root}/loose"
+    assert_eq "$(_extern_manifest)" "${root}/project/nut.toml" \
+        "no manifest above the script, so the caller's project answers"
+}
+
+#[test]
+it_clears_inherited_script_identity_in_a_fresh_process() {
+    # NUTSHELL_SCRIPT_DIR is exported for the interpreter's own script, so a
+    # descendant that sources init directly would inherit an ancestor's value
+    # and resolve that ancestor's manifest as its own. init unsets it; the
+    # interpreter re-exports fresh values for the script it actually runs.
+    local root out
+    root="$(_manifest_fixture)"
+    cd "${root}/project/sub" || return 1
+
+    export NUTSHELL_SCRIPT_DIR="${root}/unit"
+    out="$(bash -c '. "$1/init" && use extern >/dev/null 2>&1; _extern_manifest' _ "$NUTSHELL_ROOT")"
+
+    assert_eq "$out" "${root}/project/nut.toml" \
+        "an ancestor's script directory does not answer for a fresh process"
+}
+
+#[test]
+it_still_resolves_from_the_working_directory_when_nothing_names_a_script() {
+    local root
+    root="$(_manifest_fixture)"
+    cd "${root}/project/sub" || return 1
+
+    # Sourced `init` rather than run through the interpreter, so the variable
+    # is unset. The old behaviour has to keep working.
+    unset NUTSHELL_SCRIPT_DIR
+    assert_eq "$(_extern_manifest)" "${root}/project/nut.toml"
 }

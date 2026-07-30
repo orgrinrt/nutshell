@@ -1,116 +1,45 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell.sh - Load all modules at once
+# nutshell.sh - Load every module at once
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# This file sources ALL nutshell modules for convenience.
-# For selective loading, use the init file instead:
+# For when a script wants the whole library and would rather not list it:
 #
-#   . "${0%/*}/lib/nutshell/init"
-#   use os log json
-#
-# Usage:
 #   source "path/to/nutshell/nutshell.sh"
 #
+# Prefer `init` and name what you use. It is the same loader either way, and a
+# script that lists its modules says what it depends on:
+#
+#   . "path/to/nutshell/init"
+#   use os log json
+#
+# This file used to be a third loader: it sourced every module by path in a
+# hand-maintained layer order, kept its own copy of `use` and the loaded-module
+# table, and carried a second version constant. The order duplicated dependency
+# knowledge that now lives in each module's own `use` line, and the two copies
+# of the loader had already drifted. It composes over `init` instead.
 # =============================================================================
 
-# Prevent multiple inclusion
 [[ -n "${_NUTSHELL_SH:-}" ]] && return 0
 readonly _NUTSHELL_SH=1
 
-# =============================================================================
-# Version
-# =============================================================================
+_NUTSHELL_SH_DIR="${BASH_SOURCE[0]%/*}"
+[[ "$_NUTSHELL_SH_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_SH_DIR="."
 
-readonly NUTSHELL_VERSION="0.1.0"
-export NUTSHELL_VERSION
+# shellcheck source=/dev/null
+source "$(cd "$_NUTSHELL_SH_DIR" && pwd)/init" || return 1
 
-# =============================================================================
-# Resolve nutshell root directory
-# =============================================================================
-
-NUTSHELL_ROOT="${BASH_SOURCE[0]%/*}"
-# Handle case when sourced from same directory
-[[ "$NUTSHELL_ROOT" == "${BASH_SOURCE[0]}" ]] && NUTSHELL_ROOT="."
-NUTSHELL_ROOT="$(cd "$NUTSHELL_ROOT" && pwd)"
-export NUTSHELL_ROOT
-
-# Add bin to PATH for shebang support
-export PATH="${NUTSHELL_ROOT}/bin:$PATH"
-
-# =============================================================================
-# Layer -1 (Foundation) - No dependencies
-# =============================================================================
-
-source "${NUTSHELL_ROOT}/lib/os.sh"
-source "${NUTSHELL_ROOT}/lib/log.sh"
-source "${NUTSHELL_ROOT}/lib/deps.sh"
-
-# =============================================================================
-# Layer 0 (Core) - May depend on foundation
-# =============================================================================
-
-source "${NUTSHELL_ROOT}/lib/color.sh"
-source "${NUTSHELL_ROOT}/lib/validate.sh"
-source "${NUTSHELL_ROOT}/lib/string.sh"
-source "${NUTSHELL_ROOT}/lib/array.sh"
-source "${NUTSHELL_ROOT}/lib/fs.sh"
-source "${NUTSHELL_ROOT}/lib/text.sh"
-source "${NUTSHELL_ROOT}/lib/toml.sh"
-source "${NUTSHELL_ROOT}/lib/json.sh"
-source "${NUTSHELL_ROOT}/lib/http.sh"
-source "${NUTSHELL_ROOT}/lib/prompt.sh"
-source "${NUTSHELL_ROOT}/lib/xdg.sh"
-
-# =============================================================================
-# Module tracking (for compatibility with use/init pattern)
-# =============================================================================
-
-declare -gA _NUTSHELL_LOADED=() 2>/dev/null || declare -A _NUTSHELL_LOADED=()
-_NUTSHELL_LOADED[os]=1
-_NUTSHELL_LOADED[log]=1
-_NUTSHELL_LOADED[deps]=1
-_NUTSHELL_LOADED[color]=1
-_NUTSHELL_LOADED[validate]=1
-_NUTSHELL_LOADED[string]=1
-_NUTSHELL_LOADED[array]=1
-_NUTSHELL_LOADED[fs]=1
-_NUTSHELL_LOADED[text]=1
-_NUTSHELL_LOADED[toml]=1
-_NUTSHELL_LOADED[json]=1
-_NUTSHELL_LOADED[http]=1
-_NUTSHELL_LOADED[prompt]=1
-_NUTSHELL_LOADED[xdg]=1
-
-# Provide use() for scripts that expect it (no-op for already loaded modules)
-use() {
+# Every module the library has, discovered rather than listed, so a new one is
+# not missing from here until somebody remembers. Load order is `use`'s
+# problem: a module declares what it needs and gets it.
+_nutshell_load_all() {
     local mod
-    for mod in "$@"; do
-        if [[ -z "${_NUTSHELL_LOADED[$mod]:-}" ]]; then
-            local mod_path="${NUTSHELL_ROOT}/lib/${mod}.sh"
-            if [[ -f "$mod_path" ]]; then
-                source "$mod_path"
-                _NUTSHELL_LOADED[$mod]=1
-            else
-                echo "nutshell: unknown module '$mod'" >&2
-                return 1
-            fi
-        fi
-    done
+    while IFS= read -r mod; do
+        [[ -z "$mod" ]] && continue
+        use "$mod" || return 1
+    done < <(nutshell_available)
 }
-export -f use
 
-nutshell_loaded() {
-    [[ -n "${_NUTSHELL_LOADED[$1]:-}" ]]
-}
-export -f nutshell_loaded
-
-nutshell_modules() {
-    local mod
-    for mod in "${!_NUTSHELL_LOADED[@]}"; do
-        echo "$mod"
-    done | sort
-}
-export -f nutshell_modules
+_nutshell_load_all

@@ -34,7 +34,7 @@ nutshell is a minimal bash utility library providing core primitives for shell s
 
 ### 5. Self-Documenting Code
 
-- Every public function marked with `@@PUBLIC_API@@`.
+- Every public function marked with `#[pub]`.
 - Every public function has `Usage:` documentation.
 - Annotations are semantic and serve multiple purposes.
 
@@ -553,21 +553,23 @@ fi
 
 | Annotation | Meaning | Example |
 |------------|---------|---------|
-| `@@PUBLIC_API@@` | Function is part of public interface | `# @@PUBLIC_API@@` |
-| `@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@` | Intentionally simple wrapper | `# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@` |
-| `@@ALLOW_LOC_NNN@@` | File size exemption | `# @@ALLOW_LOC_450@@` |
+| `#[pub]` | Function is part of public interface | `#[pub]` |
+| `#[allow(trivial_wrapper)]` | Intentionally simple wrapper | `#[allow(trivial_wrapper)]` |
+| `#[allow(loc = N)]` | File size exemption | `#[allow(loc = 450)]` |
+
+Each annotation is a comment placed either on its own line directly above the function it applies to, or near the top of the file when it governs the whole module (the file-size exemption sits below the file's header comment block, before the first function).
 
 ### Rules
 
-1. Every public function MUST have `@@PUBLIC_API@@`
-2. Every `@@PUBLIC_API@@` function MUST have `Usage:` in its comment block
-3. Trivial wrappers (1-2 line functions) need `@@PUBLIC_API@@` or `@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@`
-4. Files exceeding 300 LOC need `@@ALLOW_LOC_NNN@@` with the actual limit
+1. Every public function MUST have `#[pub]`
+2. Every `#[pub]` function MUST have `Usage:` in its comment block
+3. Trivial wrappers (1-2 line functions) need `#[pub]` or `#[allow(trivial_wrapper)]`
+4. Files exceeding 300 LOC need `#[allow(loc = N)]` with the actual limit
 
 ### Example
 
 ```bash
-# @@PUBLIC_API@@
+#[pub]
 # Check if a tool is available
 # Usage: deps_has "sed" -> returns 0 (true) or 1 (false)
 deps_has() {
@@ -575,8 +577,8 @@ deps_has() {
     [[ -n "${_TOOL_PATH[$tool]:-}" ]]
 }
 
-# @@PUBLIC_API@@
-# @@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@
+#[pub]
+#[allow(trivial_wrapper)]
 # Check if path exists
 # Usage: fs_exists "path" -> returns 0 (true) or 1 (false)
 fs_exists() {
@@ -702,7 +704,7 @@ Diagnostics:
   core/
     deps.sh
       ⚠ 421 LOC
-        └─ consider splitting or add @@ALLOW_LOC_421@@
+        └─ consider splitting or add #[allow(loc = 421)]
 
 PASSED (5/5 tests, 1 with warnings)
 ```
@@ -719,6 +721,6 @@ Output level controlled with `--level=error|warn|info|debug`.
 
 ### Potential Features
 
-- Shell completion generation from `@@PUBLIC_API@@` functions
+- Shell completion generation from `#[pub]` functions
 - Benchmark suite for tool selection optimization
 - Config schema validation (JSON Schema for nut.toml)

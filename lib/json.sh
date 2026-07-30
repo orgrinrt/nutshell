@@ -5,11 +5,17 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# @@ALLOW_LOC_650@@
 # Layer 0 (Core): Depends on deps.sh for tool detection
 #
 # Provides JSON parsing and manipulation functions. Uses lazy-init stubs to
 # select the best available tool (jq > python > perl > pure bash fallback).
+#
+# Object keys come back sorted, and documents come back compact. Not a
+# preference: a perl hash has no order and its iteration order is randomised
+# per process, so sorted is the only order all three backends can produce, and
+# `json_pretty` is where formatting lives. Without this the same call returned
+# different text depending on which tool happened to be installed, and on perl
+# a different order on every run.
 #
 # Features:
 #   - Get values by path (dot notation or jq syntax)
@@ -20,16 +26,16 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_JSON_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_JSON_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_JSON_DIR="${BASH_SOURCE[0]%/*}"
-[[ "$_NUTSHELL_JSON_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_JSON_DIR="."
-source "${_NUTSHELL_JSON_DIR}/deps.sh"
+# Declared, not sourced by path. A hand-rolled `source` loads the module and
+# hides it from the module-contract check, which reads `use` lines, so the
+# dependency was real and unrecorded at once.
+use deps
 
 # -----------------------------------------------------------------------------
 # Module Status
@@ -54,494 +60,30 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Internal Implementation Functions
+# Backends
 # -----------------------------------------------------------------------------
+#
+# Three interchangeable implementations of the same eight operations, one per
+# tool, in `json/impl/`. They lived here and made this file 940 lines, of which
+# the public surface was the last fifth.
+#
+# Every backend whose tool is present is loaded, not only the selected one.
+# Loading one would save little (they are function definitions) and would make
+# `_JSON_IMPL` a decision taken once at load rather than a value the dispatch
+# reads, which is what lets a caller move it and lets the tests exercise all
+# three rather than whichever the machine happened to pick.
+readonly _JSON_IMPL_DIR="${BASH_SOURCE[0]%/*}/json/impl"
 
-# Get python command (python3 preferred)
-_json_python_cmd() {
-    if deps_has "python3"; then
-        echo "${_TOOL_PATH[python3]}"
-    else
-        echo "${_TOOL_PATH[python]}"
-    fi
-}
+deps_has jq && source "${_JSON_IMPL_DIR}/jq.sh"
+{ deps_has python3 || deps_has python; } && source "${_JSON_IMPL_DIR}/python.sh"
+deps_has perl && source "${_JSON_IMPL_DIR}/perl.sh"
 
-# jq implementation of json_get
-_json_get_jq() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    # Convert dot notation to jq path if needed
-    if [[ "$path" != "."* ]]; then
-        path=".${path}"
-    fi
-    
-    echo "$json" | "${_TOOL_PATH[jq]}" -r "$path" 2>/dev/null
-}
-
-# Python implementation of json_get
-_json_get_python() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    # Convert path to Python dict access
-    # e.g., "foo.bar.0.baz" -> ['foo']['bar'][0]['baz']
-    "$python_cmd" -c "
-import json
-import sys
-
-data = json.loads('''$json''')
-path = '$path'
-
-# Navigate the path
-current = data
-for part in path.split('.'):
-    if not part:
-        continue
-    if part.isdigit():
-        current = current[int(part)]
-    else:
-        current = current[part]
-
-# Output
-if isinstance(current, (dict, list)):
-    print(json.dumps(current))
-else:
-    print(current if current is not None else 'null')
-" 2>/dev/null
-}
-
-# Perl implementation of json_get
-_json_get_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        if (ref($data) eq "HASH" || ref($data) eq "ARRAY") {
-            print encode_json($data);
-        } elsif (defined $data) {
-            print $data;
-        } else {
-            print "null";
-        }
-    ' "$json" "$path" 2>/dev/null
-}
-
-# jq implementation of json_set
-_json_set_jq() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local value="${3:-}"
-    
-    if [[ "$path" != "."* ]]; then
-        path=".${path}"
-    fi
-    
-    # Determine if value is a string or other JSON type
-    if [[ "$value" == "true" || "$value" == "false" || "$value" == "null" || \
-          "$value" =~ ^-?[0-9]+(\.[0-9]+)?$ || \
-          "$value" == "["* || "$value" == "{"* ]]; then
-        echo "$json" | "${_TOOL_PATH[jq]}" "$path = $value" 2>/dev/null
-    else
-        echo "$json" | "${_TOOL_PATH[jq]}" --arg v "$value" "$path = \$v" 2>/dev/null
-    fi
-}
-
-# Python implementation of json_set
-_json_set_python() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local value="${3:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    "$python_cmd" -c "
-import json
-
-data = json.loads('''$json''')
-path = '$path'
-value_str = '''$value'''
-
-# Parse value
-try:
-    value = json.loads(value_str)
-except:
-    value = value_str
-
-# Navigate to parent and set
-parts = [p for p in path.split('.') if p]
-current = data
-for part in parts[:-1]:
-    if part.isdigit():
-        current = current[int(part)]
-    else:
-        current = current[part]
-
-last = parts[-1]
-if last.isdigit():
-    current[int(last)] = value
-else:
-    current[last] = value
-
-print(json.dumps(data))
-" 2>/dev/null
-}
-
-# Perl implementation of json_set
-_json_set_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local value="${3:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        my $value_str = $ARGV[2];
-        
-        my $data = decode_json($json_text);
-        
-        # Parse value
-        my $value;
-        eval { $value = decode_json($value_str); };
-        $value = $value_str if $@;
-        
-        # Navigate to parent
-        my @parts = grep { $_ ne "" } split /\./, $path;
-        my $current = $data;
-        for my $i (0 .. $#parts - 1) {
-            my $part = $parts[$i];
-            if ($part =~ /^\d+$/) {
-                $current = $current->[$part];
-            } else {
-                $current = $current->{$part};
-            }
-        }
-        
-        # Set value
-        my $last = $parts[-1];
-        if ($last =~ /^\d+$/) {
-            $current->[$last] = $value;
-        } else {
-            $current->{$last} = $value;
-        }
-        
-        print encode_json($data);
-    ' "$json" "$path" "$value" 2>/dev/null
-}
-
-# jq implementation of json_keys
-_json_keys_jq() {
-    local json="${1:-}"
-    local path="${2:-.}"
-    
-    if [[ "$path" != "."* ]]; then
-        path=".${path}"
-    fi
-    
-    echo "$json" | "${_TOOL_PATH[jq]}" -r "$path | keys[]" 2>/dev/null
-}
-
-# Python implementation of json_keys
-_json_keys_python() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    "$python_cmd" -c "
-import json
-
-data = json.loads('''$json''')
-path = '$path'
-
-current = data
-for part in path.split('.'):
-    if not part:
-        continue
-    if part.isdigit():
-        current = current[int(part)]
-    else:
-        current = current[part]
-
-if isinstance(current, dict):
-    for k in current.keys():
-        print(k)
-elif isinstance(current, list):
-    for i in range(len(current)):
-        print(i)
-" 2>/dev/null
-}
-
-# Perl implementation of json_keys
-_json_keys_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        if (ref($data) eq "HASH") {
-            print "$_\n" for keys %$data;
-        } elsif (ref($data) eq "ARRAY") {
-            print "$_\n" for 0 .. $#$data;
-        }
-    ' "$json" "$path" 2>/dev/null
-}
-
-# jq implementation of json_valid
-_json_valid_jq() {
-    local json="${1:-}"
-    echo "$json" | "${_TOOL_PATH[jq]}" -e . >/dev/null 2>&1
-}
-
-# Python implementation of json_valid
-_json_valid_python() {
-    local json="${1:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    "$python_cmd" -c "
-import json
-try:
-    json.loads('''$json''')
-except:
-    exit(1)
-" 2>/dev/null
-}
-
-# Perl implementation of json_valid
-_json_valid_perl() {
-    local json="${1:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        eval { decode_json($ARGV[0]); };
-        exit($@ ? 1 : 0);
-    ' "$json" 2>/dev/null
-}
-
-# jq implementation of json_pretty
-_json_pretty_jq() {
-    local json="${1:-}"
-    echo "$json" | "${_TOOL_PATH[jq]}" '.' 2>/dev/null
-}
-
-# Python implementation of json_pretty
-_json_pretty_python() {
-    local json="${1:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    "$python_cmd" -c "
-import json
-print(json.dumps(json.loads('''$json'''), indent=2))
-" 2>/dev/null
-}
-
-# Perl implementation of json_pretty
-_json_pretty_perl() {
-    local json="${1:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $coder = JSON::PP->new->pretty;
-        print $coder->encode(decode_json($ARGV[0]));
-    ' "$json" 2>/dev/null
-}
-
-# jq implementation of json_compact
-_json_compact_jq() {
-    local json="${1:-}"
-    echo "$json" | "${_TOOL_PATH[jq]}" -c '.' 2>/dev/null
-}
-
-# Python implementation of json_compact
-_json_compact_python() {
-    local json="${1:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    "$python_cmd" -c "
-import json
-print(json.dumps(json.loads('''$json'''), separators=(',', ':')))
-" 2>/dev/null
-}
-
-# Perl implementation of json_compact
-_json_compact_perl() {
-    local json="${1:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        print encode_json(decode_json($ARGV[0]));
-    ' "$json" 2>/dev/null
-}
-
-# jq implementation of json_type
-_json_type_jq() {
-    local json="${1:-}"
-    local path="${2:-.}"
-    
-    if [[ "$path" != "."* ]]; then
-        path=".${path}"
-    fi
-    
-    echo "$json" | "${_TOOL_PATH[jq]}" -r "$path | type" 2>/dev/null
-}
-
-# Python implementation of json_type
-_json_type_python() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    "$python_cmd" -c "
-import json
-
-data = json.loads('''$json''')
-path = '$path'
-
-current = data
-for part in path.split('.'):
-    if not part:
-        continue
-    if part.isdigit():
-        current = current[int(part)]
-    else:
-        current = current[part]
-
-t = type(current).__name__
-type_map = {'dict': 'object', 'list': 'array', 'str': 'string', 'int': 'number', 'float': 'number', 'bool': 'boolean', 'NoneType': 'null'}
-print(type_map.get(t, t))
-" 2>/dev/null
-}
-
-# Perl implementation of json_type
-_json_type_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        my $ref = ref($data);
-        if ($ref eq "HASH") { print "object"; }
-        elsif ($ref eq "ARRAY") { print "array"; }
-        elsif (!defined $data) { print "null"; }
-        elsif (JSON::PP::is_bool($data)) { print "boolean"; }
-        elsif ($data =~ /^-?\d+(\.\d+)?$/) { print "number"; }
-        else { print "string"; }
-    ' "$json" "$path" 2>/dev/null
-}
-
-# jq implementation of json_length
-_json_length_jq() {
-    local json="${1:-}"
-    local path="${2:-.}"
-    
-    if [[ "$path" != "."* ]]; then
-        path=".${path}"
-    fi
-    
-    echo "$json" | "${_TOOL_PATH[jq]}" -r "$path | length" 2>/dev/null
-}
-
-# Python implementation of json_length
-_json_length_python() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local python_cmd
-    python_cmd=$(_json_python_cmd)
-    
-    "$python_cmd" -c "
-import json
-
-data = json.loads('''$json''')
-path = '$path'
-
-current = data
-for part in path.split('.'):
-    if not part:
-        continue
-    if part.isdigit():
-        current = current[int(part)]
-    else:
-        current = current[part]
-
-print(len(current) if hasattr(current, '__len__') else 0)
-" 2>/dev/null
-}
-
-# Perl implementation of json_length
-_json_length_perl() {
-    local json="${1:-}"
-    local path="${2:-}"
-    
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-        my $json_text = $ARGV[0];
-        my $path = $ARGV[1];
-        
-        my $data = decode_json($json_text);
-        
-        for my $part (split /\./, $path) {
-            next if $part eq "";
-            if ($part =~ /^\d+$/) {
-                $data = $data->[$part];
-            } else {
-                $data = $data->{$part};
-            }
-        }
-        
-        if (ref($data) eq "HASH") { print scalar keys %$data; }
-        elsif (ref($data) eq "ARRAY") { print scalar @$data; }
-        elsif (defined $data) { print length($data); }
-        else { print 0; }
-    ' "$json" "$path" 2>/dev/null
-}
 
 # -----------------------------------------------------------------------------
 # Public API - Core Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Get a value from JSON by path
 # Usage: json_get '{"foo":"bar"}' "foo" -> "bar"
 # Usage: json_get '{"a":{"b":1}}' "a.b" -> "1"
@@ -561,7 +103,7 @@ json_get() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Set a value in JSON by path
 # Usage: json_set '{"foo":"bar"}' "foo" "baz" -> '{"foo":"baz"}'
 # Usage: json_set '{}' "new.key" "value" -> '{"new":{"key":"value"}}'
@@ -581,7 +123,7 @@ json_set() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get all keys at a path in JSON
 # Usage: json_keys '{"a":1,"b":2}' -> prints "a" and "b" on separate lines
 # Usage: json_keys '{"x":{"y":1}}' "x" -> prints "y"
@@ -600,7 +142,7 @@ json_keys() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if JSON is valid
 # Usage: json_valid '{"foo":"bar"}' -> returns 0 (valid)
 # Usage: json_valid 'not json' -> returns 1 (invalid)
@@ -618,7 +160,7 @@ json_valid() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Pretty print JSON with indentation
 # Usage: json_pretty '{"a":1,"b":2}' -> prints formatted JSON
 # Returns: Pretty-printed JSON
@@ -635,7 +177,7 @@ json_pretty() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Compact JSON (remove whitespace)
 # Usage: json_compact '{ "a": 1, "b": 2 }' -> '{"a":1,"b":2}'
 # Returns: Compact JSON on single line
@@ -652,7 +194,7 @@ json_compact() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the type of a JSON value
 # Usage: json_type '{"a":1}' -> "object"
 # Usage: json_type '[1,2]' -> "array"
@@ -675,7 +217,7 @@ json_type() {
     esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get the length of a JSON array or object
 # Usage: json_length '[1,2,3]' -> "3"
 # Usage: json_length '{"a":1,"b":2}' -> "2"
@@ -698,7 +240,7 @@ json_length() {
 # Public API - Convenience Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if a path exists in JSON
 # Usage: json_has '{"a":{"b":1}}' "a.b" -> returns 0 (exists)
 # Usage: json_has '{"a":1}' "b" -> returns 1 (not found)
@@ -712,7 +254,7 @@ json_has() {
     [[ -n "$result" && "$result" != "null" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get value with default if not found
 # Usage: json_get_or '{"a":1}' "b" "default" -> "default"
 # Usage: json_get_or '{"a":1}' "a" "default" -> "1"
@@ -732,7 +274,7 @@ json_get_or() {
     fi
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Create a simple JSON object from key-value pairs
 # Usage: json_object "key1" "value1" "key2" "value2" -> '{"key1":"value1","key2":"value2"}'
 # Returns: JSON object
@@ -761,7 +303,7 @@ json_object() {
     echo "$result"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Create a JSON array from values
 # Usage: json_array "a" "b" "c" -> '["a","b","c"]'
 # Returns: JSON array
@@ -786,110 +328,43 @@ json_array() {
     echo "$result"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Merge two JSON objects (second overwrites first for conflicts)
 # Usage: json_merge '{"a":1}' '{"b":2}' -> '{"a":1,"b":2}'
 # Returns: Merged JSON object
 json_merge() {
     local json1="${1:-\{\}}"
     local json2="${2:-\{\}}"
-    
+
     [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
-    if [[ "$_JSON_IMPL" == "jq" ]]; then
-        echo "$json1" | "${_TOOL_PATH[jq]}" -c ". * $json2" 2>/dev/null
-    elif [[ "$_JSON_IMPL" == "python" ]]; then
-        local python_cmd
-        python_cmd=$(_json_python_cmd)
-        "$python_cmd" -c "
-import json
-a = json.loads('''$json1''')
-b = json.loads('''$json2''')
-a.update(b)
-print(json.dumps(a))
-" 2>/dev/null
-    else
-        # Perl fallback
-        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-            my $a = decode_json($ARGV[0]);
-            my $b = decode_json($ARGV[1]);
-            @{$a}{keys %$b} = values %$b;
-            print encode_json($a);
-        ' "$json1" "$json2" 2>/dev/null
-    fi
+
+    case "$_JSON_IMPL" in
+        jq)     _json_merge_jq "$json1" "$json2" ;;
+        python) _json_merge_python "$json1" "$json2" ;;
+        perl)   _json_merge_perl "$json1" "$json2" ;;
+    esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Delete a key from JSON
 # Usage: json_delete '{"a":1,"b":2}' "a" -> '{"b":2}'
 # Returns: JSON with key removed
 json_delete() {
     local json="${1:-}"
     local path="${2:-}"
-    
+
     [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
-    if [[ "$path" != "."* ]]; then
-        path=".${path}"
-    fi
-    
-    if [[ "$_JSON_IMPL" == "jq" ]]; then
-        echo "$json" | "${_TOOL_PATH[jq]}" "del($path)" 2>/dev/null
-    elif [[ "$_JSON_IMPL" == "python" ]]; then
-        local python_cmd
-        python_cmd=$(_json_python_cmd)
-        "$python_cmd" -c "
-import json
 
-data = json.loads('''$json''')
-path = '${path#.}'
+    [[ "$path" != "."* ]] && path=".${path}"
 
-parts = [p for p in path.split('.') if p]
-current = data
-for part in parts[:-1]:
-    if part.isdigit():
-        current = current[int(part)]
-    else:
-        current = current[part]
-
-last = parts[-1]
-if last.isdigit():
-    del current[int(last)]
-else:
-    del current[last]
-
-print(json.dumps(data))
-" 2>/dev/null
-    else
-        "${_TOOL_PATH[perl]}" -MJSON::PP -e '
-            my $data = decode_json($ARGV[0]);
-            my $path = $ARGV[1];
-            $path =~ s/^\.//;
-            
-            my @parts = grep { $_ ne "" } split /\./, $path;
-            my $current = $data;
-            for my $i (0 .. $#parts - 1) {
-                my $part = $parts[$i];
-                if ($part =~ /^\d+$/) {
-                    $current = $current->[$part];
-                } else {
-                    $current = $current->{$part};
-                }
-            }
-            
-            my $last = $parts[-1];
-            if ($last =~ /^\d+$/) {
-                splice @$current, $last, 1;
-            } else {
-                delete $current->{$last};
-            }
-            
-            print encode_json($data);
-        ' "$json" "$path" 2>/dev/null
-    fi
+    case "$_JSON_IMPL" in
+        jq)     _json_delete_jq "$json" "$path" ;;
+        python) _json_delete_python "$json" "$path" ;;
+        perl)   _json_delete_perl "$json" "$path" ;;
+    esac
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Read JSON from a file
 # Usage: json_read "/path/to/file.json" -> prints JSON content
 # Returns: JSON content of file
@@ -901,7 +376,7 @@ json_read() {
     cat "$file"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Write JSON to a file (pretty printed)
 # Usage: json_write '{"a":1}' "/path/to/file.json"
 # Returns: 0 on success, 1 on failure
@@ -918,21 +393,21 @@ json_write() {
 # Module Status Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Check if JSON module is ready
 # Usage: json_ready -> returns 0 if ready, 1 if not
 json_ready() {
     [[ "$_JSON_READY" == "1" ]]
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get JSON module error (if not ready)
 # Usage: json_error -> prints error message
 json_error() {
     echo "$_JSON_ERROR"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Get which JSON implementation is being used
 # Usage: json_impl -> "jq" | "python" | "perl" | ""
 json_impl() {

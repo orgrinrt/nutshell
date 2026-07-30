@@ -2,89 +2,52 @@
 # =============================================================================
 # nutshell - Interpreter for #!/usr/bin/env nutshell scripts
 # =============================================================================
-# This allows scripts to use the shebang:
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# A script starting with
+#
 #   #!/usr/bin/env nutshell
 #
-# When used as a shebang interpreter, this script:
-#   1. Sets up the nutshell environment
-#   2. Defines the 'use' function
-#   3. Sources the user's script
+# is run by this, which sets the environment up and sources it, so `use` is
+# available from its first line and the script needs no bootstrap of its own.
 #
-# Can also be used as a CLI:
-#   nutshell <script.sh>     Run a script with nutshell environment
-#   nutshell --version       Show version
-#   nutshell --help          Show help
+# Also a small CLI:
 #
+#   nutshell <script>       run a script with the nutshell environment
+#   nutshell --version      print the version
+#   nutshell --help         what is here
+#
+# The environment itself comes from `init`, sourced below rather than repeated.
+# This file used to carry its own copy of `use`, `nut_once` and the loaded-module
+# table, and the two had already drifted: the copy here had lost the module
+# error tracking, so which one you got depended on whether a script was run
+# through the shebang or sourced `init` directly.
 # =============================================================================
 
 set -uo pipefail
 
-# =============================================================================
-# Resolve our location
-# =============================================================================
-
-# Handle symlinks and find the real location
+# The shebang line names whatever is on PATH, which is normally a symlink into
+# a checkout. Follow it to the real file, because the library sits next to it.
 _resolve_path() {
-    local path="$1"
+    local path="$1" dir
     while [[ -L "$path" ]]; do
-        local dir="$(cd "$(dirname "$path")" && pwd)"
+        dir="$(cd "$(dirname "$path")" && pwd)"
         path="$(readlink "$path")"
         [[ "$path" != /* ]] && path="$dir/$path"
     done
-    echo "$path"
+    printf '%s' "$path"
 }
 
 _SELF="$(_resolve_path "${BASH_SOURCE[0]}")"
 _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-_NUTSHELL_ROOT="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
+_NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
 
-# =============================================================================
-# Environment setup
-# =============================================================================
-
-export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
-export NUTSHELL_VERSION="0.1.0"
-export PATH="${_NUTSHELL_BIN_DIR}:$PATH"
-
-# Track loaded modules
-declare -gA _NUTSHELL_LOADED=() 2>/dev/null || declare -A _NUTSHELL_LOADED=()
-
-# The 'use' function - loads modules
-use() {
-    local mod
-    for mod in "$@"; do
-        [[ -n "${_NUTSHELL_LOADED[$mod]:-}" ]] && continue
-        
-        local mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
-        if [[ -f "$mod_path" ]]; then
-            source "$mod_path"
-            _NUTSHELL_LOADED[$mod]=1
-        else
-            echo "nutshell: unknown module '$mod'" >&2
-            return 1
-        fi
-    done
+# shellcheck source=/dev/null
+source "${_NUTSHELL_HOME}/init" || {
+    echo "nutshell: cannot load ${_NUTSHELL_HOME}/init" >&2
+    exit 1
 }
-export -f use
-
-# Check if module is loaded
-nutshell_loaded() {
-    [[ -n "${_NUTSHELL_LOADED[$1]:-}" ]]
-}
-export -f nutshell_loaded
-
-# List loaded modules
-nutshell_modules() {
-    local mod
-    for mod in "${!_NUTSHELL_LOADED[@]}"; do
-        echo "$mod"
-    done | sort
-}
-export -f nutshell_modules
-
-# =============================================================================
-# CLI handling
-# =============================================================================
 
 _show_help() {
     cat <<EOF
@@ -101,19 +64,11 @@ As a shebang:
   log_info "Hello!"
 
 Available modules:
-  $(ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | tr '\n' ' ')
+  $(nutshell_available | tr '\n' ' ')
 
 For more information: https://github.com/orgrinrt/nutshell
 EOF
 }
-
-_show_version() {
-    echo "nutshell ${NUTSHELL_VERSION}"
-}
-
-# =============================================================================
-# Main
-# =============================================================================
 
 case "${1:-}" in
     --help|-h)
@@ -121,7 +76,7 @@ case "${1:-}" in
         exit 0
         ;;
     --version|-v)
-        _show_version
+        echo "nutshell ${NUTSHELL_VERSION}"
         exit 0
         ;;
     "")
@@ -129,16 +84,27 @@ case "${1:-}" in
         exit 1
         ;;
     *)
-        # Run the script
         _SCRIPT="$1"
         shift
-        
+
         if [[ ! -f "$_SCRIPT" ]]; then
             echo "nutshell: script not found: $_SCRIPT" >&2
             exit 1
         fi
-        
-        # Source the script (so it runs in our environment with 'use' available)
+
+        # Where the script lives, absolute, for anything that has to resolve
+        # against the unit the script belongs to rather than against wherever
+        # it was called from. `nut.toml` is the case that matters: a script's
+        # dependencies belong to its project the way a crate's belong to its
+        # Cargo.toml, and a script run from inside some other repository must
+        # still find its own.
+        NUTSHELL_SCRIPT="$(cd "$(dirname "$_SCRIPT")" && pwd)/$(basename "$_SCRIPT")"
+        NUTSHELL_SCRIPT_DIR="${NUTSHELL_SCRIPT%/*}"
+        export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
+
+        # Sourced, not executed, so the script runs in this environment with
+        # `use` already defined.
+        # shellcheck source=/dev/null
         source "$_SCRIPT"
         ;;
 esac

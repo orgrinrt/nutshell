@@ -31,14 +31,12 @@ NUTSHELL_ROOT="${NUTSHELL_ROOT:-$(cd "$_CHECK_RUNNER_DIR/.." && pwd)}"
 # The canonical defaults file - this is the ONLY source of defaults
 NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/examples/configs/empty.nut.toml"
 
-# Source nutshell core modules
-# We eat our own dogfood - the test framework uses nutshell itself
-source "${NUTSHELL_ROOT}/lib/os.sh"
-source "${NUTSHELL_ROOT}/lib/log.sh"
-source "${NUTSHELL_ROOT}/lib/fs.sh"
-source "${NUTSHELL_ROOT}/lib/string.sh"
-source "${NUTSHELL_ROOT}/lib/validate.sh"
-source "${NUTSHELL_ROOT}/lib/toml.sh"
+# We eat our own dogfood: the check framework loads its dependencies the way
+# every other module does. Sourcing the paths by hand worked, and hid the
+# dependency from the module-contract check, which reads `use` lines. A module
+# that loads its dependencies invisibly is exactly the case that check exists
+# to catch, so the framework running it must not be the one exception.
+use log validate toml attr string
 
 # =============================================================================
 # PATHS - Determined after config is loaded
@@ -66,13 +64,34 @@ declare -ga NUT_INCLUDE_PATTERNS=() 2>/dev/null || declare -a NUT_INCLUDE_PATTER
 
 # Get a config value with fallback to defaults
 # Usage: cfg_get "key" -> prints value
+# Resolved configuration values, and keys already known to be absent.
+#
+# Every lookup used to re-parse the whole file, in a subshell, twice: once for
+# the user config and once for the defaults. `toml_get` reads line by line in
+# bash, so a run cost functions x lookups x file length, and the check that
+# analyses every function in lib/ paid it for each one. Adding two modules took
+# that from slow to minutes.
+#
+# Absence is cached as well as presence. A miss is the expensive case, since it
+# parses both files to the end before giving up, and a key absent once is
+# absent for the rest of the run.
+declare -gA _CFG_CACHE=()
+declare -gA _CFG_MISS=()
+
 cfg_get() {
     local key="$1"
     local value=""
+
+    [[ -n "${_CFG_MISS[$key]:-}" ]] && return 1
+    if [[ -n "${_CFG_CACHE[$key]+set}" ]]; then
+        printf '%s\n' "${_CFG_CACHE[$key]}"
+        return 0
+    fi
     
     # Try user config first
     if [[ -n "$CONFIG_FILE" ]] && [[ -f "$CONFIG_FILE" ]]; then
         value="$(toml_get "$CONFIG_FILE" "$key" 2>/dev/null)" && {
+            _CFG_CACHE[$key]="$value"
             echo "$value"
             return 0
         }
@@ -81,11 +100,14 @@ cfg_get() {
     # Fall back to defaults
     if [[ -f "$NUTSHELL_DEFAULTS_FILE" ]]; then
         value="$(toml_get "$NUTSHELL_DEFAULTS_FILE" "$key" 2>/dev/null)" && {
+            _CFG_CACHE[$key]="$value"
             echo "$value"
             return 0
         }
     fi
-    
+
+    # Remember the miss. Reaching here means both files were parsed to the end.
+    _CFG_MISS[$key]=1
     return 1
 }
 
@@ -165,10 +187,9 @@ cfg_section_exists() {
     return 1
 }
 
-# @@PUBLIC_API@@
-# DISABLED_ANNOTATION
 # Check if a test is enabled
 # Usage: cfg_test_enabled "syntax"
+#[pub]
 cfg_test_enabled() {
     local test_name="$1"
     cfg_is_true "tests.${test_name}"
@@ -440,7 +461,7 @@ _is_excluded() {
 }
 
 # Get all files matching include patterns, excluding configured paths
-# @@PUBLIC_API@@
+#[pub]
 # Usage: get_lib_files -> prints file paths, one per line
 get_lib_files() {
     _framework_init
@@ -455,7 +476,7 @@ get_lib_files() {
 }
 
 # Get all script files (same as lib files for nutshell)
-# @@PUBLIC_API@@
+#[pub]
 # Usage: get_script_files -> prints file paths, one per line
 get_script_files() {
     get_lib_files
@@ -466,38 +487,73 @@ get_script_files() {
 # =============================================================================
 
 # Check if a function has a specific annotation
-# @@PUBLIC_API@@
+#[pub]
 # Usage: has_annotation "file" "func_name" "annotation_pattern" -> returns 0/1
+# attr_name_of <annotation>
+#
+# The attribute name inside a configured marker: `#[pub]` gives `pub`. Prints
+# nothing when the marker is not in attribute shape, which is how a caller
+# tells that it has to match the string literally instead.
+#
+# Here rather than in each check because two of them needed it and each got it
+# wrong in its own way: both interpolated the marker straight into a regex,
+# where `[pub]` is a bracket expression matching one character out of p, u and
+# b, so one check exempted almost nothing and the other found no public
+# functions at all in a library with more than a hundred of them.
+attr_name_of() {
+    [[ "$1" =~ ^#\[([a-z_][a-z0-9_]*)(\((.*)\))?\]$ ]] || return 1
+    # Name, then a tab, then the argument if there was one. The argument is
+    # part of the identity: `#[allow(trivial_wrapper)]` and `#[allow(loc = 400)]`
+    # are not the same marker, and matching on the name alone would let a size
+    # exemption excuse a wrapper.
+    printf '%s\t%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]:-}"
+}
+
+# has_annotation <file> <function> <annotation>
+#
+# Whether that definition carries that annotation.
+#
+# Through the attr module, which is what reads attributes. The shape here was a
+# grep of the ten lines above the definition for `#.*${annotation}`, with the
+# annotation interpolated into an extended regular expression. `#[pub]` is a
+# valid ERE that matches a `#`, then anything, then a `#`, then one character
+# out of p, u and b, so it matched almost nothing it was meant to and the odd
+# thing it was not. Every function in the library was marked and every one of
+# them still counted as unannotated.
+#
+# The window was a second, quieter bug: ten lines is enough for a terse
+# function and not for a documented one, so whether an annotation was seen
+# depended on how much prose sat under it.
 has_annotation() {
-    local file="$1"
-    local func_name="$2"
-    local annotation="$3"
-    
-    # Find the line number of the function definition
+    local file="$1" func_name="$2" annotation="$3"
+
+    # The configured form is the written form, `#[pub]`. attr works in names.
+    local parsed name arg
+    if parsed="$(attr_name_of "$annotation")"; then
+        name="${parsed%%$'\t'*}"
+        arg="${parsed#*$'\t'}"
+        attr_has "$file" "$func_name" "$name" || return 1
+        [[ -z "$arg" ]] && return 0
+        [[ "$(attr_arg "$file" "$func_name" "$name")" == "$arg" ]]
+        return $?
+    fi
+
+    # Anything not in attribute shape is matched literally as a whole line, so
+    # a project naming its own marker still works and no metacharacter in it is
+    # read as one.
     local line_num
     line_num=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    
-    if [[ -z "$line_num" ]]; then
-        # Try alternate function syntax
-        line_num=$(grep -n "^[[:space:]]*function[[:space:]]\+${func_name}[[:space:]]*(" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    fi
-    
-    [[ -z "$line_num" ]] && return 1
-    [[ "$line_num" -lt 1 ]] && return 1
-    
-    # Check the 10 lines before the function definition
+    [[ -z "$line_num" || "$line_num" -lt 1 ]] && return 1
+
     local start_line=$((line_num - 10))
     [[ $start_line -lt 1 ]] && start_line=1
-    
-    if sed -n "${start_line},${line_num}p" "$file" 2>/dev/null | grep -qE "#.*${annotation}"; then
-        return 0
-    fi
-    
-    return 1
+    sed -n "${start_line},${line_num}p" "$file" 2>/dev/null \
+        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+        | grep -qxF -- "$annotation"
 }
 
 # Check if function has any of the configured exempt annotations for trivial wrappers
-# @@PUBLIC_API@@
+#[pub]
 # Usage: has_trivial_wrapper_exemption "file" "func_name" -> returns 0/1
 has_trivial_wrapper_exemption() {
     local file="$1"
@@ -506,7 +562,7 @@ has_trivial_wrapper_exemption() {
     local public_api_annotation
     local ergonomics_annotation
     
-    public_api_annotation="$(cfg_get_or "annotations.public_api" "@@PUBLIC_API@@")"
+    public_api_annotation="$(cfg_get_or "annotations.public_api" "#[pub]")"
     ergonomics_annotation="$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "DISABLED_ANNOTATION")"
     
     has_annotation "$file" "$func_name" "$public_api_annotation" && return 0
@@ -520,7 +576,7 @@ has_trivial_wrapper_exemption() {
 # =============================================================================
 
 # Extract function names from a shell script
-# @@PUBLIC_API@@
+#[pub]
 # Usage: extract_functions "file" -> prints function names, one per line
 extract_functions() {
     local file="$1"
@@ -534,7 +590,7 @@ extract_functions() {
 }
 
 # Count lines of code (excluding comments and empty lines)
-# @@PUBLIC_API@@
+#[pub]
 # Usage: count_code_lines "file" -> prints number
 count_code_lines() {
     local file="$1"
@@ -545,57 +601,15 @@ count_code_lines() {
 }
 
 # Count total lines in a file
-# @@PUBLIC_API@@
+#[pub]
 # Usage: count_total_lines "file" -> prints number
 count_total_lines() {
     local file="$1"
     wc -l < "$file" 2>/dev/null | tr -d ' '
 }
 
-# Calculate Levenshtein distance between two strings
-# @@PUBLIC_API@@
-# Usage: levenshtein_distance "string1" "string2" -> prints distance
-levenshtein_distance() {
-    local s1="$1"
-    local s2="$2"
-    local len1=${#s1}
-    local len2=${#s2}
-    
-    # Quick shortcuts
-    [[ "$s1" == "$s2" ]] && { echo 0; return; }
-    [[ $len1 -eq 0 ]] && { echo "$len2"; return; }
-    [[ $len2 -eq 0 ]] && { echo "$len1"; return; }
-    
-    # Use awk for the matrix computation
-    awk -v s1="$s1" -v s2="$s2" 'BEGIN {
-        len1 = length(s1)
-        len2 = length(s2)
-        
-        for (i = 0; i <= len1; i++) d[i "_" 0] = i
-        for (j = 0; j <= len2; j++) d[0 "_" j] = j
-        
-        for (i = 1; i <= len1; i++) {
-            c1 = substr(s1, i, 1)
-            for (j = 1; j <= len2; j++) {
-                c2 = substr(s2, j, 1)
-                cost = (c1 == c2) ? 0 : 1
-                
-                del = d[(i-1) "_" j] + 1
-                ins = d[i "_" (j-1)] + 1
-                repl = d[(i-1) "_" (j-1)] + cost
-                
-                min = del
-                if (ins < min) min = ins
-                if (repl < min) min = repl
-                d[i "_" j] = min
-            }
-        }
-        print d[len1 "_" len2]
-    }'
-}
-
 # Calculate similarity score (0.0 to 1.0) based on Levenshtein distance
-# @@PUBLIC_API@@
+#[pub]
 # Usage: similarity_score "string1" "string2" -> prints score (e.g., "0.850")
 similarity_score() {
     local s1="$1"
@@ -607,7 +621,7 @@ similarity_score() {
     [[ $max_len -eq 0 ]] && { echo "1.0"; return; }
     
     local distance
-    distance=$(levenshtein_distance "$s1" "$s2")
+    distance=$(str_distance "$s1" "$s2")
     
     awk -v dist="$distance" -v maxlen="$max_len" 'BEGIN {
         printf "%.3f", 1 - (dist / maxlen)
@@ -615,7 +629,7 @@ similarity_score() {
 }
 
 # Strip module prefix from function name
-# @@PUBLIC_API@@
+#[pub]
 # Usage: strip_prefix "git_check_valid" -> "check_valid"
 strip_prefix() {
     local name="$1"
@@ -632,7 +646,7 @@ strip_prefix() {
 # =============================================================================
 
 # Print test summary
-# @@PUBLIC_API@@
+#[pub]
 # Usage: print_summary ["Test Suite Name"]
 print_summary() {
     local test_name="${1:-Test Suite}"
@@ -706,7 +720,7 @@ print_summary() {
 }
 
 # Exit with appropriate code based on test results
-# @@PUBLIC_API@@
+#[pub]
 # Usage: exit_with_status
 exit_with_status() {
     [[ $TESTS_FAILED -gt 0 ]] && exit 1

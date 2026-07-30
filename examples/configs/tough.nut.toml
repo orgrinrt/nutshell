@@ -35,13 +35,13 @@ include = ["*.sh"]
 # -----------------------------------------------------------------------------
 [annotations]
 # Public API - intentional interface, must be documented
-public_api = "@@PUBLIC_API@@"
+public_api = "#[pub]"
 
 # Trivial wrapper kept for API ergonomics/consistency
-allow_trivial_wrapper_ergonomics = "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+allow_trivial_wrapper_ergonomics = "#[allow(trivial_wrapper)]"
 
 # File exceeds normal size limit with explicit justification
-allow_large_file = "@@ALLOW_LOC_([0-9]+)@@"
+allow_large_file = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 
 # -----------------------------------------------------------------------------
 # Test Enable/Disable - ALL ON
@@ -88,8 +88,8 @@ fail_threshold = 20
 
 # Only these explicit annotations can exempt a function
 exempt_annotations = [
-    "@@PUBLIC_API@@",
-    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@",
+    "#[pub]",
+    "#[allow(trivial_wrapper)]",
 ]
 
 # -----------------------------------------------------------------------------
@@ -103,7 +103,7 @@ max_loc = 300
 max_total_lines = 500
 
 # Per-file exemption requires explicit annotation with justification
-exempt_annotation_pattern = "@@ALLOW_LOC_([0-9]+)@@"
+exempt_annotation_pattern = "#\\[allow\\(loc = ([0-9]+)\\)\\]"
 
 # No blanket exemptions
 exempt_patterns = []
@@ -171,7 +171,7 @@ max_todos = 10
 # -----------------------------------------------------------------------------
 [tests.public_api_docs]
 # This annotation marks functions as public API
-public_api_annotation = "@@PUBLIC_API@@"
+public_api_annotation = "#[pub]"
 
 # Required: must have a usage example
 required_elements = [

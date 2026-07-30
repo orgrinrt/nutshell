@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell/release - Cut a release from this machine
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# There is no hosted pipeline; CI and releases run from a dev machine that
+# holds the tokens. This script is the whole release path: it gates on the
+# test suite, the QA checks and shellcheck, tags the version init declares,
+# and publishes a GitHub release whose notes are the commit subjects since
+# the previous tag.
+#
+# No built artifacts. nutshell is a sourced bash library with executable
+# entry points, so there is nothing to compile per platform, and GitHub
+# attaches source archives to every release on its own.
+#
+# Usage:
+#   ./release            # gate, tag, publish; run on main
+# =============================================================================
+
+set -uo pipefail
+
+. "${BASH_SOURCE[0]%/*}/init"
+use log
+
+main() {
+    local branch
+    branch="$(git rev-parse --abbrev-ref HEAD)"
+    if [[ "$branch" != "main" ]]; then
+        log_error "releases are cut from main; this is ${branch}"
+        return 1
+    fi
+
+    if [[ -n "$(git status --porcelain)" ]]; then
+        log_error "the working tree is not clean; commit or stash first"
+        return 1
+    fi
+
+    git fetch --quiet origin main
+    if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+        log_error "main is not in sync with origin/main; pull or push first"
+        return 1
+    fi
+
+    # init is the single home of the version, so the tag cannot disagree
+    # with what the library reports about itself.
+    local version="${NUTSHELL_VERSION}"
+    if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+        log_error "tag ${version} already exists; bump NUTSHELL_VERSION in init"
+        return 1
+    fi
+
+    # The gates. A release does not skip what a commit would not.
+    log_info "running the test suite"
+    ./test || { log_error "the suite is red; no release"; return 1; }
+
+    log_info "running the qa checks"
+    ./check || { log_error "a check failed; no release"; return 1; }
+
+    if command -v shellcheck >/dev/null; then
+        log_info "running shellcheck"
+        find lib -name '*.sh' -type f -print0 \
+            | xargs -0 shellcheck --severity=error || return 1
+        shellcheck --severity=error init check test release bin/nutshell \
+            || return 1
+    else
+        log_warn "shellcheck is not installed; releasing without it"
+    fi
+
+    # The notes: commit subjects since the previous tag, merge commits
+    # dropped because the commits they carry are already listed.
+    local previous notes range
+    previous="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+    range="${previous:+${previous}..}HEAD"
+    notes="$(git log --no-merges --format='- %s' "$range")"
+
+    log_info "tagging ${version}"
+    git tag -a "$version" -m "Release ${version}" || return 1
+    git push --quiet origin "$version" || return 1
+
+    log_info "publishing the github release"
+    gh release create "$version" --title "nutshell ${version}" \
+        --notes "$notes" || {
+        log_error "the tag is pushed but the release did not publish"
+        log_error "retry: gh release create ${version} --title 'nutshell ${version}' --notes '<notes>'"
+        return 1
+    }
+
+    log_success "released ${version}"
+}
+
+main "$@"

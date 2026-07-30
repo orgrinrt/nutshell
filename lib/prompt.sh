@@ -18,16 +18,12 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-[[ -n "${_NUTSHELL_CORE_PROMPT_SH:-}" ]] && return 0
-readonly _NUTSHELL_CORE_PROMPT_SH=1
+nut_once || return 0
 
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_PROMPT_DIR="${BASH_SOURCE[0]%/*}"
-[[ "$_NUTSHELL_PROMPT_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_PROMPT_DIR="."
-source "${_NUTSHELL_PROMPT_DIR}/color.sh"
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -44,8 +40,10 @@ PROMPT_TIMEOUT=0
 # Internal Helpers
 # -----------------------------------------------------------------------------
 
+#[pub]
 # Check if we're in interactive mode
-_prompt_is_interactive() {
+# Usage: prompt_interactive -> returns 0 if interactive, 1 otherwise
+prompt_interactive() {
     [[ -t 0 && -t 1 ]]
 }
 
@@ -65,7 +63,7 @@ _prompt_read() {
 # Public API - Basic Input
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for yes/no confirmation
 # Usage: prompt_confirm "Continue?" -> returns 0 for yes, 1 for no
 # Usage: prompt_confirm "Delete?" "y" -> default is yes
@@ -75,7 +73,7 @@ prompt_confirm() {
     local default="${2:-n}"
     
     # Non-interactive: use default
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         [[ "${default,,}" == "y"* ]] && return 0
         return 1
     fi
@@ -112,7 +110,7 @@ prompt_confirm() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for text input
 # Usage: prompt_input "Enter name:" -> prints user input
 # Usage: prompt_input "Enter name:" "default" -> default value if empty
@@ -122,7 +120,7 @@ prompt_input() {
     local default="${2:-}"
     
     # Non-interactive: use default
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -142,7 +140,7 @@ prompt_input() {
     echo "$response"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for password (hidden input)
 # Usage: prompt_password "Password:" -> prints password (not echoed)
 # Returns: Password (prints to stdout)
@@ -150,7 +148,7 @@ prompt_password() {
     local message="${1:-Password:}"
     
     # Non-interactive: read from stdin anyway (for piped input)
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         local password
         read -r password
         echo "$password"
@@ -165,7 +163,7 @@ prompt_password() {
     echo "$password"
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for input with validation
 # Usage: prompt_validated "Email:" "^[^@]+@[^@]+$" -> keeps asking until valid
 # Returns: Validated input (prints to stdout)
@@ -176,7 +174,7 @@ prompt_validated() {
     local default="${4:-}"
     
     # Non-interactive: return default (may not be valid, but that's the user's problem)
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -194,7 +192,7 @@ prompt_validated() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for integer input
 # Usage: prompt_int "Count:" -> prints integer
 # Usage: prompt_int "Count:" 1 100 -> enforces range
@@ -216,7 +214,7 @@ prompt_int() {
     error_msg+="."
     
     # Non-interactive
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "${default:-0}"
         return 0
     fi
@@ -250,7 +248,7 @@ prompt_int() {
 # Public API - Selection
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt user to select from numbered options
 # Usage: prompt_select "Choose:" "Option A" "Option B" "Option C" -> prints selected option
 # Returns: Selected option text (prints to stdout)
@@ -265,7 +263,7 @@ prompt_select() {
     fi
     
     # Non-interactive: return first option
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "${options[0]}"
         return 0
     fi
@@ -294,7 +292,7 @@ prompt_select() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt user to select from options using arrow keys (if supported)
 # Falls back to numbered selection if not interactive
 # Usage: prompt_menu "Choose:" "Option A" "Option B" -> prints selected option
@@ -310,7 +308,7 @@ prompt_menu() {
     fi
     
     # Non-interactive or no cursor control: fall back to numbered select
-    if ! _prompt_is_interactive || [[ "${TERM:-}" == "dumb" ]]; then
+    if ! prompt_interactive || [[ "${TERM:-}" == "dumb" ]]; then
         prompt_select "$message" "${options[@]}"
         return $?
     fi
@@ -378,7 +376,7 @@ prompt_menu() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Multi-select: user can select multiple options
 # Usage: prompt_multiselect "Select:" "Option A" "Option B" "Option C"
 # Returns: Selected options, one per line (prints to stdout)
@@ -393,7 +391,7 @@ prompt_multiselect() {
     fi
     
     # Non-interactive: return all options
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         printf '%s\n' "${options[@]}"
         return 0
     fi
@@ -478,7 +476,7 @@ prompt_multiselect() {
 # Public API - Special Prompts
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for a file path with completion hint
 # Usage: prompt_file "Config file:" -> prints file path
 # Returns: File path (prints to stdout)
@@ -487,7 +485,7 @@ prompt_file() {
     local default="${2:-}"
     local must_exist="${3:-false}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -509,7 +507,7 @@ prompt_file() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Prompt for a directory path
 # Usage: prompt_dir "Output directory:" -> prints directory path
 # Returns: Directory path (prints to stdout)
@@ -518,7 +516,7 @@ prompt_dir() {
     local default="${2:-}"
     local must_exist="${3:-false}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$default"
         return 0
     fi
@@ -540,14 +538,14 @@ prompt_dir() {
     done
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Wait for user to press any key
 # Usage: prompt_pause -> waits for keypress
 # Usage: prompt_pause "Press any key to continue..."
 prompt_pause() {
     local message="${1:-Press any key to continue...}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         return 0
     fi
     
@@ -556,7 +554,7 @@ prompt_pause() {
     echo ""
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Countdown with option to cancel
 # Usage: prompt_countdown 5 "Starting in" -> returns 0 if completed, 1 if cancelled
 # Returns: 0 if countdown completed, 1 if user pressed key to cancel
@@ -564,7 +562,7 @@ prompt_countdown() {
     local seconds="${1:-5}"
     local message="${2:-Continuing in}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         sleep "$seconds"
         return 0
     fi
@@ -583,7 +581,7 @@ prompt_countdown() {
     return 0
 }
 
-# @@PUBLIC_API@@
+#[pub]
 # Ask user to choose between two options (like a vs b)
 # Usage: prompt_choice "Keep?" "local" "remote" -> prints chosen option
 # Returns: First or second option (prints to stdout)
@@ -592,7 +590,7 @@ prompt_choice() {
     local option1="${2:-a}"
     local option2="${3:-b}"
     
-    if ! _prompt_is_interactive; then
+    if ! prompt_interactive; then
         echo "$option1"
         return 0
     fi
@@ -626,23 +624,10 @@ prompt_choice() {
 # Public API - Utility Functions
 # -----------------------------------------------------------------------------
 
-# @@PUBLIC_API@@
-# Check if running in interactive mode
-# Usage: prompt_interactive -> returns 0 if interactive, 1 otherwise
-prompt_interactive() {
-    _prompt_is_interactive
-}
-
-# @@PUBLIC_API@@
-# Set the timeout for prompts (0 = no timeout)
-# Usage: prompt_set_timeout 30 -> sets 30 second timeout
-prompt_set_timeout() {
-    PROMPT_TIMEOUT="${1:-0}"
-}
-
-# @@PUBLIC_API@@
-# Set default value for confirm prompts in non-interactive mode
-# Usage: prompt_set_default_confirm "y" -> defaults to yes
-prompt_set_default_confirm() {
-    PROMPT_DEFAULT_CONFIRM="${1:-n}"
-}
+# Configuration is the variables, listed in this module's header:
+#
+#     PROMPT_TIMEOUT=30
+#     PROMPT_DEFAULT_CONFIRM=y
+#
+# The setters that stood here assigned one of them with a default and did
+# nothing else, so the module offered two ways to say one thing.

@@ -275,6 +275,59 @@ toml_keys() {
 }
 
 #[pub]
+# Check if a section exists in a TOML file
+# `toml_has` answers for keys and only keys: it delegates to `toml_get`, and a
+# section header has no value to return, so asking it about `[server]` says no
+# while `toml_sections` lists it. That gap is easy to walk into and hard to see
+# once you have, because the failure looks like a missing file.
+# Usage: toml_has_section "file.toml" "server" -> returns 0 (true) or 1 (false)
+toml_has_section() {
+    local file="${1:-}"
+    local section="${2:-}"
+
+    [[ -f "$file" && -n "$section" ]] || return 1
+
+    local line clean_line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        clean_line="$(_toml_clean_line "$line")"
+        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]] \
+           && [[ "${BASH_REMATCH[1]}" == "$section" ]]; then
+            return 0
+        fi
+    done < "$file"
+    return 1
+}
+
+# List the direct children of a section, by name, without duplicates
+# `[a.b.c]` makes `a.b` a table whether or not `[a.b]` was ever written, so a
+# child is counted from any descendant header rather than only from a literal
+# one. Under parent `a`, both `[a.b]` and `[a.b.c]` yield `b`, once.
+# Reading a tree of named sub-tables otherwise means piping `toml_sections`
+# into sed with a pattern built by hand, which every caller writes slightly
+# differently and one of them writes wrong.
+# Usage: toml_subsections "file.toml" "kind.gpg" -> child names, one per line
+toml_subsections() {
+    local file="${1:-}"
+    local parent="${2:-}"
+
+    [[ -f "$file" && -n "$parent" ]] || return 1
+
+    local section rest child
+    local -a seen=()
+    while IFS= read -r section; do
+        [[ "$section" == "$parent."* ]] || continue
+        rest="${section#"$parent".}"
+        child="${rest%%.*}"
+        [[ -n "$child" ]] || continue
+        # Emit each child once, however many descendants it has.
+        local s found=0
+        for s in "${seen[@]:-}"; do [[ "$s" == "$child" ]] && { found=1; break; }; done
+        (( found )) && continue
+        seen+=("$child")
+        printf '%s\n' "$child"
+    done < <(toml_sections "$file")
+}
+
 # Parse a TOML array value into a bash array
 # Usage: toml_array "file.toml" "key" arr
 toml_array() {

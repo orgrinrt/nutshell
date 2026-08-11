@@ -43,6 +43,18 @@ _SELF="$(_resolve_path "${BASH_SOURCE[0]}")"
 _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
 _NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
 
+# shellcheck source=/dev/null
+source "${_NUTSHELL_HOME}/init" || {
+    echo "nutshell: cannot load ${_NUTSHELL_HOME}/init" >&2
+    exit 1
+}
+
+# Before the pin block, so the pin can use the modules that already solve
+# caching rather than growing a fourth copy of them. Costs one redundant init
+# in the pinned case, since the exec re-runs it in the pinned copy.
+use extern log
+
+
 # =============================================================================
 # The engine pin
 # =============================================================================

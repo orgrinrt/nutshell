@@ -14,3 +14,15 @@ attributes = [
     "#[pub]",
     "#[allow(trivial_wrapper)]",
 ]
+
+# Nested tables, for the section predicates. Note that [tree.branch] is never
+# written literally: TOML creates it implicitly from [tree.branch.leaf], and
+# both predicates have to agree that it exists.
+[tree.branch.leaf]
+kind = "implicit parent above me"
+
+[tree.other]
+kind = "literal"
+
+[tree.other.deep]
+kind = "grandchild"

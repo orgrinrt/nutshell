@@ -275,11 +275,20 @@ toml_keys() {
 }
 
 #[pub]
-# Check if a section exists in a TOML file
+# Check if a section exists in a TOML file, literally or implicitly
 # `toml_has` answers for keys and only keys: it delegates to `toml_get`, and a
 # section header has no value to return, so asking it about `[server]` says no
 # while `toml_sections` lists it. That gap is easy to walk into and hard to see
 # once you have, because the failure looks like a missing file.
+#
+# "Exists" means the TABLE exists, not that a header was literally written.
+# `[a.b.c]` creates `a` and `a.b` per TOML v1.0.0, so both answer true here.
+# That has to match `toml_subsections`, which reports children of exactly those
+# implicit parents; a stricter reading would have made the obvious composition
+# `toml_has_section f "$p" && toml_subsections f "$p"` silently skip them.
+#
+# Quoted keys containing dots (`[x."a.b"]`) are not understood, in common with
+# the rest of this module.
 # Usage: toml_has_section "file.toml" "server" -> returns 0 (true) or 1 (false)
 toml_has_section() {
     local file="${1:-}"
@@ -287,12 +296,21 @@ toml_has_section() {
 
     [[ -f "$file" && -n "$section" ]] || return 1
 
-    local line clean_line
+    # Cheap reject before the per-line scan. A predicate gets called in loops,
+    # and _toml_clean_line forks a subshell per line, so a full pass to answer
+    # "no" costs seconds on a large file. grep against the FILE is safe here;
+    # piping a shell function into `grep -q` is not, because grep exits on the
+    # first match, the writer takes SIGPIPE, and a caller running with
+    # `set -o pipefail` sees 141 for a successful lookup.
+    grep -q '^[[:space:]]*\[' -- "$file" || return 1
+
+    local line clean_line found
     while IFS= read -r line || [[ -n "$line" ]]; do
         clean_line="$(_toml_clean_line "$line")"
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]] \
-           && [[ "${BASH_REMATCH[1]}" == "$section" ]]; then
-            return 0
+        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
+            found="${BASH_REMATCH[1]}"
+            # Literal, or an ancestor of a deeper header.
+            [[ "$found" == "$section" || "$found" == "$section."* ]] && return 0
         fi
     done < "$file"
     return 1
@@ -306,6 +324,10 @@ toml_has_section() {
 # Reading a tree of named sub-tables otherwise means piping `toml_sections`
 # into sed with a pattern built by hand, which every caller writes slightly
 # differently and one of them writes wrong.
+#
+# Quoted keys containing dots (`[x."a.b"]`) are not understood: the name would
+# be split inside the quotes and yield a fragment rather than a table. Such
+# headers are skipped rather than mangled.
 # Usage: toml_subsections "file.toml" "kind.gpg" -> child names, one per line
 toml_subsections() {
     local file="${1:-}"
@@ -317,10 +339,17 @@ toml_subsections() {
     local -a seen=()
     while IFS= read -r section; do
         [[ "$section" == "$parent."* ]] || continue
+        # A quoted key may contain a dot; splitting on it would emit half a
+        # name. Skip rather than lie about the answer.
+        case "$section" in *\"*|*\'*) continue ;; esac
         rest="${section#"$parent".}"
         child="${rest%%.*}"
         [[ -n "$child" ]] || continue
-        # Emit each child once, however many descendants it has.
+        # Emit each child once, however many descendants it has. This is
+        # `arr_contains` open-coded, and O(n^2), on purpose: toml is layer 0
+        # and its dependency line is `string validate`. Pulling in `array` to
+        # save a loop over a handful of section names would buy a dependency
+        # with a micro-optimisation.
         local s found=0
         for s in "${seen[@]:-}"; do [[ "$s" == "$child" ]] && { found=1; break; }; done
         (( found )) && continue

@@ -43,6 +43,108 @@ _SELF="$(_resolve_path "${BASH_SOURCE[0]}")"
 _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
 _NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
 
+# =============================================================================
+# The engine pin
+# =============================================================================
+# A project says which nutshell it wants, in its own nut.toml, as a root-level
+# scalar. Same shape mockspace.toml uses for the same job, because it is the
+# same job and a reader should not have to learn two spellings:
+#
+#     nutshell_version = "0.3.0"     the released form
+#     nutshell_branch  = "dev"       when there is no release yet
+#
+# Root level, before any [table] header. A bare key written after one belongs
+# to that table, which is a quiet way to have a pin that is never read.
+#
+# Unpinned projects are untouched: they get the checkout the shebang resolved
+# to, exactly as before. A pin is resolved to a worktree under the cache and
+# this interpreter re-execs into that copy, so a script gets the library it
+# asked for rather than whichever checkout happens to be on PATH today.
+#
+# Reading the pin happens before `init`, so it cannot use `toml`. A root-level
+# scalar is a line, and a line is a grep. Anything more would be a parser
+# running before the module that exists to parse.
+
+_nut_manifest() {
+    # A script's dependencies belong to its project, so search upward from the
+    # script rather than from the caller's cwd.
+    local dir="$1"
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
+        dir="${dir%/*}"
+    done
+    return 1
+}
+
+_nut_pin() {
+    # Root-level scalars only: stop at the first [table] header.
+    local file="$1" key="$2" line
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*\[ ]] && return 1
+        if [[ "$line" =~ ^[[:space:]]*"$key"[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
+            printf '%s' "${BASH_REMATCH[1]}"
+            return 0
+        fi
+    done < "$file"
+    return 1
+}
+
+# A checkout at the pinned ref, created under the cache if absent and refreshed
+# when stale. Never touches the user's own checkout.
+_nut_worktree() {
+    local ref="$1" repo="$2"
+    local cache="${XDG_CACHE_HOME:-$HOME/.cache}/nutshell/refs"
+    local dir="$cache/${ref//[^A-Za-z0-9._-]/_}"
+    local ttl="${NUTSHELL_PIN_TTL:-3600}"
+
+    if [[ ! -d "$dir/.git" && ! -f "$dir/.git" ]]; then
+        mkdir -p "$cache" || return 1
+        echo "nutshell: pinned to '$ref', creating $dir" >&2
+        git -C "$repo" fetch -q origin "$ref" 2>/dev/null
+        git -C "$repo" worktree add -q --detach "$dir" \
+            "$(git -C "$repo" rev-parse --verify -q "origin/$ref" \
+               || git -C "$repo" rev-parse --verify -q "$ref")" 2>/dev/null || {
+            echo "nutshell: cannot check out '$ref'; using $repo" >&2
+            return 1
+        }
+    else
+        # Re-resolve the head periodically rather than on every invocation, so
+        # a pinned branch tracks without a fetch per script run.
+        local stamp="$dir/.nutshell-fetched" now age
+        now="$(date +%s)"
+        age="$ttl"
+        [[ -f "$stamp" ]] && age=$(( now - $(cat "$stamp" 2>/dev/null || echo 0) ))
+        if (( age >= ttl )); then
+            if git -C "$repo" fetch -q origin "$ref" 2>/dev/null; then
+                git -C "$dir" reset -q --hard FETCH_HEAD 2>/dev/null
+            fi
+            printf '%s' "$now" > "$stamp" 2>/dev/null
+        fi
+    fi
+    [[ -x "$dir/bin/nutshell" ]] || return 1
+    printf '%s' "$dir"
+}
+
+# Resolve once. The re-exec'd interpreter must not try again, or a pin that
+# cannot be satisfied becomes a loop rather than a warning.
+if [[ -z "${NUTSHELL_PIN_RESOLVED:-}" && -f "${1:-}" ]]; then
+    export NUTSHELL_PIN_RESOLVED=1
+    _script_dir="$(cd "$(dirname "$1")" && pwd)"
+    if _manifest="$(_nut_manifest "$_script_dir")"; then
+        _ref=""
+        _ref="$(_nut_pin "$_manifest" nutshell_branch)" ||
+            _ref="$(_nut_pin "$_manifest" nutshell_version)" || _ref=""
+        if [[ -n "$_ref" ]] && git -C "$_NUTSHELL_HOME" rev-parse --git-dir >/dev/null 2>&1; then
+            _at="$(git -C "$_NUTSHELL_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+            if [[ "$_at" != "$_ref" ]]; then
+                if _pinned="$(_nut_worktree "$_ref" "$_NUTSHELL_HOME")"; then
+                    exec "$_pinned/bin/nutshell" "$@"
+                fi
+            fi
+        fi
+    fi
+fi
+
 # shellcheck source=/dev/null
 source "${_NUTSHELL_HOME}/init" || {
     echo "nutshell: cannot load ${_NUTSHELL_HOME}/init" >&2
@@ -69,6 +171,11 @@ Available modules:
 For more information: https://github.com/orgrinrt/nutshell
 EOF
 }
+
+# Sourced rather than run: define the helpers and stop. Without this the CLI
+# dispatch below fires during a source and exits the caller, which is why the
+# pin parser had no test until it had this.
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
 
 case "${1:-}" in
     --help|-h)

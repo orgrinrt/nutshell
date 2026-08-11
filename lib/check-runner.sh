@@ -136,7 +136,7 @@ cfg_is_true() {
     # If user has [tests.foo] section, that means they want it enabled,
     # even if defaults file has "foo = false"
     if [[ -n "$CONFIG_FILE" ]] && [[ -f "$CONFIG_FILE" ]]; then
-        if grep -qE "^\[${key}\]" "$CONFIG_FILE" 2>/dev/null; then
+        if toml_has_section "$CONFIG_FILE" "$key"; then
             return 0  # User has section, treat as enabled
         fi
         
@@ -150,7 +150,7 @@ cfg_is_true() {
     # Fall back to defaults file
     if [[ -f "$NUTSHELL_DEFAULTS_FILE" ]]; then
         # Check for section in defaults
-        if grep -qE "^\[${key}\]" "$NUTSHELL_DEFAULTS_FILE" 2>/dev/null; then
+        if toml_has_section "$NUTSHELL_DEFAULTS_FILE" "$key"; then
             return 0  # Defaults has section, treat as enabled
         fi
         
@@ -166,24 +166,20 @@ cfg_is_true() {
 }
 
 # Check if a section exists in the config
-# Usage: cfg_section_exists "section.name"
+# The hand-rolled `grep -qE "^\[${section}\]"` this replaced interpolated the
+# name into a regex, so every `.` in a section name matched any character:
+# asking for `a.b` found `[axb]`. It also had no end anchor, so `check` matched
+# `[checkers]`, and it missed a header carrying a trailing comment.
+# Usage: cfg_section_exists "section.name" -> returns 0 (true) or 1 (false)
 cfg_section_exists() {
     local section="$1"
-    
-    # Try user config first
+
     if [[ -n "$CONFIG_FILE" ]] && [[ -f "$CONFIG_FILE" ]]; then
-        if grep -qE "^\[${section}\]" "$CONFIG_FILE" 2>/dev/null; then
-            return 0
-        fi
+        toml_has_section "$CONFIG_FILE" "$section" && return 0
     fi
-    
-    # Fall back to defaults
     if [[ -f "$NUTSHELL_DEFAULTS_FILE" ]]; then
-        if grep -qE "^\[${section}\]" "$NUTSHELL_DEFAULTS_FILE" 2>/dev/null; then
-            return 0
-        fi
+        toml_has_section "$NUTSHELL_DEFAULTS_FILE" "$section" && return 0
     fi
-    
     return 1
 }
 

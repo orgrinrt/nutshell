@@ -50,3 +50,50 @@ it_reads_bracket_bearing_array_values() {
 it_reports_a_missing_key_rather_than_inventing_one() {
     assert_fails toml_get "$FIXTURE" "meta.nothing_here"
 }
+
+#[test]
+it_finds_a_literal_section() {
+    assert_ok toml_has_section "$FIXTURE" "meta"
+}
+
+#[test]
+it_finds_a_section_that_was_only_created_implicitly() {
+    # `[tree.branch]` is never written. TOML v1.0.0 says `[tree.branch.leaf]`
+    # creates it anyway, and `toml_subsections` already reported it as a child
+    # of `tree`, so a predicate that denied it would contradict its own module.
+    assert_ok toml_has_section "$FIXTURE" "tree.branch"
+}
+
+#[test]
+it_denies_a_section_that_does_not_exist() {
+    assert_fails toml_has_section "$FIXTURE" "tree.nope"
+}
+
+#[test]
+it_does_not_match_a_section_on_a_shared_prefix() {
+    # `tre` is a prefix of `tree` and is not a table.
+    assert_fails toml_has_section "$FIXTURE" "tre"
+}
+
+#[test]
+it_lists_direct_children_only() {
+    local out; out="$(toml_subsections "$FIXTURE" "tree" | sort | tr '\n' ' ')"
+    assert_eq "$out" "branch other "
+}
+
+#[test]
+it_lists_a_child_once_however_many_descendants_it_has() {
+    # `other` has both a literal header and a grandchild under it.
+    assert_eq "$(toml_subsections "$FIXTURE" "tree.other")" "deep"
+}
+
+#[test]
+it_agrees_with_itself_about_every_child_it_reports() {
+    # The composition that the two functions exist to support. This is the one
+    # that failed: has_section matched literal headers only, so it denied every
+    # implicitly created parent that subsections had just listed.
+    local child
+    while IFS= read -r child; do
+        assert_ok toml_has_section "$FIXTURE" "tree.$child"
+    done < <(toml_subsections "$FIXTURE" "tree")
+}

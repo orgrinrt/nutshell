@@ -298,6 +298,7 @@ toml_has_section() {
     return 1
 }
 
+#[pub]
 # List the direct children of a section, by name, without duplicates
 # `[a.b.c]` makes `a.b` a table whether or not `[a.b]` was ever written, so a
 # child is counted from any descendant header rather than only from a literal
@@ -328,6 +329,7 @@ toml_subsections() {
     done < <(toml_sections "$file")
 }
 
+#[pub]
 # Parse a TOML array value into a bash array
 # Usage: toml_array "file.toml" "key" arr
 toml_array() {

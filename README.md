@@ -16,8 +16,10 @@ Add nutshell to your project:
 # Option A: Git submodule (recommended)
 git submodule add https://github.com/orgrinrt/nutshell.git scripts/lib/nutshell
 
-# Option B: Download a release
-curl -L https://github.com/orgrinrt/nutshell/releases/latest/download/nutshell.tar.gz | tar -xz -C scripts/lib/
+# Option B: Download a source archive (releases ship no built artifacts)
+mkdir -p scripts/lib/nutshell
+curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.2.0.tar.gz \
+    | tar -xz --strip-components=1 -C scripts/lib/nutshell
 ```
 
 That's it. No global install required. Nutshell lives in your project.
@@ -66,13 +68,17 @@ nutshell/
 │       └── check_*.sh
 ├── tests/                 # The suite, run by ./test
 ├── schemas/               # JSON schema for nut.toml
+├── docs/                  # Design notes
 ├── install                # Link bin/nutshell onto PATH
+├── release                # Cut a release: gate, tag, publish
 ├── test                   # Test entry point (executable)
 ├── nutshell.sh            # Alternative: load ALL modules at once
 ├── README.md
-├── nut.toml               # Nutshell's own config
-└── nut.lock               # Resolved dependency commits
+└── nut.toml               # Nutshell's own config
 ```
+
+A `nut.lock` appears next to `nut.toml` once a declared dependency first
+resolves; it records the commit each dependency pinned to.
 
 A typical project setup:
 
@@ -129,7 +135,7 @@ One script bootstraps, others use the clean shebang:
 
 ```bash
 #!/usr/bin/env nutshell
-# scripts/internal/build.sh - Clean shebang!
+# scripts/internal/build.sh - clean shebang, no init line
 use os log
 
 log_info "Building..."
@@ -371,7 +377,7 @@ http_get_json "$API_URL/users"
 
 if http_ok; then
     users=$(http_body)
-    count=$(json_get "$users" "length")
+    count=$(json_length "$users")
     log_success "Fetched $count users"
 else
     log_error "API request failed: $(http_status)"
@@ -461,7 +467,7 @@ max_loc = 300
 ```
 
 See `examples/configs/` for configuration templates:
-- `empty.nut.toml` - Minimal defaults
+- `empty.nut.toml` - Every option documented, all checks disabled
 - `default.nut.toml` - Recommended settings
 - `tough.nut.toml` - Strict settings for quality-conscious projects
 
@@ -489,7 +495,7 @@ A: Nutshell is designed to be bundled with your project. When someone clones you
 A: That requires `nutshell` to be in PATH, which means global installation or setup steps for every developer. The source line is self-contained.
 
 **Q: Can I use the pretty shebang?**  
-A: Yes! The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`. This is great for internal scripts in complex projects.
+A: Yes. The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`. This suits internal scripts in larger script suites.
 
 **Q: What if I have many scripts?**  
 A: Each standalone script needs the init line. It's one line of boilerplate per file. For large script suites, consider Pattern 2 (entry point + internal scripts).
@@ -544,6 +550,7 @@ json_set '{"a":1}' "b" "2"                      # '{"a":1,"b":2}'
 json_valid '{"a":1}'                            # Returns 0 (valid)
 json_pretty '{"a":1}'                           # Formatted output
 json_keys '{"a":1,"b":2}'                       # "a" and "b"
+json_length '[1,2,3]'                           # "3"
 ```
 
 ### Filesystem (`use fs`)

@@ -1,5 +1,86 @@
 # nutshell TODO
 
+## Release blockers, from the 2026-08-14 dev-to-main readiness review
+
+Four items block a release. `./release` already refuses on the third. Findings are a reviewer's and the
+two probes behind items 1 and 2 were written read-only, so **commit them alongside the fix**: until then
+these are reproducible claims rather than repo evidence.
+
+- [ ] **`init:47`: bash 4+ is required, declared nowhere, and the failure is silent with exit 0.**
+      `declare -gA` needs bash 4.0. `bin/nutshell:1` is `#!/usr/bin/env bash`, which takes the first
+      `bash` on `PATH`, and macOS ships 3.2 at `/bin/bash`. Under a default
+      `PATH=/usr/bin:/bin` the script body never runs and the caller reads success:
+
+      ```
+      init: line 47: declare: -A: invalid option
+      init: line 93: log: unbound variable
+      EXIT=0          # stdout empty: the script body never ran
+      ```
+
+      Fix is a `BASH_VERSINFO[0] -ge 4` guard in `init` and `bin/nutshell` that exits **non-zero**,
+      plus a README line. Not a port: the dependency is pervasive (`declare -A` in 10+ files,
+      `mapfile` in `lib/array.sh`, `${v,,}` in `lib/{validate,string,prompt}.sh`). `README.md:5`
+      currently advertises "portable" and names no version requirement.
+
+- [ ] **`lib/extern.sh:283`: a dead lock holder is never reclaimed, so the suite sleeps ten minutes
+      and then reports green.** `_extern_guard` writes `$$`, but it is reached only through command
+      substitution (`extern.sh:159` to `:335`), and `$$` in a subshell is the **parent's** pid. So a
+      dead holder names a live process, `kill -0` at `extern.sh:266` says alive, the corpse-reclaim
+      never fires, and the waiter sits in `sleep 1` at `:278` until the age check at `:271` clears it
+      and **succeeds**. `_EXTERN_LOCK_WAIT_SECONDS` defaults to 660 (`:249`), and a clean run is 25.3s
+      wall against 9.57s user, which closes the arithmetic on the reported 11m28s: 688 minus 660 is
+      the real work. Intermittent: it needs an interrupted holder.
+
+      Fix is one word, `$BASHPID` rather than `$$`. **Do not lengthen a timeout.**
+
+- [ ] **`tests/extern_test.sh:263` feeds the one input the code handles.**
+      `it_takes_over_a_lock_whose_holder_died` reaps a real child and writes a genuinely dead pid,
+      which is the branch that works. The branch production actually produces, a live-parent pid
+      written by a dead subshell, is never entered. Add that case as a test that fails before the fix
+      above.
+
+- [ ] **`init:29`: bump `NUTSHELL_VERSION`, and `README.md:7` with it.** Still `0.2.0` while the slice
+      adds `toml_has_section` and `toml_subsections`. `release:50-53` refuses when the tag exists.
+
+- [ ] **`README.md:19`: the documented install path 404s.** Option B fetches
+      `releases/latest/download/nutshell.tar.gz`, and `release:83-86` uploads no asset, which
+      `release:15-17` states outright ("No built artifacts"). Fix or delete it, and add `./install` as
+      a documented step: it exists (`install:5-13`) but appears only as a filename in the tree listing
+      at `:69`.
+
+## Follow-ups from the same review, not release blockers
+
+- [ ] **12 of 21 modules have zero tests**: `array, check-runner, color, fs, http, log, os, prompt,
+      string, text, xdg`, and `test` beyond its harness file. 316 `#[pub]` functions against ~109
+      `#[test]`. `string`, `text`, `fs`, `array` are core primitives, and `lib/test.sh:12` uses
+      `str_trim` as its worked example while `string` has no tests. The suite only ever runs under
+      bash 5, so the whole failure region of the first blocker is untested by construction. This is
+      the reason both of the blockers above survived to a review rather than a coverage gap to
+      schedule.
+- [ ] **`README.md:488-492` describes the world before `./install` shipped**, presenting
+      `#!/usr/bin/env nutshell` as needing "global installation or setup steps for every developer" and
+      offering that as a reason not to use it. That shebang is how this library's most prominent
+      consumers run.
+- [ ] **`lib/toml.sh:8` and `lib/deps.sh:8` declare a line ceiling nothing enforces.**
+      `check_file_size.sh:84` greps for `#[[:space:]]*#\[allow\(loc = ([0-9]+)\)\]`, requiring two
+      hashes, while both files use the one-hash attribute form. So `toml.sh` declares 400 and is 546,
+      `deps.sh` declares 450 and is 780, and either number could be anything. The repo already ships a
+      correct reader for the one-hash form (`attr_arg`); the check hand-rolls a grep instead.
+- [ ] **`./check` exits 0 with three warnings** (`file_size`, `function_duplication`,
+      `public_api_docs`) at 5m29s and 95% CPU, and `release:57` gates on it. Warnings that cannot fail
+      are not gates.
+- [ ] **README carries no "A note on coding agents"** while the repo ships
+      `.github/copilot-instructions.md`.
+- [ ] **Operational, outside this repo:** `~/.local/bin/nutshell` symlinks into a working tree, so
+      every consumer using the shebang executes whatever branch that checkout happens to sit on.
+
+## Open, and not the reviewer's to decide
+
+- [ ] **The version scheme.** `0.2.0` reads as a semver stability claim this repo does not make, where
+      the workspace convention puts pre-1.0 at `0.0.0-dNN` with the first stable at `0.0.1`. Either
+      keep `0.2.0` as a declared exception or renumber before more tags accrue. Cheaper now than per
+      release.
+
 ## v0.2.0
 
 - [x] Core library modules (os, log, deps, fs, text, json, http, etc.)

@@ -2,7 +2,8 @@
 
 > Everything you need, in a nutshell.
 
-A minimal, portable bash library for shell scripting.
+A minimal bash library for shell scripting. Requires bash 4.0 or newer;
+macOS ships 3.2 at `/bin/bash`, so install a current bash there first.
 
 **Version**: 0.2.0
 
@@ -23,6 +24,13 @@ curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.2.0.tar.gz \
 ```
 
 That's it. No global install required. Nutshell lives in your project.
+
+Optionally, link the interpreter onto PATH so standalone scripts can use the
+`#!/usr/bin/env nutshell` shebang:
+
+```bash
+./scripts/lib/nutshell/install
+```
 
 ---
 
@@ -492,10 +500,10 @@ See `examples/configs/` for configuration templates:
 A: Nutshell is designed to be bundled with your project. When someone clones your repo and runs `npm run build`, it should just work, with no "please install nutshell first".
 
 **Q: Why not `#!/usr/bin/env nutshell` everywhere?**  
-A: That requires `nutshell` to be in PATH, which means global installation or setup steps for every developer. The source line is self-contained.
+A: That requires `nutshell` to be on PATH. `./install` links it there in one step, but the source line works on a fresh clone with no setup at all, so it stays the default.
 
 **Q: Can I use the pretty shebang?**  
-A: Yes. The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`. This suits internal scripts in larger script suites.
+A: Yes. The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`, and `./install` makes it resolve everywhere else. This suits internal scripts in larger script suites.
 
 **Q: What if I have many scripts?**  
 A: Each standalone script needs the init line. It's one line of boilerplate per file. For large script suites, consider Pattern 2 (entry point + internal scripts).
@@ -597,6 +605,26 @@ deps_require_all "git" "curl"        # Exit if any missing
 deps_path "git"                      # "/usr/bin/git"
 deps_is_gnu "sed"                    # True if GNU variant
 ```
+
+---
+
+## A note on coding agents
+
+We do not recommend using coding agents with this codebase.
+
+If you still choose to use a coding agent:
+
+- Be aware of the environmental and social impact of large-scale model inference.
+  Minimise agent use where it is not needed. Be responsible.
+- Only use an agent if you yourself understand the architecture. Do not use an
+  agent because you do not understand; you will waste time and energy, both
+  yours and the planet's.
+- This repository provides agent instructions for GitHub Copilot
+  (`.github/copilot-instructions.md`) that help, but they do not eliminate the
+  problem. You will still need to correct the agent frequently.
+
+The recommendation stands: do this work yourself unless you know what you are doing
+and why.
 
 ---
 

@@ -323,7 +323,7 @@ ref = "main"
 and a module inside it is reached by namespacing the `use`:
 
 ```bash
-use shebang::diagnostics/findings
+use shebang::diagnostics/diagnostics
 ```
 
 Declared in the manifest because a script that fetches its own dependencies

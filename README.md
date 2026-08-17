@@ -5,8 +5,6 @@
 A minimal bash library for shell scripting. Requires bash 4.0 or newer;
 macOS ships 3.2 at `/bin/bash`, so install a current bash there first.
 
-**Version**: 0.2.0
-
 ---
 
 ## Installation
@@ -17,7 +15,8 @@ Add nutshell to your project:
 # Option A: Git submodule (recommended)
 git submodule add https://github.com/orgrinrt/nutshell.git scripts/lib/nutshell
 
-# Option B: Download a source archive (releases ship no built artifacts)
+# Option B: Download a source archive (releases ship no built artifacts).
+# 0.2.0 is the latest tag; check the releases page for newer ones.
 mkdir -p scripts/lib/nutshell
 curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.2.0.tar.gz \
     | tar -xz --strip-components=1 -C scripts/lib/nutshell

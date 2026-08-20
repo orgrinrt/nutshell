@@ -2,9 +2,8 @@
 
 > Everything you need, in a nutshell.
 
-A minimal, portable bash library for shell scripting.
-
-**Version**: 0.2.0
+A minimal bash library for shell scripting. Requires bash 4.0 or newer;
+macOS ships 3.2 at `/bin/bash`, so install a current bash there first.
 
 ---
 
@@ -16,11 +15,21 @@ Add nutshell to your project:
 # Option A: Git submodule (recommended)
 git submodule add https://github.com/orgrinrt/nutshell.git scripts/lib/nutshell
 
-# Option B: Download a release
-curl -L https://github.com/orgrinrt/nutshell/releases/latest/download/nutshell.tar.gz | tar -xz -C scripts/lib/
+# Option B: Download a source archive (releases ship no built artifacts).
+# 0.2.0 is the latest tag; check the releases page for newer ones.
+mkdir -p scripts/lib/nutshell
+curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.2.0.tar.gz \
+    | tar -xz --strip-components=1 -C scripts/lib/nutshell
 ```
 
 That's it. No global install required. Nutshell lives in your project.
+
+Optionally, link the interpreter onto PATH so standalone scripts can use the
+`#!/usr/bin/env nutshell` shebang:
+
+```bash
+./scripts/lib/nutshell/install
+```
 
 ---
 
@@ -66,13 +75,17 @@ nutshell/
 │       └── check_*.sh
 ├── tests/                 # The suite, run by ./test
 ├── schemas/               # JSON schema for nut.toml
+├── docs/                  # Design notes
 ├── install                # Link bin/nutshell onto PATH
+├── release                # Cut a release: gate, tag, publish
 ├── test                   # Test entry point (executable)
 ├── nutshell.sh            # Alternative: load ALL modules at once
 ├── README.md
-├── nut.toml               # Nutshell's own config
-└── nut.lock               # Resolved dependency commits
+└── nut.toml               # Nutshell's own config
 ```
+
+A `nut.lock` appears next to `nut.toml` once a declared dependency first
+resolves; it records the commit each dependency pinned to.
 
 A typical project setup:
 
@@ -129,7 +142,7 @@ One script bootstraps, others use the clean shebang:
 
 ```bash
 #!/usr/bin/env nutshell
-# scripts/internal/build.sh - Clean shebang!
+# scripts/internal/build.sh - clean shebang, no init line
 use os log
 
 log_info "Building..."
@@ -371,7 +384,7 @@ http_get_json "$API_URL/users"
 
 if http_ok; then
     users=$(http_body)
-    count=$(json_get "$users" "length")
+    count=$(json_length "$users")
     log_success "Fetched $count users"
 else
     log_error "API request failed: $(http_status)"
@@ -461,7 +474,7 @@ max_loc = 300
 ```
 
 See `examples/configs/` for configuration templates:
-- `empty.nut.toml` - Minimal defaults
+- `empty.nut.toml` - Every option documented, all checks disabled
 - `default.nut.toml` - Recommended settings
 - `tough.nut.toml` - Strict settings for quality-conscious projects
 
@@ -486,10 +499,10 @@ See `examples/configs/` for configuration templates:
 A: Nutshell is designed to be bundled with your project. When someone clones your repo and runs `npm run build`, it should just work, with no "please install nutshell first".
 
 **Q: Why not `#!/usr/bin/env nutshell` everywhere?**  
-A: That requires `nutshell` to be in PATH, which means global installation or setup steps for every developer. The source line is self-contained.
+A: That requires `nutshell` to be on PATH. `./install` links it there in one step, but the source line works on a fresh clone with no setup at all, so it stays the default.
 
 **Q: Can I use the pretty shebang?**  
-A: Yes! The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`. This is great for internal scripts in complex projects.
+A: Yes. The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`, and `./install` makes it resolve everywhere else. This suits internal scripts in larger script suites.
 
 **Q: What if I have many scripts?**  
 A: Each standalone script needs the init line. It's one line of boilerplate per file. For large script suites, consider Pattern 2 (entry point + internal scripts).
@@ -544,6 +557,7 @@ json_set '{"a":1}' "b" "2"                      # '{"a":1,"b":2}'
 json_valid '{"a":1}'                            # Returns 0 (valid)
 json_pretty '{"a":1}'                           # Formatted output
 json_keys '{"a":1,"b":2}'                       # "a" and "b"
+json_length '[1,2,3]'                           # "3"
 ```
 
 ### Filesystem (`use fs`)
@@ -590,6 +604,26 @@ deps_require_all "git" "curl"        # Exit if any missing
 deps_path "git"                      # "/usr/bin/git"
 deps_is_gnu "sed"                    # True if GNU variant
 ```
+
+---
+
+## A note on coding agents
+
+We do not recommend using coding agents with this codebase.
+
+If you still choose to use a coding agent:
+
+- Be aware of the environmental and social impact of large-scale model inference.
+  Minimise agent use where it is not needed. Be responsible.
+- Only use an agent if you yourself understand the architecture. Do not use an
+  agent because you do not understand; you will waste time and energy, both
+  yours and the planet's.
+- This repository provides agent instructions for GitHub Copilot
+  (`.github/copilot-instructions.md`) that help, but they do not eliminate the
+  problem. You will still need to correct the agent frequently.
+
+The recommendation stands: do this work yourself unless you know what you are doing
+and why.
 
 ---
 

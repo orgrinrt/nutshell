@@ -84,6 +84,53 @@ it_reports_the_calling_file_and_not_the_entry_point() {
     rm -rf "$d"
 }
 
+# The case a review found, and the reason the test below is not enough on its
+# own. A source with no slash in it, which is what `bash s.sh` from the file's
+# own directory produces, made `nut_dir` return empty and `nut_file` return
+# `/s.sh`: a wrong absolute path with a zero exit. The documented
+# `source "$(nut_dir)/helper.sh"` became `source "/helper.sh"`.
+#[test]
+it_resolves_a_source_name_carrying_no_directory() {
+    local d out
+    d="$(mktemp -d)"
+    printf 'printf "dir=%%s file=%%s" "$(nut_dir)" "$(nut_file)"\n' > "$d/s.sh"
+    out="$(cd "$d" && nutshell s.sh 2>&1)"
+    assert_contains "$out" "dir=${d}"
+    assert_contains "$out" "file=${d}/s.sh"
+    # the shape of the old answer, which must not come back
+    assert_ne "$out" "dir= file=/s.sh"
+    rm -rf "$d"
+}
+
+# `super::` resolved from the entry point rather than from the file asking, so a
+# module inside a unit failed when the entry script and the working directory
+# were both outside it. That is the entry-point anchoring `nut_dir` exists to
+# correct, and it shipped in the same change.
+#
+# Every other test here puts the entry script at the unit root and cds there,
+# which is the one arrangement where entry-point and manifest anchoring cannot
+# be told apart. This is the arrangement where they can.
+#[test]
+it_anchors_on_the_asking_file_and_not_on_the_entry_point() {
+    local d out
+    d="$(mktemp -d)"
+    mkdir -p "$d/unit/lib" "$d/elsewhere"
+    printf '[deps]\n' > "$d/unit/nut.toml"
+    printf 'nut_once || return 0\ngreet() { printf mine; }\n' > "$d/unit/lib/mine.sh"
+    printf 'nut_once || return 0\nuse super::mine\n' > "$d/unit/lib/caller.sh"
+    printf 'source "%s/unit/lib/caller.sh"\ngreet\n' "$d" > "$d/elsewhere/entry.sh"
+    out="$(cd "$d/elsewhere" && nutshell "$d/elsewhere/entry.sh" 2>&1)"
+    assert_eq "$out" "mine"
+    rm -rf "$d"
+}
+
+# The control this file was missing. `it_gives_a_file_and_a_dir_that_agree`
+# relates two answers to each other and constrains neither: with `nut_dir`
+# empty and `nut_file` `/probe.sh`, `"${dir}/probe.sh"` equals `"$file"` and it
+# passes. It did pass, in the broken state, in the same run where the
+# correctness test failed.
+#
+# So the agreement is checked against something outside both.
 #[test]
 it_gives_a_file_and_a_dir_that_agree() {
     local d out dir file
@@ -96,5 +143,7 @@ it_gives_a_file_and_a_dir_that_agree() {
     dir="${out%%|*}"
     file="${out##*|}"
     assert_eq "$file" "${dir}/probe.sh"
+    # and against the tree, so an empty dir with a matching file cannot pass
+    assert_eq "$dir" "$(cd "$d/lib" && pwd)"
     rm -rf "$d"
 }

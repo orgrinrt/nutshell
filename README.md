@@ -354,20 +354,25 @@ module that builds a path from them is describing somebody else's location and
 breaks the moment the entry point moves. That is not hypothetical; it took a
 whole test suite down when a runner moved from `tests/` to the repository root.
 
-The whole environment, for reference:
+The whole exported environment, which is five things:
 
-| Variable | What it is |
-|---|---|
-| `NUTSHELL_SCRIPT` | The entry script, absolute |
-| `NUTSHELL_SCRIPT_DIR` | Its directory |
-| `NUTSHELL_ROOT` | The nutshell checkout in use |
-| `NUTSHELL_HOME` | Same, as the install root |
-| `NUTSHELL_BIN_DIR` | Its `bin/`, added to `PATH` by `init` |
-| `NUTSHELL_SH` / `NUTSHELL_SH_DIR` | `nutshell.sh` and its directory |
-| `NUTSHELL_INIT` | The `init` file that was sourced |
-| `NUTSHELL_LOADED` | Set once init has run, so a second source is a no-op |
-| `NUTSHELL_VERSION` | The version string |
-| `NUTSHELL_PIN_TTL` | How long a pinned branch head is reused before re-resolving |
+| Variable | What it is | Set by |
+|---|---|---|
+| `NUTSHELL_SCRIPT` | The entry script, absolute | `bin/nutshell` |
+| `NUTSHELL_SCRIPT_DIR` | Its directory | `bin/nutshell` |
+| `NUTSHELL_PIN_ROOT` | The pinned checkout, when a project pins one | `bin/nutshell` |
+| `NUTSHELL_ROOT` | The nutshell checkout in use | `init` |
+| `NUTSHELL_VERSION` | The version string | `init` |
+
+`NUTSHELL_PIN_TTL` is read rather than exported: set it to change how long a
+pinned branch head is reused before re-resolving.
+
+Names beginning with a single underscore are internal and are not listed,
+because they are not the interface. An earlier version of this table had six
+entries that do not exist, produced by a grep for `NUTSHELL_[A-Z_]+` which
+matched those private names inside their own underscore prefix, and it swapped
+the meanings of two of them on the way. In the section whose whole purpose was
+that a reader kept getting these wrong.
 
 ### Depending on another library
 

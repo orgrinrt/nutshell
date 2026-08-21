@@ -41,7 +41,13 @@
           "items": {
             "type": "string"
           },
-          "default": [".git", ".legacy", "node_modules", "vendor", "target"]
+          "default": [
+            ".git",
+            ".legacy",
+            "node_modules",
+            "vendor",
+            "target"
+          ]
         },
         "include": {
           "type": "array",
@@ -49,7 +55,9 @@
           "items": {
             "type": "string"
           },
-          "default": ["*.sh"]
+          "default": [
+            "*.sh"
+          ]
         }
       },
       "additionalProperties": false
@@ -108,7 +116,11 @@
                 "shell": {
                   "type": "string",
                   "description": "Shell to use for syntax checking",
-                  "enum": ["bash", "sh", "zsh"],
+                  "enum": [
+                    "bash",
+                    "sh",
+                    "zsh"
+                  ],
                   "default": "bash"
                 },
                 "fail_on_error": {
@@ -186,7 +198,10 @@
                   "items": {
                     "type": "string"
                   },
-                  "default": ["@@PUBLIC_API@@", "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"]
+                  "default": [
+                    "@@PUBLIC_API@@",
+                    "@@ALLOW_TRIVIAL_WRAPPER_FOR_ERGONOMICS@@"
+                  ]
                 },
                 "exclude_patterns": {
                   "type": "array",
@@ -304,7 +319,11 @@
                   "items": {
                     "type": "string"
                   },
-                  "default": ["echo.*DEBUG", "set -x", "PS4="]
+                  "default": [
+                    "echo.*DEBUG",
+                    "set -x",
+                    "PS4="
+                  ]
                 },
                 "todo_patterns": {
                   "type": "array",
@@ -312,7 +331,13 @@
                   "items": {
                     "type": "string"
                   },
-                  "default": ["TODO:", "FIXME:", "XXX:", "HACK:", "BUG:"]
+                  "default": [
+                    "TODO:",
+                    "FIXME:",
+                    "XXX:",
+                    "HACK:",
+                    "BUG:"
+                  ]
                 },
                 "fail_on_debug": {
                   "type": "boolean",
@@ -357,7 +382,9 @@
                   "items": {
                     "type": "string"
                   },
-                  "default": ["Usage:"]
+                  "default": [
+                    "Usage:"
+                  ]
                 },
                 "recommended_elements": {
                   "type": "array",
@@ -365,7 +392,9 @@
                   "items": {
                     "type": "string"
                   },
-                  "default": ["->"]
+                  "default": [
+                    "->"
+                  ]
                 },
                 "min_doc_lines": {
                   "type": "integer",
@@ -389,19 +418,31 @@
         "color": {
           "type": "string",
           "description": "Use colors in output",
-          "enum": ["auto", "always", "never"],
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
           "default": "auto"
         },
         "verbosity": {
           "type": "string",
           "description": "Verbosity level",
-          "enum": ["quiet", "normal", "verbose"],
+          "enum": [
+            "quiet",
+            "normal",
+            "verbose"
+          ],
           "default": "normal"
         },
         "format": {
           "type": "string",
           "description": "Output format",
-          "enum": ["human", "json", "tap"],
+          "enum": [
+            "human",
+            "json",
+            "tap"
+          ],
           "default": "human"
         },
         "show_passing": {
@@ -416,6 +457,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "nutshell_branch": {
+      "type": "string",
+      "description": "Engine pin: the git ref of nutshell this project wants, when the version it needs has no release yet. Root-level, above the first table header."
+    },
+    "nutshell_version": {
+      "type": "string",
+      "description": "Engine pin: the released nutshell version this project wants. Root-level, above the first table header."
     }
   },
   "additionalProperties": false

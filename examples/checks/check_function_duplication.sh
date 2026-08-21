@@ -303,8 +303,9 @@ compare_stripped_names() {
     
     {
         stripped[NR] = $1
-        original[NR] = $2
-        files[NR] = $3
+        prefixes[NR] = $2
+        original[NR] = $3
+        files[NR] = $4
         count = NR
     }
     
@@ -313,6 +314,20 @@ compare_stripped_names() {
             for (j = i + 1; j <= count; j++) {
                 # Skip if same file
                 if (files[i] == files[j]) continue
+
+                # Different module prefixes means these are namespaced siblings
+                # rather than duplicates. `arr_contains` and `str_contains` do
+                # the same job for different types and are named that way on
+                # purpose, so comparing their stripped forms scores 1.000 for
+                # every such pair and reports the naming convention as a defect.
+                # That is what this did to a library where every function is
+                # `<module>_<verb>`: twelve warnings, not one of them real, and
+                # no body duplication found at all.
+                #
+                # Within one prefix the comparison is worth having, since
+                # `toml_get_or` against `toml_fetch_or` in the same module is a
+                # real question.
+                if (prefixes[i] != prefixes[j]) continue
                 
                 # Early exit: if lengths are too different, skip expensive Levenshtein
                 if (!can_meet_threshold(stripped[i], stripped[j], threshold)) continue

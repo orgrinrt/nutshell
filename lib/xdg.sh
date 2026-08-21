@@ -220,7 +220,7 @@ xdg_app_cache_subdir() {
 
 #[pub]
 # Set the application name for XDG paths
-# Usage: xdg_set_app_name "my-app"
+# Usage: xdg_set_app_name "my-app" -> prints nothing; exports XDG_APP_NAME for the xdg_app_* functions
 # This MUST be called before using any xdg_app_* functions.
 xdg_set_app_name() {
     local name="${1:-}"

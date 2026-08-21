@@ -96,7 +96,29 @@ use() {
         # A namespaced module comes from a library declared in nut.toml, so
         # resolution goes through extern rather than nutshell's own lib.
         local mod_path
-        if [[ "$mod" == *"::"* ]]; then
+        if [[ "$mod" == super::* ]]; then
+            # This unit's own library. `super::` is the only way a project
+            # reaches a module it wrote itself, because a bare `use` resolves
+            # nutshell's set and a namespaced one resolves a declared
+            # dependency, and a unit is neither of those to itself.
+            #
+            # Anchored on the unit's manifest rather than on the entry point,
+            # so a module three directories down reaches `lib/` the same way
+            # the entry script does and moving the entry script changes
+            # nothing.
+            # BASH_SOURCE[1] is the file that called `use`, which is the unit
+            # this `super::` belongs to. BASH_SOURCE[0] is `init` itself, and
+            # NUTSHELL_SCRIPT_DIR is the entry point; neither answers "which
+            # unit is asking".
+            local _caller="${BASH_SOURCE[1]:-}"
+            local _from
+            if [[ -n "$_caller" && "$_caller" == */* ]]; then
+                _from="$(cd "${_caller%/*}" 2>/dev/null && pwd)"
+            else
+                _from="$PWD"
+            fi
+            mod_path="$(_use_super_resolve "${mod#super::}" "$_from")" || return 1
+        elif [[ "$mod" == *"::"* ]]; then
             use extern || return 1
             mod_path="$(extern_resolve "$mod")" || return 1
         else
@@ -124,6 +146,104 @@ use() {
         fi
     done
 }
+
+# _use_super_resolve <rest>
+#
+# The file `super::<rest>` names, from the unit's own manifest directory. The
+# same three shapes `extern_resolve` tries, so a library laid out one way works
+# whether it is reached from inside or from a consumer.
+#
+# Fails loudly rather than falling through to nutshell's own set. A `super::`
+# that silently resolved to a nutshell module of the same name would load
+# something the author did not write and did not mean.
+_use_super_resolve() {
+    local rest="$1" from="$2" root candidate dir
+
+    # Walk up from the file that wrote the `use`, not from the entry point.
+    #
+    # `_extern_manifest` searches NUTSHELL_SCRIPT_DIR and then PWD, which are
+    # both facts about the invocation rather than about the file asking. A
+    # module inside a unit, run by an entry script outside it, resolved
+    # `super::` against the entry script's unit or against nothing. That is the
+    # entry-point anchoring `nut_dir` exists to correct, shipped in the same
+    # change that corrects it, which is how a review found it.
+    #
+    # The caller's own directory is the only anchor that means "this unit" from
+    # every file in it.
+    dir="$from"
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        if [[ -f "${dir}/nut.toml" ]]; then
+            root="$dir"
+            break
+        fi
+        dir="${dir%/*}"
+    done
+
+    if [[ -z "${root:-}" ]]; then
+        echo "nutshell: 'super::${rest}' needs a nut.toml above ${from}, and none was found" >&2
+        echo "  super:: names this unit's own lib/, and the manifest is what marks the unit" >&2
+        return 1
+    fi
+    for candidate in "${root}/lib/${rest}.sh" "${root}/libs/${rest}.sh" "${root}/${rest}.sh"; do
+        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+    done
+    echo "nutshell: this unit has no module '${rest}'" >&2
+    echo "  looked in ${root}/lib, ${root}/libs and ${root}" >&2
+    return 1
+}
+
+# nut_file
+#
+# The file calling this, absolute. Not the entry script: the file the call is
+# written in, the way Deno's `import.meta.filename` and Rust's `file!()` name
+# the current source rather than the program.
+#
+# `NUTSHELL_SCRIPT` is the entry point and is a different question. A module
+# that builds a path from that breaks the moment the entry point moves, which
+# is a real thing that happened and took a whole test suite down with it.
+#
+# Usage: nut_file -> prints the calling file, absolute; returns 1 when it cannot be resolved
+#[pub]
+nut_file() {
+    local src="${BASH_SOURCE[1]:-}" dir
+    # A source with no slash in it is a relative name resolved against the
+    # working directory, which is what `bash s.sh` from the file's own directory
+    # produces. The first version stripped `${src%/*}`, got the whole name back,
+    # failed to `cd` into it and printed `/s.sh` with exit 0: a wrong absolute
+    # path that looks like a right one. Silence is the defect, not the path.
+    [[ -z "$src" ]] && { echo "nut_file: no calling file" >&2; return 1; }
+    if [[ "$src" == */* ]]; then
+        dir="$(cd "${src%/*}" 2>/dev/null && pwd)" || dir=""
+    else
+        dir="$PWD"
+    fi
+    [[ -z "$dir" ]] && { echo "nut_file: cannot resolve ${src}" >&2; return 1; }
+    printf '%s/%s' "$dir" "${src##*/}"
+}
+export -f nut_file
+
+# nut_dir
+#
+# The directory of the file calling this, absolute. What a script wants when it
+# reaches for a sibling file, and the answer to the mistake `NUTSHELL_SCRIPT_DIR`
+# invites.
+#
+# Usage: source "$(nut_dir)/helper.sh" -> prints the calling file's directory; returns 1 when it cannot be resolved
+#[pub]
+nut_dir() {
+    local src="${BASH_SOURCE[1]:-}" dir
+    [[ -z "$src" ]] && { echo "nut_dir: no calling file" >&2; return 1; }
+    if [[ "$src" == */* ]]; then
+        dir="$(cd "${src%/*}" 2>/dev/null && pwd)" || dir=""
+    else
+        dir="$PWD"
+    fi
+    # Empty with a zero exit was the old behaviour, and it turned the documented
+    # `source "$(nut_dir)/helper.sh"` into `source "/helper.sh"`.
+    [[ -z "$dir" ]] && { echo "nut_dir: cannot resolve ${src}" >&2; return 1; }
+    printf '%s' "$dir"
+}
+export -f nut_dir
 
 # Export the function so it's available in subshells
 export -f use

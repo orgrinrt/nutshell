@@ -78,7 +78,7 @@ text_word_count() {
 
 #[pub]
 # Get first N lines of file
-# Usage: text_head "file" [n=10]
+# Usage: text_head "file" [n=10] -> prints the first n lines; returns 1 if the file is not there
 text_head() {
     local file="${1:-}"
     local n="${2:-10}"
@@ -88,7 +88,7 @@ text_head() {
 
 #[pub]
 # Get last N lines of file
-# Usage: text_tail "file" [n=10]
+# Usage: text_tail "file" [n=10] -> prints the last n lines; returns 1 if the file is not there
 text_tail() {
     local file="${1:-}"
     local n="${2:-10}"
@@ -228,7 +228,7 @@ text_count_matches() {
 
 #[pub]
 # Replace pattern in file (in-place)
-# Usage: text_replace "pattern" "replacement" "file"
+# Usage: text_replace "pattern" "replacement" "file" -> prints nothing; rewrites the file in place
 # 
 # Implementation selection:
 #   1. grep+sed combo (optimized: skips sed if pattern not found)
@@ -273,7 +273,7 @@ text_replace() {
 
 #[pub]
 # Replace pattern only in lines matching a filter
-# Usage: text_filtered_replace "filter_regex" "search" "replace" "file"
+# Usage: text_filtered_replace "filter_regex" "search" "replace" "file" -> prints nothing; rewrites in place, touching only lines the filter matches
 # 
 # More efficient than sed alone when only a subset of lines need changes.
 # Falls back to sed-only if grep is not available.
@@ -365,7 +365,7 @@ text_count_in_matches() {
 
 #[pub]
 # Append line to file
-# Usage: text_append "line" "file"
+# Usage: text_append "line" "file" -> prints nothing; returns 1 without a file argument
 text_append() {
     local line="${1:-}"
     local file="${2:-}"
@@ -375,7 +375,7 @@ text_append() {
 
 #[pub]
 # Prepend line to file
-# Usage: text_prepend "line" "file"
+# Usage: text_prepend "line" "file" -> prints nothing; returns 1 if the file is not there
 text_prepend() {
     local line="${1:-}"
     local file="${2:-}"

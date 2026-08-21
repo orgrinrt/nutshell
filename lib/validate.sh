@@ -295,7 +295,7 @@ is_hostname() {
 # -----------------------------------------------------------------------------
 
 # Require variable to be set, exit with error if not
-# Usage: require_set "VAR_NAME" "Error message"
+# Usage: require_set "VAR_NAME" "Error message" -> prints nothing; does not return when unset, it exits
 #[pub]
 require_set() {
     local varname="${1:-}"
@@ -308,7 +308,7 @@ require_set() {
 
 #[pub]
 # Require file to exist, exit with error if not
-# Usage: require_file "/path/to/file" "Error message"
+# Usage: require_file "/path/to/file" "Error message" -> prints nothing; does not return when absent, it exits
 require_file() {
     local path="${1:-}"
     local msg="${2:-Required file '$path' not found}"
@@ -320,7 +320,7 @@ require_file() {
 
 #[pub]
 # Require directory to exist, exit with error if not
-# Usage: require_dir "/path/to/dir" "Error message"
+# Usage: require_dir "/path/to/dir" "Error message" -> prints nothing; does not return when absent, it exits
 require_dir() {
     local path="${1:-}"
     local msg="${2:-Required directory '$path' not found}"
@@ -331,7 +331,7 @@ require_dir() {
 }
 
 # Require command to be available, exit with error if not
-# Usage: require_command "git" "Git is required"
+# Usage: require_command "git" "Git is required" -> prints nothing; does not return when the tool is missing, it exits
 #[pub]
 require_command() {
     local cmd="${1:-}"
@@ -344,7 +344,7 @@ require_command() {
 
 #[pub]
 # Require value to be non-empty, exit with error if empty
-# Usage: require_value "$value" "Value cannot be empty"
+# Usage: require_value "$value" "Value cannot be empty" -> prints nothing; does not return when empty, it exits
 require_value() {
     local val="${1:-}"
     local msg="${2:-Value cannot be empty}"
@@ -360,7 +360,7 @@ require_value() {
 # -----------------------------------------------------------------------------
 
 # Ensure variable is set, return 1 if not (caller handles failure)
-# Usage: ensure_set "VAR_NAME" "Error message" || handle_missing_var
+# Usage: ensure_set "VAR_NAME" "Error message" || handle_missing_var -> returns 0 when set, warns and returns 1 when not
 #[pub]
 ensure_set() {
     local varname="${1:-}"
@@ -374,7 +374,7 @@ ensure_set() {
 }
 
 # Ensure value is non-empty, return 1 if empty (caller handles failure)
-# Usage: ensure_value "$value" "Error message" || handle_empty
+# Usage: ensure_value "$value" "Error message" || handle_empty -> returns 0 when non-empty, warns and returns 1 when empty
 #[pub]
 ensure_value() {
     local val="${1:-}"
@@ -389,7 +389,7 @@ ensure_value() {
 
 #[pub]
 # Ensure file exists, return 1 if not (caller handles failure)
-# Usage: ensure_file "/path/to/file" "Error message" || handle_missing
+# Usage: ensure_file "/path/to/file" "Error message" || handle_missing -> returns 0 when the file is there, warns and returns 1 when not
 ensure_file() {
     local path="${1:-}"
     local msg="${2:-File '$path' not found}"
@@ -403,7 +403,7 @@ ensure_file() {
 
 #[pub]
 # Ensure directory exists, return 1 if not (caller handles failure)
-# Usage: ensure_dir "/path/to/dir" "Error message" || handle_missing
+# Usage: ensure_dir "/path/to/dir" "Error message" || handle_missing -> returns 0 when the directory is there, warns and returns 1 when not
 ensure_dir() {
     local path="${1:-}"
     local msg="${2:-Directory '$path' not found}"
@@ -417,7 +417,7 @@ ensure_dir() {
 
 #[pub]
 # Ensure command is available, return 1 if not (caller handles failure)
-# Usage: ensure_command "git" "Git not found" || handle_missing
+# Usage: ensure_command "git" "Git not found" || handle_missing -> returns 0 when the tool is on PATH, warns and returns 1 when not
 ensure_command() {
     local cmd="${1:-}"
     local msg="${2:-Command '$cmd' not found}"

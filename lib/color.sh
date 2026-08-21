@@ -278,7 +278,7 @@ color_has_truecolor() {
 
 #[pub]
 # Force enable colors (ignores NO_COLOR and terminal detection)
-# Usage: color_enable
+# Usage: color_enable -> prints nothing; forces colour on regardless of what was detected
 color_enable() {
     _COLOR_SUPPORT="basic"
     _init_colors
@@ -286,7 +286,7 @@ color_enable() {
 
 #[pub]
 # Force disable colors
-# Usage: color_disable
+# Usage: color_disable -> prints nothing; forces colour off regardless of what was detected
 color_disable() {
     _COLOR_SUPPORT="none"
     _init_colors
@@ -294,7 +294,7 @@ color_disable() {
 
 #[pub]
 # Re-detect color support (useful after changing TERM or NO_COLOR)
-# Usage: color_redetect
+# Usage: color_redetect -> prints nothing; re-runs detection, for a terminal that changed under us
 color_redetect() {
     _detect_color_support
     _init_colors

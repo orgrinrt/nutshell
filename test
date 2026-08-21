@@ -17,6 +17,16 @@ set -uo pipefail
 use test log
 
 if [[ $# -gt 0 ]]; then
+    # A named file that is not there is an error, not an empty run. This used to
+    # print `no test file` and then `[OK] 0 passed` and exit 0, so a typo in a
+    # path produced a green run that ran nothing, which is the one result a test
+    # command must never give.
+    for f in "$@"; do
+        if [[ ! -f "$f" ]]; then
+            log_error "no such test file: ${f}"
+            exit 2
+        fi
+    done
     for f in "$@"; do
         log_step "${f##*/}"
         test_run "$f"

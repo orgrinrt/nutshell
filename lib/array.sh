@@ -48,7 +48,7 @@ arr_index() {
 
 #[pub]
 # Remove duplicates from array (preserves order)
-# Usage: arr_unique arr
+# Usage: arr_unique arr -> prints nothing; rewrites the named array in place, order preserved
 arr_unique() {
     local -n _arr="$1"
     local -A seen=()
@@ -67,7 +67,7 @@ arr_unique() {
 
 #[pub]
 # Reverse array in place
-# Usage: arr_reverse arr
+# Usage: arr_reverse arr -> prints nothing; rewrites the named array in place
 arr_reverse() {
     local -n _arr="$1"
     local len=${#_arr[@]}
@@ -116,7 +116,7 @@ arr_last() {
 
 #[pub]
 # Sort array in place (lexicographic)
-# Usage: arr_sort arr
+# Usage: arr_sort arr -> prints nothing; rewrites the named array in place, lexicographic
 arr_sort() {
     local -n _arr="$1"
     local -a sorted

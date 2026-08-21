@@ -184,7 +184,7 @@ cfg_section_exists() {
 }
 
 # Check if a test is enabled
-# Usage: cfg_test_enabled "syntax"
+# Usage: cfg_test_enabled "syntax" -> returns 0 when the test is enabled, 1 when it is not
 #[pub]
 cfg_test_enabled() {
     local test_name="$1"
@@ -643,7 +643,7 @@ strip_prefix() {
 
 # Print test summary
 #[pub]
-# Usage: print_summary ["Test Suite Name"]
+# Usage: print_summary ["Test Suite Name"] -> prints the totals block; returns 0 always
 print_summary() {
     local test_name="${1:-Test Suite}"
     
@@ -717,7 +717,7 @@ print_summary() {
 
 # Exit with appropriate code based on test results
 #[pub]
-# Usage: exit_with_status
+# Usage: exit_with_status -> does not return; exits 0 clean, 1 on failures, 2 on warnings only
 exit_with_status() {
     [[ $TESTS_FAILED -gt 0 ]] && exit 1
     exit 0

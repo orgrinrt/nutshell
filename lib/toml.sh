@@ -189,7 +189,7 @@ toml_get() {
 
 #[pub]
 # Get a value with a default if not found
-# Usage: toml_get_or "file.toml" "key" "default"
+# Usage: toml_get_or "file.toml" "key" "default" -> prints the value, or the default when the key is absent
 toml_get_or() {
     local file="${1:-}"
     local key="${2:-}"
@@ -231,7 +231,7 @@ toml_sections() {
 
 #[pub]
 # List all keys in a section (or root if no section specified)
-# Usage: toml_keys "file.toml" [section]
+# Usage: toml_keys "file.toml" [section] -> prints one key per line, root keys when no section is named
 toml_keys() {
     local file="${1:-}"
     local section="${2:-}"
@@ -589,7 +589,7 @@ _toml_value_to_json() {
 
 #[pub]
 # Get all key=value pairs from a section as "key=value" lines
-# Usage: toml_section_pairs "file.toml" "section"
+# Usage: toml_section_pairs "file.toml" "section" -> prints one key=value per line, values already unquoted
 toml_section_pairs() {
     local file="${1:-}"
     local section="${2:-}"

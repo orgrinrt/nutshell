@@ -16,9 +16,9 @@ Add nutshell to your project:
 git submodule add https://github.com/orgrinrt/nutshell.git scripts/lib/nutshell
 
 # Option B: Download a source archive (releases ship no built artifacts).
-# 0.2.0 is the latest tag; check the releases page for newer ones.
+# 0.3.0 is the latest tag; check the releases page for newer ones.
 mkdir -p scripts/lib/nutshell
-curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.2.0.tar.gz \
+curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.3.0.tar.gz \
     | tar -xz --strip-components=1 -C scripts/lib/nutshell
 ```
 

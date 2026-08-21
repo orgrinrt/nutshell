@@ -308,10 +308,19 @@ case "${1:-}" in
             echo "nutshell: -c needs a command" >&2
             exit 2
         }
-        _SCRIPT="$(mktemp -t nutshell-c.XXXXXX)"
-        printf '%s\n' "$1" > "$_SCRIPT"
+        _tmp="$(mktemp -t nutshell-c.XXXXXX)"
+        printf '%s\n' "$1" > "$_tmp"
         shift
-        trap 'rm -f "$_SCRIPT"' EXIT
+        # Opened, then unlinked, then run from the descriptor. The directory
+        # entry is gone before the command runs, so nothing is left behind
+        # whatever the command does: an `EXIT` trap here is overwritten by any
+        # command that sets its own, and a command that exits never reaches a
+        # cleanup line at all. Both were true of the first version, and the
+        # trap case leaks a file per invocation.
+        exec {_cfd}< "$_tmp"
+        rm -f "$_tmp"
+        _SCRIPT="/dev/fd/${_cfd}"
+        _IS_COMMAND=1
         ;;
     -*)
         # An unknown option is a mistake, not a file. Treating it as one
@@ -332,7 +341,7 @@ esac
 # adding `-c` there produced a case arm that set a script and then ended, and
 # `-c 'echo hello'` printed nothing at all while exiting zero.
 
-if [[ ! -f "$_SCRIPT" ]]; then
+if [[ "${_IS_COMMAND:-0}" -ne 1 && ! -f "$_SCRIPT" ]]; then
     echo "nutshell: script not found: $_SCRIPT" >&2
     exit 1
 fi
@@ -347,8 +356,15 @@ fi
 # "where is the file I am in". A module that builds a path from this breaks when
 # the entry point moves. `nut_dir` and `nut_file` are the current-file answer,
 # the way Deno separates `import.meta.dirname` from `import.meta.main`.
-NUTSHELL_SCRIPT="$(cd "$(dirname "$_SCRIPT")" && pwd)/$(basename "$_SCRIPT")"
-NUTSHELL_SCRIPT_DIR="${NUTSHELL_SCRIPT%/*}"
+if [[ "${_IS_COMMAND:-0}" -eq 1 ]]; then
+    # A command has no file and therefore no unit. Anchoring it on the working
+    # directory is the only honest answer: it is where the person typing it is.
+    NUTSHELL_SCRIPT="$_SCRIPT"
+    NUTSHELL_SCRIPT_DIR="$PWD"
+else
+    NUTSHELL_SCRIPT="$(cd "$(dirname "$_SCRIPT")" && pwd)/$(basename "$_SCRIPT")"
+    NUTSHELL_SCRIPT_DIR="${NUTSHELL_SCRIPT%/*}"
+fi
 export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
 
 # Sourced, not executed, so the script runs in this environment with `use`

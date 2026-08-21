@@ -202,7 +202,8 @@ _use_super_resolve() {
 # that builds a path from that breaks the moment the entry point moves, which
 # is a real thing that happened and took a whole test suite down with it.
 #
-# Usage: nut_file -> /abs/path/to/the/caller.sh
+# Usage: nut_file -> prints the calling file, absolute; returns 1 when it cannot be resolved
+#[pub]
 nut_file() {
     local src="${BASH_SOURCE[1]:-}" dir
     # A source with no slash in it is a relative name resolved against the
@@ -227,7 +228,8 @@ export -f nut_file
 # reaches for a sibling file, and the answer to the mistake `NUTSHELL_SCRIPT_DIR`
 # invites.
 #
-# Usage: source "$(nut_dir)/helper.sh"
+# Usage: source "$(nut_dir)/helper.sh" -> prints the calling file's directory; returns 1 when it cannot be resolved
+#[pub]
 nut_dir() {
     local src="${BASH_SOURCE[1]:-}" dir
     [[ -z "$src" ]] && { echo "nut_dir: no calling file" >&2; return 1; }

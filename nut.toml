@@ -28,7 +28,11 @@ description = "Strict conventions. No compromises. No technical debt."
 [paths]
 lib_dir = "lib"
 exclude = [".git", ".legacy", "node_modules", "vendor", "target", "dist", "build", "templates", "/impl/", "impl/"]
-include = ["*.sh"]
+# The extensionless entry points count too. `bin/nutshell` is the interpreter
+# and `init` is the bootstrap, and an `include` of `*.sh` alone means the two
+# files most worth checking are the two the checks cannot see. A change adding
+# public functions to `init` passed `public_api_docs` by being invisible to it.
+include = ["*.sh", "init", "test", "check", "bin/nutshell"]
 
 # -----------------------------------------------------------------------------
 # Annotations - Semantic markers that explain WHY exceptions exist

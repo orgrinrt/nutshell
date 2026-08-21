@@ -49,6 +49,219 @@ source "${_NUTSHELL_HOME}/init" || {
     exit 1
 }
 
+# Before the pin block, so the pin can use the modules that already solve
+# caching rather than growing a fourth copy of them. Costs one redundant init
+# in the pinned case, since the exec re-runs it in the pinned copy.
+use extern log
+
+
+# =============================================================================
+# The engine pin
+# =============================================================================
+# A project says which nutshell it wants, in its own nut.toml, as a root-level
+# scalar. Same shape mockspace.toml uses for the same job, because it is the
+# same job and a reader should not have to learn two spellings:
+#
+#     nutshell_version = "0.3.0"     the released form
+#     nutshell_branch  = "dev"       when there is no release yet
+#
+# Root level, before any [table] header. A bare key written after one belongs
+# to that table, which is a quiet way to have a pin that is never read.
+#
+# Unpinned projects are untouched: they get the checkout the shebang resolved
+# to, exactly as before.
+#
+# ## Built on extern, deliberately
+#
+# The first version of this grew its own cache: a git worktree hosted inside
+# the user's own repository, keyed by a sanitised ref name, readiness tested by
+# whether a directory existed, refreshed against a stamp file. Review found
+# twenty-one defects in it and `lib/extern.sh` already had the correct answer
+# to every structural one, having been through the same mistakes first. Its
+# comments say so: "Readiness is `_extern_is_repo`, never existence."
+#
+# So the cache here is `_extern_mirror`: a keyed clone under the cache root,
+# laid out once behind `_extern_guard`'s lock, its key hashed so that
+# `test/slash` and `test_slash` cannot collide. Nothing is written into the
+# user's repository at all, which the worktree approach could not honestly
+# claim: it left registrations behind and clobbered their FETCH_HEAD.
+#
+# A mirror also fixes the defect that made the old version pointless. Refresh
+# fetched in the user's repo and reset in the worktree, and FETCH_HEAD is
+# per-worktree, so the reset always failed into /dev/null and a branch pin was
+# frozen at whatever it was the day the cache was created. In a mirror the
+# fetch and the reset are the same repository, so the operation means what it
+# reads as.
+#
+# Staleness is the mtime of the mirror's FETCH_HEAD, not a stamp file we
+# maintain. It is the same fact, git already keeps it, and a file we do not
+# write cannot be half-written.
+
+_NUT_PIN_TTL="${NUTSHELL_PIN_TTL:-3600}"
+
+# A project's manifest, searched upward from the script.
+#
+# Bounded at a repository boundary or $HOME, whichever comes first. The
+# unbounded walk reached /tmp on macOS, where anyone can plant a nut.toml and
+# silently choose which engine another user's scripts run.
+_nut_manifest() {
+    local dir="$1"
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
+        [[ -e "$dir/.git" ]] && return 1
+        [[ "$dir" == "$HOME" ]] && return 1
+        dir="${dir%/*}"
+    done
+    return 1
+}
+
+# A root-level scalar, stopping at the first [table] header.
+#
+# Success means a non-empty value. An empty one used to return 0 and short
+# circuit the version fallback, so a file with a broken branch line and a good
+# version line resolved to no pin at all.
+_nut_pin() {
+    local file="$1" key="$2" line
+    # `|| [[ -n "$line" ]]` so a final line with no trailing newline is read.
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*\[ ]] && return 1
+        if [[ "$line" =~ ^[[:space:]]*"$key"[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
+            [[ -n "${BASH_REMATCH[1]}" ]] || return 1
+            printf '%s' "${BASH_REMATCH[1]}"
+            return 0
+        fi
+    done < "$file"
+    return 1
+}
+
+# A ref safe to hand to git.
+#
+# The old version passed it positionally with no `--`, so a ref beginning with
+# a dash was parsed as an option: `--upload-pack=touch /tmp/pwned` executed
+# against a path or file:// remote. Validated rather than escaped, because the
+# set of legitimate ref names is small and known.
+_nut_ref_ok() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 1
+    git check-ref-format --allow-onelevel "$1" 2>/dev/null
+}
+
+# Seconds since the mirror last fetched, or the TTL when it cannot be told.
+_nut_age() {
+    local dir="$1" head="$1/.git/FETCH_HEAD" t now
+    [[ -f "$head" ]] || { printf '%s' "$_NUT_PIN_TTL"; return 0; }
+    t="$(stat -f %m "$head" 2>/dev/null || stat -c %Y "$head" 2>/dev/null)" || {
+        printf '%s' "$_NUT_PIN_TTL"; return 0; }
+    now="$(date +%s)"
+    # A clock that moved backwards gives a negative age, which would park the
+    # mirror until wall-clock caught up. Treat it as due.
+    (( t > now )) && { printf '%s' "$_NUT_PIN_TTL"; return 0; }
+    printf '%s' "$(( now - t ))"
+}
+
+_nut_pinned_root() {
+    local ref="$1" url="$2" dir age
+    dir="$(_extern_mirror nutshell "$url" "$ref")" || return 1
+    age="$(_nut_age "$dir")"
+    if (( age >= _NUT_PIN_TTL )); then
+        # One repository, so the fetch and the reset refer to the same thing.
+        if git -C "$dir" fetch --quiet --depth 1 origin "$ref" 2>/dev/null; then
+            git -C "$dir" reset --quiet --hard FETCH_HEAD 2>/dev/null ||
+                log_warn "nutshell: pinned mirror could not advance to ${ref}"
+        fi
+    fi
+    [[ -x "$dir/bin/nutshell" ]] || {
+        log_error "nutshell: ${dir} holds no bin/nutshell; pin '${ref}' unusable"
+        return 1
+    }
+    printf '%s' "$dir"
+}
+
+# The origin a pin resolves against: the installed checkout's remote when it
+# has one, else the checkout itself.
+#
+# Confirmed to be nutshell rather than assumed. A vendored copy sitting inside
+# an unrelated repository used to be treated as the nutshell repo, and checked
+# that project's own `dev` branch out into the nutshell cache.
+_nut_origin() {
+    local home="$1" url
+    _extern_is_repo "$home" || return 1
+    [[ -f "$home/init" && -d "$home/lib" ]] || return 1
+    url="$(git -C "$home" remote get-url origin 2>/dev/null)" || url=""
+    printf '%s' "${url:-$home}"
+}
+
+# Whether a pin is declared at all, which is a different question from whether
+# it resolves. Only the second is an error worth failing on.
+_nut_declared() {
+    local dir manifest
+    dir="$(cd "$(dirname "$1")" && pwd)" || return 1
+    manifest="$(_nut_manifest "$dir")" || return 1
+    _nut_pin "$manifest" nutshell_branch >/dev/null && return 0
+    _nut_pin "$manifest" nutshell_version >/dev/null
+}
+
+_nut_resolve_pin() {
+    local script="$1" dir manifest ref url root
+    dir="$(cd "$(dirname "$script")" && pwd)" || return 1
+    manifest="$(_nut_manifest "$dir")" || return 1
+
+    ref="$(_nut_pin "$manifest" nutshell_branch)" ||
+        ref="$(_nut_pin "$manifest" nutshell_version)" || return 1
+
+    _nut_ref_ok "$ref" || {
+        log_error "nutshell: '${ref}' in ${manifest} is not a usable git ref"
+        return 1
+    }
+    url="$(_nut_origin "$_NUTSHELL_HOME")" || {
+        log_warn "nutshell: ${_NUTSHELL_HOME} is not a nutshell git checkout, so the pin in ${manifest} cannot be honoured"
+        return 1
+    }
+    root="$(_nut_pinned_root "$ref" "$url")" || return 1
+    printf '%s' "$root"
+}
+
+# Sourced rather than run: the helpers above are defined, and nothing below
+# happens.
+#
+# Position is the whole point and it has been wrong in both directions. Below
+# the pin block, `source bin/nutshell` ran full pin resolution against the
+# sourcing shell's $1 and could exec the caller away, and this file's own tests
+# were that shape, passing only because nutshell's nut.toml carries no pin.
+# Above the definitions, sourcing returned before defining anything, so the
+# tests could not reach the functions at all. It belongs exactly here: after
+# everything a caller might want, before everything that acts.
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
+# Resolve once, and identify what was resolved rather than that anything was.
+#
+# The old marker was a bare exported flag, set before it was known whether an
+# exec would happen and set even for unpinned projects. Two consequences: a
+# user who already had it set got pinning silently disabled, and every nutshell
+# script carried it into its children, so a nutshell script invoking another
+# never honoured the inner project's pin. Script-calls-script is ordinary here;
+# `check` and `test` both do it.
+#
+# Carrying the resolved root instead makes the guard exact: stop when we are
+# already the answer. That is also true after an exec, so it needs no flag.
+if [[ -f "${1:-}" && "${NUTSHELL_PIN_ROOT:-}" != "$_NUTSHELL_HOME" ]]; then
+    if _nut_pinned="$(_nut_resolve_pin "$1")" && [[ -n "$_nut_pinned" ]]; then
+        if [[ "$_nut_pinned" != "$_NUTSHELL_HOME" ]]; then
+            export NUTSHELL_PIN_ROOT="$_nut_pinned"
+            exec "$_nut_pinned/bin/nutshell" "$@"
+        fi
+    elif [[ -n "${NUTSHELL_PIN_STRICT:-}" ]] && _nut_declared "$1"; then
+        # A pin that cannot be satisfied is the situation the pin exists to
+        # prevent, so running something else is the wrong outcome. DESIGN.md:
+        # "No Magic, No Lies. When something is wrong, we say so."
+        #
+        # Off by default because a warning plus the ambient library is the
+        # lesser evil for a tool that has to keep working; strict makes it
+        # fatal for anyone who disagrees, which is the honest way to offer it.
+        echo "nutshell: NUTSHELL_PIN_STRICT is set and the pin could not be honoured" >&2
+        exit 1
+    fi
+fi
+
 _show_help() {
     cat <<EOF
 nutshell - Everything you need, in a nutshell.

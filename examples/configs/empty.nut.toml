@@ -15,6 +15,32 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# The engine pin - which nutshell this project wants
+# -----------------------------------------------------------------------------
+#
+# Root-level scalars, and they MUST stay above the first [table] header: a bare
+# key written after one belongs to that table, which is a quiet way to have a
+# pin that is never read.
+#
+#   nutshell_version = "0.3.0"    the released form
+#   nutshell_branch  = "dev"      when the version you need has no release yet
+#
+# Same spelling mockspace.toml uses for the same job, so a reader who knows one
+# knows the other.
+#
+# Unpinned is the normal case and changes nothing: the script gets whichever
+# checkout the `nutshell` on PATH resolves to. With a pin, the interpreter
+# resolves a worktree at that ref under ${XDG_CACHE_HOME:-~/.cache}/nutshell/refs
+# and re-execs into it, so the script gets the library it asked for rather than
+# whichever checkout happens to be installed. The branch head is re-resolved at
+# most hourly, not on every run; NUTSHELL_PIN_TTL overrides that in seconds.
+#
+# A ref that cannot be checked out warns and falls back to the ambient
+# checkout. It does not fail the script, and it does not retry in a loop.
+
+# nutshell_branch = "dev"
+
+# -----------------------------------------------------------------------------
 # [meta] - Configuration metadata
 # -----------------------------------------------------------------------------
 [meta]

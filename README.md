@@ -310,6 +310,65 @@ The assertions are `assert_eq`, `assert_ne`, `assert_contains`, `assert_empty`,
 against what it got, because a bare "assertion failed" sends the reader back to
 the source to work out what the values even were.
 
+### Reaching your own modules
+
+A module you wrote lives in your `lib/`, and `super::` is how you name it:
+
+```bash
+use super::attribution
+```
+
+Three namespaces, and they answer three different questions:
+
+| Written | Resolves to |
+|---|---|
+| `use log` | nutshell's own module |
+| `use shebang::diagnostics/findings` | a module in a library declared in `nut.toml` |
+| `use super::mine` | `lib/mine.sh` in **this** unit, found from its `nut.toml` |
+
+`super::` is anchored on the manifest rather than on the running script, so a
+module three directories down reaches `lib/` the same way the entry script does,
+and moving the entry script changes nothing.
+
+It does not fall through. `use super::string` in a project with no
+`lib/string.sh` is an error naming the module, not a silent load of nutshell's
+`string`, because a unit that gets handed a module it did not write has no way
+to tell.
+
+### Where am I: the current file against the entry point
+
+Two different questions, and reaching for the wrong one is the mistake this
+section exists to prevent.
+
+```bash
+nut_dir      # the directory of the file calling it
+nut_file     # that file, absolute
+```
+
+Those name the **current file**, the way Deno's `import.meta.dirname` and Rust's
+`file!()` do. A module that wants a sibling wants `nut_dir`.
+
+`NUTSHELL_SCRIPT` and `NUTSHELL_SCRIPT_DIR` name the **entry point**: the script
+the interpreter was handed. They stay the same in every file the run loads, so a
+module that builds a path from them is describing somebody else's location and
+breaks the moment the entry point moves. That is not hypothetical; it took a
+whole test suite down when a runner moved from `tests/` to the repository root.
+
+The whole environment, for reference:
+
+| Variable | What it is |
+|---|---|
+| `NUTSHELL_SCRIPT` | The entry script, absolute |
+| `NUTSHELL_SCRIPT_DIR` | Its directory |
+| `NUTSHELL_ROOT` | The nutshell checkout in use |
+| `NUTSHELL_HOME` | Same, as the install root |
+| `NUTSHELL_BIN_DIR` | Its `bin/`, added to `PATH` by `init` |
+| `NUTSHELL_SH` / `NUTSHELL_SH_DIR` | `nutshell.sh` and its directory |
+| `NUTSHELL_INIT` | The `init` file that was sourced |
+| `NUTSHELL_LOADED` | Set once init has run, so a second source is a no-op |
+| `NUTSHELL_VERSION` | The version string |
+| `NUTSHELL_PIN_TTL` | How long a pinned branch head is reused before re-resolving |
+
 ### Depending on another library
 
 A dependency is declared in `nut.toml`, not in the script that wants it:

@@ -96,7 +96,19 @@ use() {
         # A namespaced module comes from a library declared in nut.toml, so
         # resolution goes through extern rather than nutshell's own lib.
         local mod_path
-        if [[ "$mod" == *"::"* ]]; then
+        if [[ "$mod" == super::* ]]; then
+            # This unit's own library. `super::` is the only way a project
+            # reaches a module it wrote itself, because a bare `use` resolves
+            # nutshell's set and a namespaced one resolves a declared
+            # dependency, and a unit is neither of those to itself.
+            #
+            # Anchored on the unit's manifest rather than on the entry point,
+            # so a module three directories down reaches `lib/` the same way
+            # the entry script does and moving the entry script changes
+            # nothing.
+            use extern || return 1
+            mod_path="$(_use_super_resolve "${mod#super::}")" || return 1
+        elif [[ "$mod" == *"::"* ]]; then
             use extern || return 1
             mod_path="$(extern_resolve "$mod")" || return 1
         else
@@ -124,6 +136,61 @@ use() {
         fi
     done
 }
+
+# _use_super_resolve <rest>
+#
+# The file `super::<rest>` names, from the unit's own manifest directory. The
+# same three shapes `extern_resolve` tries, so a library laid out one way works
+# whether it is reached from inside or from a consumer.
+#
+# Fails loudly rather than falling through to nutshell's own set. A `super::`
+# that silently resolved to a nutshell module of the same name would load
+# something the author did not write and did not mean.
+_use_super_resolve() {
+    local rest="$1" manifest root candidate
+    manifest="$(_extern_manifest)" || {
+        echo "nutshell: 'super::${rest}' needs a nut.toml, and none was found" >&2
+        echo "  super:: names this unit's own lib/, and the manifest is what marks the unit" >&2
+        return 1
+    }
+    root="${manifest%/*}"
+    for candidate in "${root}/lib/${rest}.sh" "${root}/libs/${rest}.sh" "${root}/${rest}.sh"; do
+        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+    done
+    echo "nutshell: this unit has no module '${rest}'" >&2
+    echo "  looked in ${root}/lib, ${root}/libs and ${root}" >&2
+    return 1
+}
+
+# nut_file
+#
+# The file calling this, absolute. Not the entry script: the file the call is
+# written in, the way Deno's `import.meta.filename` and Rust's `file!()` name
+# the current source rather than the program.
+#
+# `NUTSHELL_SCRIPT` is the entry point and is a different question. A module
+# that builds a path from that breaks the moment the entry point moves, which
+# is a real thing that happened and took a whole test suite down with it.
+#
+# Usage: nut_file -> /abs/path/to/the/caller.sh
+nut_file() {
+    local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+    printf '%s' "$(cd "${src%/*}" 2>/dev/null && pwd)/${src##*/}"
+}
+export -f nut_file
+
+# nut_dir
+#
+# The directory of the file calling this, absolute. What a script wants when it
+# reaches for a sibling file, and the answer to the mistake `NUTSHELL_SCRIPT_DIR`
+# invites.
+#
+# Usage: source "$(nut_dir)/helper.sh"
+nut_dir() {
+    local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+    (cd "${src%/*}" 2>/dev/null && pwd)
+}
+export -f nut_dir
 
 # Export the function so it's available in subshells
 export -f use

@@ -611,7 +611,7 @@ deps_caps() {
 
 #[pub]
 # Require a tool to be present; exit if not
-# Usage: deps_require "sed" ["Custom error message"]
+# Usage: deps_require "sed" ["Custom error message"] -> prints nothing; does not return when the tool is missing, it exits
 deps_require() {
     local tool="${1:-}"
     local msg="${2:-Required tool '$tool' not found}"

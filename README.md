@@ -310,6 +310,70 @@ The assertions are `assert_eq`, `assert_ne`, `assert_contains`, `assert_empty`,
 against what it got, because a bare "assertion failed" sends the reader back to
 the source to work out what the values even were.
 
+### Reaching your own modules
+
+A module you wrote lives in your `lib/`, and `super::` is how you name it:
+
+```bash
+use super::attribution
+```
+
+Three namespaces, and they answer three different questions:
+
+| Written | Resolves to |
+|---|---|
+| `use log` | nutshell's own module |
+| `use shebang::diagnostics/findings` | a module in a library declared in `nut.toml` |
+| `use super::mine` | `lib/mine.sh` in **this** unit, found from its `nut.toml` |
+
+`super::` is anchored on the manifest rather than on the running script, so a
+module three directories down reaches `lib/` the same way the entry script does,
+and moving the entry script changes nothing.
+
+It does not fall through. `use super::string` in a project with no
+`lib/string.sh` is an error naming the module, not a silent load of nutshell's
+`string`, because a unit that gets handed a module it did not write has no way
+to tell.
+
+### Where am I: the current file against the entry point
+
+Two different questions, and reaching for the wrong one is the mistake this
+section exists to prevent.
+
+```bash
+nut_dir      # the directory of the file calling it
+nut_file     # that file, absolute
+```
+
+Those name the **current file**, the way Deno's `import.meta.dirname` and Rust's
+`file!()` do. A module that wants a sibling wants `nut_dir`.
+
+`NUTSHELL_SCRIPT` and `NUTSHELL_SCRIPT_DIR` name the **entry point**: the script
+the interpreter was handed. They stay the same in every file the run loads, so a
+module that builds a path from them is describing somebody else's location and
+breaks the moment the entry point moves. That is not hypothetical; it took a
+whole test suite down when a runner moved from `tests/` to the repository root.
+
+The whole exported environment, which is five things:
+
+| Variable | What it is | Set by |
+|---|---|---|
+| `NUTSHELL_SCRIPT` | The entry script, absolute | `bin/nutshell` |
+| `NUTSHELL_SCRIPT_DIR` | Its directory | `bin/nutshell` |
+| `NUTSHELL_PIN_ROOT` | The pinned checkout, when a project pins one | `bin/nutshell` |
+| `NUTSHELL_ROOT` | The nutshell checkout in use | `init` |
+| `NUTSHELL_VERSION` | The version string | `init` |
+
+`NUTSHELL_PIN_TTL` is read rather than exported: set it to change how long a
+pinned branch head is reused before re-resolving.
+
+Names beginning with a single underscore are internal and are not listed,
+because they are not the interface. An earlier version of this table had six
+entries that do not exist, produced by a grep for `NUTSHELL_[A-Z_]+` which
+matched those private names inside their own underscore prefix, and it swapped
+the meanings of two of them on the way. In the section whose whole purpose was
+that a reader kept getting these wrong.
+
 ### Depending on another library
 
 A dependency is declared in `nut.toml`, not in the script that wants it:

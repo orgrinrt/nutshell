@@ -27,6 +27,39 @@ use string validate
 # -----------------------------------------------------------------------------
 
 # Remove inline comments and trim whitespace from a line
+# Trim, without a subshell. `$(str_trim ...)` forks, and the reader calls it
+# once or twice for every line of every file: fifty-five lines cost a hundred
+# milliseconds, and something reading a manifest for seven keys paid it seven
+# times. Parameter expansion does the same job in the current shell.
+# Locals are prefixed because the caller names the target, and a plain `local
+# v` here shadows a caller asking for `v` -- which is exactly what toml_get
+# asks for. The value comes back empty and nothing says why.
+_toml_trim_into() {
+    local __toml_v="$2"
+    __toml_v="${__toml_v#"${__toml_v%%[![:space:]]*}"}"
+    __toml_v="${__toml_v%"${__toml_v##*[![:space:]]}"}"
+    printf -v "$1" '%s' "$__toml_v"
+}
+
+# The cleaner, likewise. Same rule about a `#` inside quotes; same result;
+# no fork.
+_toml_clean_into() {
+    local __toml_out="$1" __toml_line="$2"
+    local __toml_acc="" __toml_i __toml_c __toml_q=0 __toml_qc=""
+    for (( __toml_i = 0; __toml_i < ${#__toml_line}; __toml_i++ )); do
+        __toml_c="${__toml_line:__toml_i:1}"
+        if [[ $__toml_q -eq 1 ]]; then
+            [[ "$__toml_c" == "$__toml_qc" ]] && __toml_q=0
+        elif [[ "$__toml_c" == '"' || "$__toml_c" == "'" ]]; then
+            __toml_q=1; __toml_qc="$__toml_c"
+        elif [[ "$__toml_c" == "#" ]]; then
+            break
+        fi
+        __toml_acc+="$__toml_c"
+    done
+    _toml_trim_into "$__toml_out" "$__toml_acc"
+}
+
 _toml_clean_line() {
     local line="$1"
 
@@ -153,7 +186,7 @@ toml_get() {
             # commas, so a comment containing one swallowed the entry after it,
             # silently. A declared path simply stopped being read.
             local trimmed
-            trimmed="$(_toml_clean_line "$line")"
+            _toml_clean_into trimmed "$line"
             [[ -z "$trimmed" ]] && continue  # blank, or comment-only
             multiline_value+="$trimmed"
             # Check if this line closes the array (] not inside quotes)
@@ -166,7 +199,7 @@ toml_get() {
             continue
         fi
         
-        clean_line="$(_toml_clean_line "$line")"
+        _toml_clean_into clean_line "$line"
         [[ -z "$clean_line" ]] && continue
         
         # Section header
@@ -195,8 +228,8 @@ toml_get() {
         # Key = value
         if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
             local k v
-            k="$(str_trim "${BASH_REMATCH[1]}")"
-            v="$(str_trim "${BASH_REMATCH[2]}")"
+            _toml_trim_into k "${BASH_REMATCH[1]}"
+            _toml_trim_into v "${BASH_REMATCH[2]}"
             
             # Entered whatever key is being looked for. The body of a
             # multi-line string is not key-value territory, and a line inside
@@ -296,7 +329,7 @@ toml_keys() {
     [[ -z "$section" ]] && in_section=1
     
     while IFS= read -r line || [[ -n "$line" ]]; do
-        clean_line="$(_toml_clean_line "$line")"
+        _toml_clean_into clean_line "$line"
         [[ -z "$clean_line" ]] && continue
         
         # Section header
@@ -492,7 +525,7 @@ toml_to_json() {
     local line clean_line
     
     while IFS= read -r line || [[ -n "$line" ]]; do
-        clean_line="$(_toml_clean_line "$line")"
+        _toml_clean_into clean_line "$line"
         [[ -z "$clean_line" ]] && continue
         
         # Section header [section] or [section.subsection]
@@ -652,7 +685,7 @@ toml_section_pairs() {
     local line clean_line
     
     while IFS= read -r line || [[ -n "$line" ]]; do
-        clean_line="$(_toml_clean_line "$line")"
+        _toml_clean_into clean_line "$line"
         [[ -z "$clean_line" ]] && continue
         
         # Section header

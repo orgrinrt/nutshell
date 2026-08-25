@@ -228,3 +228,61 @@ it_still_reads_an_ordinary_string_beside_them() {
     rm -rf "$d"
     assert_eq "$got" "plain"
 }
+
+# --- the helpers the reader leans on ------------------------------------------
+
+#[test]
+it_trims_into_a_variable_the_caller_names() {
+    local v
+    _toml_trim_into v "   spaced   "
+    assert_eq "$v" "spaced"
+}
+
+#[test]
+it_trims_into_a_variable_named_like_its_own_locals() {
+    # The caller names the target, so a plain `local v` inside would shadow it
+    # and hand back nothing. toml_get asks for exactly `v` and `k`, so this is
+    # not hypothetical: it broke twenty-six tests at once.
+    local v k line out
+    _toml_trim_into v "  a  ";    assert_eq "$v" "a"
+    _toml_trim_into k "  b  ";    assert_eq "$k" "b"
+    _toml_clean_into line " x # c"; assert_eq "$line" "x"
+    _toml_clean_into out  " y # c"; assert_eq "$out" "y"
+}
+
+#[test]
+it_cleans_into_a_variable_without_forking() {
+    local out
+    _toml_clean_into out 'key = "value" # trailing'
+    assert_eq "$out" 'key = "value"'
+}
+
+#[test]
+it_keeps_a_hash_inside_quotes_when_cleaning_into_a_variable() {
+    # The fork-free twin has to agree with the original on the case the
+    # original exists for.
+    local out
+    _toml_clean_into out 'public_api = "#[pub]"'
+    assert_eq "$out" 'public_api = "#[pub]"'
+}
+
+#[test]
+it_agrees_with_the_printing_cleaner() {
+    # Two implementations of one rule drift. Checked against each other rather
+    # than against a list of cases somebody remembered.
+    local samples=(
+        'a = "b"'
+        'a = "b" # c'
+        'a = "#not a comment"'
+        '# whole line'
+        '   indented = 1   '
+        "a = 'single #quoted'"
+        ''
+    )
+    local s out bad=""
+    for s in "${samples[@]}"; do
+        _toml_clean_into out "$s"
+        [[ "$out" == "$(_toml_clean_line "$s")" ]] || bad+="[$s] "
+    done
+    assert_empty "$bad"
+}

@@ -64,7 +64,7 @@
     },
     "deps": {
       "type": "object",
-      "description": "Dependency/tool configuration",
+      "description": "External libraries, by name, plus tool paths. A named entry is fetched from git and reached as `use <name>::<module>`.",
       "properties": {
         "paths": {
           "type": "object",
@@ -75,7 +75,24 @@
           }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": {
+        "type": "object",
+        "description": "An external library, resolved once into a shared cache and reused by everything naming the same ref.",
+        "properties": {
+          "git": {
+            "type": "string",
+            "description": "Repository URL to fetch the library from"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Branch, tag or commit. Defaults to the repository's default branch"
+          }
+        },
+        "required": [
+          "git"
+        ],
+        "additionalProperties": false
+      }
     },
     "annotations": {
       "type": "object",

@@ -172,6 +172,7 @@ toml_get() {
     local in_multiline_string=0
     local multiline_string=""
     local capture_string=0
+    local multiline_delim=""
     
     while IFS= read -r line || [[ -n "$line" ]]; do
         # A multi-line basic string, collected from RAW lines. Everything
@@ -179,10 +180,10 @@ toml_get() {
         # stripper must not run over it. Without this the reader returned a
         # bare `"` for every such value, which callers then used as content.
         if [[ $in_multiline_string -eq 1 ]]; then
-            if [[ "$line" == *'"""'* ]]; then
+            if [[ "$line" == *"$multiline_delim"* ]]; then
                 in_multiline_string=0
                 if [[ $capture_string -eq 1 ]]; then
-                    multiline_string+="${line%%\"\"\"*}"
+                    multiline_string+="${line%%"$multiline_delim"*}"
                     printf '%s' "$multiline_string"
                     return 0
                 fi
@@ -247,8 +248,16 @@ toml_get() {
             local __k __v
             _toml_trim_into __k "$__raw_k"
             _toml_trim_into __v "$__raw_v"
-            if [[ "$__v" == '"""'* && "${__v#\"\"\"}" != *'"""'* ]]; then
+            # Basic and literal delimiters both. They differ in escape
+            # handling, which this reader does no processing of either way, so
+            # the only difference that matters here is which three characters
+            # close it.
+            local __d=""
+            [[ "$__v" == '"""'* ]] && __d='"""'
+            [[ "$__v" == "'''"* ]] && __d="'''"
+            if [[ -n "$__d" && "${__v#"$__d"}" != *"$__d"* ]]; then
                 in_multiline_string=1
+                multiline_delim="$__d"
                 capture_string=0
                 # Captured only when it is the value being looked for, and only
                 # when we are in the right section for it.
@@ -256,7 +265,7 @@ toml_get() {
                    && { [[ -z "$section" && -z "$current_section" ]] \
                         || [[ -n "$section" && $in_section -eq 1 ]]; }; then
                     capture_string=1
-                    local __opening="${__v#\"\"\"}"
+                    local __opening="${__v#"$__d"}"
                     multiline_string="${__opening:+${__opening}$'\n'}"
                 fi
                 continue
@@ -283,9 +292,13 @@ toml_get() {
             if [[ "$k" == "$search_key" ]]; then
                 # A triple-quoted value. Closed on the same line when there
                 # is a second delimiter after the first; otherwise it runs on.
-                if [[ "$v" == '"""'* ]]; then
-                    local rest="${v#\"\"\"}"
-                    printf '%s' "${rest%%\"\"\"*}"
+                # The single-line form of either delimiter.
+                local __sd=""
+                [[ "$v" == '"""'* ]] && __sd='"""'
+                [[ "$v" == "'''"* ]] && __sd="'''"
+                if [[ -n "$__sd" ]]; then
+                    local rest="${v#"$__sd"}"
+                    printf '%s' "${rest%%"$__sd"*}"
                     return 0
                 fi
 

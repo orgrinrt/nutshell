@@ -361,3 +361,39 @@ it_has_a_schema_that_accepts_its_own_manifest() {
     done < <(grep -oE '^\[deps\.[a-z0-9_-]+\]' "$manifest" | sed 's/\[deps\.\(.*\)\]/\1/')
     assert_empty "$bad"
 }
+
+#[test]
+it_reads_a_literal_multiline_string() {
+    # Literal delimiters were the same bug as basic ones and were left in it:
+    # the value came back as a single quote.
+    #
+    # The fixtures use \047 rather than a literal quote: three of those inside
+    # a single-quoted shell string just toggle the quoting, and the file that
+    # results is not the one the test means to write.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = \047\047\047\nliteral line\n\047\047\047\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" a.v)"
+    rm -rf "$d"
+    assert_contains "$got" "literal line"
+}
+
+#[test]
+it_reads_a_single_line_literal_value() {
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = \047\047\047just this\047\047\047\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" a.v)"
+    rm -rf "$d"
+    assert_eq "$got" "just this"
+}
+
+#[test]
+it_does_not_close_a_literal_body_on_a_basic_delimiter() {
+    # The delimiter that opened it is the one that closes it. Treating any
+    # three quotes as a terminator truncates a body that quotes the other
+    # kind, which prose about toml routinely does.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = \047\047\047\nmentions """ here\nand ends after\n\047\047\047\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" a.v)"
+    rm -rf "$d"
+    assert_contains "$got" "and ends after"
+}

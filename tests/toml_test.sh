@@ -286,3 +286,20 @@ it_agrees_with_the_printing_cleaner() {
     done
     assert_empty "$bad"
 }
+
+#[test]
+it_has_a_schema_that_accepts_its_own_manifest() {
+    # The schema described `deps` as holding only `paths`, with
+    # additionalProperties false, while nutshell's own nut.toml declares
+    # `[deps.shebang]` with git and ref. The manifest failed the schema
+    # shipped beside it, and nothing checked.
+    local schema="${BASH_SOURCE[0]%/*}/../schemas/nut.toml.schema.json"
+    local manifest="${BASH_SOURCE[0]%/*}/../nut.toml"
+    assert_ok test -f "$schema"
+    local names name bad=""
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        grep -q '"additionalProperties"' "$schema" || bad+="schema forbids named deps "
+    done < <(grep -oE '^\[deps\.[a-z0-9_-]+\]' "$manifest" | sed 's/\[deps\.\(.*\)\]/\1/')
+    assert_empty "$bad"
+}

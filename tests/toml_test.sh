@@ -251,6 +251,56 @@ it_trims_into_a_variable_named_like_its_own_locals() {
 }
 
 #[test]
+it_refuses_a_target_inside_its_own_reserved_namespace() {
+    # Prefixing the locals narrowed the collision to eight names rather than
+    # removing it, and a write that lands on the local instead leaves the
+    # caller's variable untouched with nothing to say so. Refused loudly now.
+    local rc=0
+    _toml_trim_into __toml_v "x" || rc=$?
+    assert_ne "$rc" "0"
+    rc=0
+    _toml_clean_into __toml_acc "y" || rc=$?
+    assert_ne "$rc" "0"
+}
+
+#[test]
+it_refuses_a_target_that_is_not_a_plain_name() {
+    # `printf -v` EVALUATES an array subscript, so `arr[$(cmd)]` runs the
+    # command inside it. Only an identifier is accepted.
+    local probe="${TMPDIR:-/tmp}/toml-target-probe.$$"
+    rm -f "$probe"
+    local rc=0
+    _toml_trim_into "arr[\$(touch '$probe')0]" "z" 2>/dev/null || rc=$?
+    local ran=0; [[ -e "$probe" ]] && ran=1
+    rm -f "$probe"
+    assert_eq "$ran" "0"
+    assert_ne "$rc" "0"
+}
+
+#[test]
+it_does_not_lose_the_second_capture_group() {
+    # BASH_REMATCH is global, and any `[[ =~ ]]` between two reads of it --
+    # including one inside a function called in between -- replaces it. Reading
+    # group two afterwards gets nothing.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nk = "value"\n' > "$d/t.toml"
+    assert_eq "$(toml_get "$d/t.toml" a.k)" "value"
+    rm -rf "$d"
+}
+
+#[test]
+it_tracks_a_multiline_string_in_a_section_it_was_not_asked_about() {
+    # The detection sat below the section gates, so a body in another section
+    # was parsed as toml: a line reading `[n]` became a real section header and
+    # `keymap = wrong` was returned as a real setting.
+    local d; d="$(mktemp -d)"
+    printf '[other]\nbody = """\n[n]\nkeymap = wrong\n"""\n\n[n]\nkeymap = "right"\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" n.keymap)"
+    rm -rf "$d"
+    assert_eq "$got" "right"
+}
+
+#[test]
 it_cleans_into_a_variable_without_forking() {
     local out
     _toml_clean_into out 'key = "value" # trailing'
@@ -268,8 +318,9 @@ it_keeps_a_hash_inside_quotes_when_cleaning_into_a_variable() {
 
 #[test]
 it_agrees_with_the_printing_cleaner() {
-    # Two implementations of one rule drift. Checked against each other rather
-    # than against a list of cases somebody remembered.
+    # Two implementations of one rule drift. Checked against each other over
+    # inputs chosen to be able to disagree -- backslashes, percent signs and a
+    # leading dash all go through printf, which is where a twin diverges.
     local samples=(
         'a = "b"'
         'a = "b" # c'
@@ -277,6 +328,13 @@ it_agrees_with_the_printing_cleaner() {
         '# whole line'
         '   indented = 1   '
         "a = 'single #quoted'"
+        'a = "back\\slash"'
+        'a = "100%% sure"'
+        'a = "%s %d"'
+        '-a = "leading dash"'
+        'a = "trailing space "   # c'
+        'a = "unclosed'
+        'a = ""'
         ''
     )
     local s out bad=""

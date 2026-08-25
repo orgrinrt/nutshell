@@ -31,10 +31,26 @@ use string validate
 # once or twice for every line of every file: fifty-five lines cost a hundred
 # milliseconds, and something reading a manifest for seven keys paid it seven
 # times. Parameter expansion does the same job in the current shell.
-# Locals are prefixed because the caller names the target, and a plain `local
-# v` here shadows a caller asking for `v` -- which is exactly what toml_get
-# asks for. The value comes back empty and nothing says why.
+# The caller names the target, which makes two things the caller's business
+# and neither of them safe to assume.
+#
+# A name matching one of our own locals is shadowed by it, and the write lands
+# on the local instead: the caller's variable is untouched and nothing says so.
+# Prefixing the locals narrowed that to eight names rather than removing it, so
+# the reserved prefix is refused outright instead of hoped about.
+#
+# A name carrying an array subscript is EVALUATED by `printf -v`, so
+# `arr[$(...)]` runs the command inside it. Only a plain identifier is
+# accepted.
+_toml_valid_target() {
+    case "$1" in
+        __toml_*) return 1 ;;
+    esac
+    [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}
+
 _toml_trim_into() {
+    _toml_valid_target "$1" || return 2
     local __toml_v="$2"
     __toml_v="${__toml_v#"${__toml_v%%[![:space:]]*}"}"
     __toml_v="${__toml_v%"${__toml_v##*[![:space:]]}"}"
@@ -44,6 +60,7 @@ _toml_trim_into() {
 # The cleaner, likewise. Same rule about a `#` inside quotes; same result;
 # no fork.
 _toml_clean_into() {
+    _toml_valid_target "$1" || return 2
     local __toml_out="$1" __toml_line="$2"
     local __toml_acc="" __toml_i __toml_c __toml_q=0 __toml_qc=""
     for (( __toml_i = 0; __toml_i < ${#__toml_line}; __toml_i++ )); do
@@ -215,6 +232,37 @@ toml_get() {
             continue
         fi
         
+        # A multi-line string opens here. Detected BEFORE the section gates,
+        # because the body has to be skipped whatever section it sits in: a
+        # body line reading `[n]` was being taken as a real section header, and
+        # one reading `keymap = wrong` was returned as a real setting, from a
+        # section the caller never asked about.
+        if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
+            # Copied out before anything else runs. BASH_REMATCH is global and
+            # any `[[ =~ ]]` anywhere -- including inside a function called
+            # between the two reads -- replaces it. Reading group two after a
+            # call that matched something else gets nothing, under `set -u`
+            # loudly and otherwise silently.
+            local __raw_k="${BASH_REMATCH[1]}" __raw_v="${BASH_REMATCH[2]}"
+            local __k __v
+            _toml_trim_into __k "$__raw_k"
+            _toml_trim_into __v "$__raw_v"
+            if [[ "$__v" == '"""'* && "${__v#\"\"\"}" != *'"""'* ]]; then
+                in_multiline_string=1
+                capture_string=0
+                # Captured only when it is the value being looked for, and only
+                # when we are in the right section for it.
+                if [[ "$__k" == "$search_key" ]] \
+                   && { [[ -z "$section" && -z "$current_section" ]] \
+                        || [[ -n "$section" && $in_section -eq 1 ]]; }; then
+                    capture_string=1
+                    local __opening="${__v#\"\"\"}"
+                    multiline_string="${__opening:+${__opening}$'\n'}"
+                fi
+                continue
+            fi
+        fi
+
         # Skip if we need a section but aren't in it
         if [[ -n "$section" && $in_section -eq 0 ]]; then
             continue
@@ -227,25 +275,11 @@ toml_get() {
         
         # Key = value
         if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
+            local raw_k="${BASH_REMATCH[1]}" raw_v="${BASH_REMATCH[2]}"
             local k v
-            _toml_trim_into k "${BASH_REMATCH[1]}"
-            _toml_trim_into v "${BASH_REMATCH[2]}"
+            _toml_trim_into k "$raw_k"
+            _toml_trim_into v "$raw_v"
             
-            # Entered whatever key is being looked for. The body of a
-            # multi-line string is not key-value territory, and a line inside
-            # one that happens to read `keymap = fi` was being returned as if
-            # it were a real setting.
-            if [[ "$v" == '"""'* && "${v#\"\"\"}" != *'"""'* ]]; then
-                in_multiline_string=1
-                capture_string=0
-                if [[ "$k" == "$search_key" ]]; then
-                    capture_string=1
-                    local opening="${v#\"\"\"}"
-                    multiline_string="${opening:+${opening}$'\n'}"
-                fi
-                continue
-            fi
-
             if [[ "$k" == "$search_key" ]]; then
                 # A triple-quoted value. Closed on the same line when there
                 # is a second delimiter after the first; otherwise it runs on.

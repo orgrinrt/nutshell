@@ -393,3 +393,47 @@ it_still_resolves_from_the_working_directory_when_nothing_names_a_script() {
     unset NUTSHELL_SCRIPT_DIR
     assert_eq "$(_extern_manifest)" "${root}/project/nut.toml"
 }
+
+# --- resolving once per process -----------------------------------------------
+
+#[test]
+it_remembers_a_resolved_path() {
+    # Every `use <dep>::<module>` resolved the dependency again: manifest
+    # re-read, lockfile re-read, git asked twice. None of it can change while a
+    # script runs, and five modules out of one library cost it five times.
+    _EXTERN_RESOLVED=()
+    _EXTERN_RESOLVED[fixture]="/tmp"
+    _extern_is_repo() { return 0; }
+    assert_eq "$(extern_path fixture)" "/tmp"
+}
+
+#[test]
+it_forgets_one_name_when_asked() {
+    _EXTERN_RESOLVED=()
+    _EXTERN_RESOLVED[a]="/tmp/a"
+    _EXTERN_RESOLVED[b]="/tmp/b"
+    extern_forget a
+    assert_empty "${_EXTERN_RESOLVED[a]:-}"
+    assert_eq "${_EXTERN_RESOLVED[b]:-}" "/tmp/b"
+}
+
+#[test]
+it_forgets_everything_when_given_no_name() {
+    _EXTERN_RESOLVED=()
+    _EXTERN_RESOLVED[a]="/tmp/a"
+    _EXTERN_RESOLVED[b]="/tmp/b"
+    extern_forget
+    assert_eq "${#_EXTERN_RESOLVED[@]}" "0"
+}
+
+#[test]
+it_does_not_hand_back_a_checkout_that_has_gone() {
+    # A cached path whose checkout was removed is worse than no cache: the
+    # caller gets a directory git will not answer for, and no explanation.
+    # It must fall through and resolve again rather than returning it.
+    _EXTERN_RESOLVED=()
+    _EXTERN_RESOLVED[fixture]="/tmp/definitely-not-a-checkout"
+    _extern_is_repo() { return 1; }
+    extern_path fixture >/dev/null 2>&1 || true
+    assert_empty "${_EXTERN_RESOLVED[fixture]:-}"
+}

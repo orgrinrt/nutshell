@@ -148,10 +148,38 @@ extern_declared() {
     printf '%s %s' "$url" "${ref:-HEAD}"
 }
 
+# Resolved paths, by name, for the life of this process.
+#
+# Every `use <dep>::<module>` resolves the dependency again: the manifest is
+# re-read, the lockfile re-read, the mirror and the worktree each asked whether
+# git will answer for them. None of that can change while a script runs, and a
+# program taking five modules out of one library paid it five times -- about
+# four hundred milliseconds before anything of its own happened.
+declare -gA _EXTERN_RESOLVED=()
+
+#[pub]
+# Forget what has been resolved. For a caller that has changed a lockfile and
+# wants the next lookup to see it, and for tests.
+# Usage: extern_forget [name]
+extern_forget() {
+    if [[ -n "${1:-}" ]]; then unset '_EXTERN_RESOLVED[$1]'; else _EXTERN_RESOLVED=(); fi
+}
+
 #[pub]
 # Usage: extern_path shebang -> prints the checkout, fetching it once if needed
 extern_path() {
     local name="$1" spec url ref mirror commit dir
+
+    if [[ -n "${_EXTERN_RESOLVED[$name]:-}" ]]; then
+        # Still checked, because a cached path whose checkout has been removed
+        # is worse than no cache: the caller gets a directory git will not
+        # answer for and no explanation.
+        if _extern_is_repo "${_EXTERN_RESOLVED[$name]}"; then
+            printf '%s' "${_EXTERN_RESOLVED[$name]}"
+            return 0
+        fi
+        unset '_EXTERN_RESOLVED[$name]'
+    fi
     spec="$(extern_declared "$name")" || return 1
     url="${spec%% *}"
     ref="${spec##* }"
@@ -174,6 +202,7 @@ extern_path() {
         _extern_guard "$dir" _extern_lay_out "$name" "$mirror" "$url" "$commit" "$dir" || return 1
     fi
 
+    _EXTERN_RESOLVED["$name"]="$dir"
     printf '%s' "$dir"
 }
 

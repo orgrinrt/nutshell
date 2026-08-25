@@ -119,15 +119,42 @@ toml_get() {
     local line clean_line
     local in_multiline_array=0
     local multiline_value=""
+    local in_multiline_string=0
+    local multiline_string=""
+    local capture_string=0
     
     while IFS= read -r line || [[ -n "$line" ]]; do
+        # A multi-line basic string, collected from RAW lines. Everything
+        # between the delimiters is literal, including a `#`, so the comment
+        # stripper must not run over it. Without this the reader returned a
+        # bare `"` for every such value, which callers then used as content.
+        if [[ $in_multiline_string -eq 1 ]]; then
+            if [[ "$line" == *'"""'* ]]; then
+                in_multiline_string=0
+                if [[ $capture_string -eq 1 ]]; then
+                    multiline_string+="${line%%\"\"\"*}"
+                    printf '%s' "$multiline_string"
+                    return 0
+                fi
+                continue
+            fi
+            [[ $capture_string -eq 1 ]] && multiline_string+="${line}"$'\n'
+            continue
+        fi
+
         # If we're collecting a multiline array, keep collecting
         # Don't use _toml_clean_line here because it would strip # inside quoted strings
         if [[ $in_multiline_array -eq 1 ]]; then
-            # Just trim whitespace, don't strip comments (they may be inside quotes)
+            # Comments inside a multi-line array are still comments. This used
+            # to keep the whole line, on the grounds that a `#` may sit inside
+            # a quoted value -- which is true, and is exactly what
+            # _toml_clean_line was written to handle. Keeping it meant the
+            # comment text was appended into the array and then split on
+            # commas, so a comment containing one swallowed the entry after it,
+            # silently. A declared path simply stopped being read.
             local trimmed
-            trimmed="$(str_trim "$line")"
-            [[ -z "$trimmed" ]] && continue  # Skip empty lines
+            trimmed="$(_toml_clean_line "$line")"
+            [[ -z "$trimmed" ]] && continue  # blank, or comment-only
             multiline_value+="$trimmed"
             # Check if this line closes the array (] not inside quotes)
             # Simple heuristic: line ends with ] or ],
@@ -171,7 +198,30 @@ toml_get() {
             k="$(str_trim "${BASH_REMATCH[1]}")"
             v="$(str_trim "${BASH_REMATCH[2]}")"
             
+            # Entered whatever key is being looked for. The body of a
+            # multi-line string is not key-value territory, and a line inside
+            # one that happens to read `keymap = fi` was being returned as if
+            # it were a real setting.
+            if [[ "$v" == '"""'* && "${v#\"\"\"}" != *'"""'* ]]; then
+                in_multiline_string=1
+                capture_string=0
+                if [[ "$k" == "$search_key" ]]; then
+                    capture_string=1
+                    local opening="${v#\"\"\"}"
+                    multiline_string="${opening:+${opening}$'\n'}"
+                fi
+                continue
+            fi
+
             if [[ "$k" == "$search_key" ]]; then
+                # A triple-quoted value. Closed on the same line when there
+                # is a second delimiter after the first; otherwise it runs on.
+                if [[ "$v" == '"""'* ]]; then
+                    local rest="${v#\"\"\"}"
+                    printf '%s' "${rest%%\"\"\"*}"
+                    return 0
+                fi
+
                 # Check if value starts an array that spans multiple lines
                 if [[ "$v" == "["* && "$v" != *"]"* ]]; then
                     in_multiline_array=1

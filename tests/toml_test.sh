@@ -97,3 +97,134 @@ it_agrees_with_itself_about_every_child_it_reports() {
         assert_ok toml_has_section "$FIXTURE" "tree.$child"
     done < <(toml_subsections "$FIXTURE" "tree")
 }
+
+# --- comments inside a multi-line array ---------------------------------------
+
+#[test]
+it_drops_a_comment_line_inside_an_array() {
+    # This kept the comment text, appended it into the value, and then split on
+    # commas. A comment containing one swallowed the entry after it, silently,
+    # and a declared path simply stopped being read.
+    local d; d="$(mktemp -d)"
+    cat > "$d/t.toml" <<'EOF'
+[carry]
+paths = [
+    "one",
+    # a comment, containing a comma, which is the case that broke it
+    "two",
+    "three",
+]
+EOF
+    local arr=(); toml_array "$d/t.toml" carry.paths arr
+    rm -rf "$d"
+    assert_eq "${#arr[@]}" "3"
+    assert_eq "${arr[0]}" "one"
+    assert_eq "${arr[1]}" "two"
+    assert_eq "${arr[2]}" "three"
+}
+
+#[test]
+it_keeps_a_hash_that_is_inside_a_quoted_value() {
+    # The reason the comment stripping was skipped in the first place. Both
+    # have to hold: comments go, quoted hashes stay.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = ["x#y", "z"]\n' > "$d/t.toml"
+    local arr=(); toml_array "$d/t.toml" a.v arr
+    rm -rf "$d"
+    assert_eq "${arr[0]}" "x#y"
+    assert_eq "${arr[1]}" "z"
+}
+
+#[test]
+it_drops_a_trailing_comment_after_an_entry() {
+    local d; d="$(mktemp -d)"
+    cat > "$d/t.toml" <<'EOF'
+[a]
+v = [
+    "one",   # why one
+    "two",
+]
+EOF
+    local arr=(); toml_array "$d/t.toml" a.v arr
+    rm -rf "$d"
+    assert_eq "${#arr[@]}" "2"
+    assert_eq "${arr[0]}" "one"
+}
+
+#[test]
+it_still_reads_an_array_with_no_comments_at_all() {
+    # The control. A stripper that ate everything would satisfy the tests above
+    # by returning nothing.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = [\n  "one",\n  "two",\n]\n' > "$d/t.toml"
+    local arr=(); toml_array "$d/t.toml" a.v arr
+    rm -rf "$d"
+    assert_eq "${#arr[@]}" "2"
+}
+
+# --- multi-line basic strings -------------------------------------------------
+
+#[test]
+it_reads_a_multiline_string() {
+    # These returned a bare `"` before, which callers then used as content.
+    local d; d="$(mktemp -d)"
+    printf '[n]\nv = """\nline one\nline two\n"""\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" n.v)"
+    rm -rf "$d"
+    assert_contains "$got" "line one"
+    assert_contains "$got" "line two"
+}
+
+#[test]
+it_keeps_a_hash_literal_inside_a_multiline_string() {
+    # Everything between the delimiters is literal. Running the comment
+    # stripper over a string body truncates prose at the first `#`.
+    local d; d="$(mktemp -d)"
+    printf '[n]\nv = """\na # here is not a comment\n"""\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" n.v)"
+    rm -rf "$d"
+    assert_contains "$got" "# here is not a comment"
+}
+
+#[test]
+it_reads_a_triple_quoted_value_that_closes_on_its_own_line() {
+    local d; d="$(mktemp -d)"
+    printf '[n]\nv = """just this"""\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" n.v)"
+    rm -rf "$d"
+    assert_eq "$got" "just this"
+}
+
+#[test]
+it_does_not_read_a_key_out_of_a_multiline_body() {
+    # The body of a string is not key-value territory. A line inside one
+    # reading `keymap = fi` was returned as though it were a real setting,
+    # shadowing the actual key further down the file.
+    local d; d="$(mktemp -d)"
+    printf '[n]\nbody = """\nkeymap = fi\n"""\nkeymap = "actually-us"\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" n.keymap)"
+    rm -rf "$d"
+    assert_eq "$got" "actually-us"
+}
+
+#[test]
+it_finds_a_key_after_a_multiline_string() {
+    # The parser has to leave the mode it entered, or everything below the
+    # first multi-line value becomes unreadable.
+    local d; d="$(mktemp -d)"
+    printf '[n]\na = """\nsome prose\n"""\nb = "after"\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" n.b)"
+    rm -rf "$d"
+    assert_eq "$got" "after"
+}
+
+#[test]
+it_still_reads_an_ordinary_string_beside_them() {
+    # The control. None of the above is worth anything if the common case
+    # regressed to make them pass.
+    local d; d="$(mktemp -d)"
+    printf '[n]\nm = """\nx\n"""\np = "plain"\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" n.p)"
+    rm -rf "$d"
+    assert_eq "$got" "plain"
+}

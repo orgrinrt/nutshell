@@ -204,7 +204,10 @@ use() {
 _lib_nut_lookup() {
     local root="$1" want="$2" reach="${3:-any}" name file vis
     [[ -r "${root}/lib.nut" ]] || return 1
-    while read -r name file vis; do
+    # `|| [[ -n "$name" ]]`, so a file whose last line has no newline keeps
+    # its last declaration. Without it the module simply is not there, and the
+    # checker agreed because it read the file another way.
+    while read -r name file vis || [[ -n "$name" ]]; do
         [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
         [[ "$name" == "$want" ]] || continue
         [[ -n "$file" ]] || return 1
@@ -225,7 +228,7 @@ _lib_nut_lookup() {
 _lib_nut_modules() {
     local root="$1" name _rest
     [[ -r "${root}/lib.nut" ]] || return 1
-    while read -r name _rest; do
+    while read -r name _rest || [[ -n "$name" ]]; do
         [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
         printf '%s\n' "$name"
     done < "${root}/lib.nut"
@@ -353,9 +356,21 @@ _nut_realpath() {
     [[ -n "$p" ]] || return 1
     d="${p%/*}"; b="${p##*/}"
     [[ "$d" == "$p" ]] && d="."
-    if cd "$d" 2>/dev/null; then
-        printf '%s/%s' "$PWD" "$b"
+    # -P, so the key is the physical file. `cd` without it gives the logical
+    # path, which leaves a symlinked module and its target as two different
+    # keys and therefore two loads of one file.
+    if cd -P "$d" 2>/dev/null; then
+        d="$PWD"
         cd - >/dev/null 2>&1 || true
+        # And the leaf, if that is a link too.
+        if [[ -L "${d}/${b}" ]]; then
+            local t; t="$(readlink "${d}/${b}")"
+            case "$t" in
+                /*) printf '%s' "$t"; return 0 ;;
+                *)  b="$t" ;;
+            esac
+        fi
+        printf '%s/%s' "$d" "$b"
         return 0
     fi
     printf '%s' "$p"
@@ -433,7 +448,11 @@ _use_super_resolve() {
         return 1
     fi
 
-    for candidate in "${root}/lib/${rest}.sh" "${root}/libs/${rest}.sh" "${root}/${rest}.sh"; do
+    # libs, then lib, then the root. The same order extern uses: the two had
+    # one each, `lib` first here and `libs` first there, so a library with both
+    # resolved differently depending on who was asking. Only the undeclared
+    # path reaches this now, and it exists to be migrated away from.
+    for candidate in "${root}/libs/${rest}.sh" "${root}/lib/${rest}.sh" "${root}/${rest}.sh"; do
         [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
     done
     echo "nutshell: this unit has no module '${rest}'" >&2

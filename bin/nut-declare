@@ -60,6 +60,7 @@ _scan() {
         [[ "$rel" == */nutshell/* ]] && continue
         name="${rel#lib/}"; name="${name#libs/}"
         name="${name%.sh}"
+        # A file at the root is named by its stem, with no directory to strip.
         name="${name//\//::}"
         # A file under impl/ is chosen at runtime by the module above it and
         # sourced directly. It was never a module anybody names, and declaring
@@ -70,8 +71,32 @@ _scan() {
         else
             printf '%s\t%s\t\n' "$name" "$rel"
         fi
-    done < <(find "$ROOT/lib" "$ROOT/libs" -type f -name '*.sh' 2>/dev/null | sort) \
-        | sort -u
+    done < <({
+        find "$ROOT/lib" "$ROOT/libs" -type f -name '*.sh' 2>/dev/null
+        # And a module flat at the library root, which the resolver tries last
+        # and the scan did not try at all. A migration that drops a module the
+        # resolver can reach, and a check that then certifies the drop, are one
+        # bug counted twice.
+        find "$ROOT" -maxdepth 1 -type f -name '*.sh' 2>/dev/null
+    } | sort) | sort -u
+}
+
+# A name more than one file answers to. The resolver picks by precedence and
+# the declaration would freeze whichever came out of sort, so it is reported
+# rather than silently resolved.
+_dupes() {
+    _scan | awk -F'\t' '{ print $1 }' | sort | uniq -d
+}
+
+# Every name a declaration holds. One parser for the checker, so it and the
+# resolver cannot disagree about what the file says.
+_lib_nut_modules_of() {
+    local r="$1" n _rest
+    [[ -r "${r}/lib.nut" ]] || return 1
+    while read -r n _rest || [[ -n "$n" ]]; do
+        [[ -z "$n" || "${n:0:1}" == "#" ]] && continue
+        printf '%s\n' "$n"
+    done < "${r}/lib.nut"
 }
 
 _render() {
@@ -92,6 +117,7 @@ _render() {
 
 case "$MODE" in
     print) _render ;;
+    dupes) _dupes ;;
     check)
         if [[ ! -r "$ROOT/lib.nut" ]]; then
             printf '%s has no lib.nut. %d modules would be declared:\n\n' \
@@ -102,17 +128,37 @@ case "$MODE" in
         # Declared but absent, and present but undeclared. Both are errors a
         # run would only have found by reaching the module.
         rc=0
-        while IFS= read -r line; do
-            [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
-            set -- $line
-            if [[ ! -f "$ROOT/$2" ]]; then
-                printf 'declared but missing: %s -> %s\n' "$1" "$2"; rc=1
+        # The same parse the resolver does: leading space skipped, a comment is
+        # a comment wherever it starts, a missing newline on the last line does
+        # not lose it, and a line that is not a declaration is reported rather
+        # than crashing on an unset positional.
+        while read -r dname dfile dvis || [[ -n "$dname" ]]; do
+            [[ -z "$dname" || "${dname:0:1}" == "#" ]] && continue
+            if [[ -z "$dfile" ]]; then
+                printf 'not a declaration: %s\n' "$dname"; rc=1; continue
+            fi
+            case "${dvis:-}" in
+                ""|internal) ;;
+                *) printf 'unknown visibility on %s: %s\n' "$dname" "$dvis"; rc=1 ;;
+            esac
+            if [[ ! -f "$ROOT/$dfile" ]]; then
+                printf 'declared but missing: %s -> %s\n' "$dname" "$dfile"; rc=1
             fi
         done < "$ROOT/lib.nut"
         while IFS=$'\t' read -r name rel _vis; do
-            grep -qE "^${name}[[:space:]]" "$ROOT/lib.nut" \
+            # Compared as a word, not matched as a pattern. A module named
+            # `fs.impl` would otherwise match `fsXimpl` and be reported as
+            # declared when it is not.
+            _lib_nut_modules_of "$ROOT" | grep -qxF "$name" \
                 || { printf 'present but undeclared: %s (%s)\n' "$name" "$rel"; rc=1; }
         done < <(_scan)
+        # Not `local`: this is a case arm at file scope, where `local` is a
+        # fatal error that `bash -n` does not catch.
+        d="$(_dupes)"
+        if [[ -n "$d" ]]; then
+            printf 'two files answer to one name: %s\n' "$(tr '\n' ' ' <<<"$d")"
+            rc=1
+        fi
         (( rc == 0 )) && printf '%s: every module declared, every declaration present\n' "$ROOT"
         exit "$rc" ;;
     write)
@@ -121,6 +167,14 @@ case "$MODE" in
             printf 'What a fresh one would say, against what is there:\n\n'
             diff -u "$ROOT/lib.nut" <(_render) && printf '  (no difference)\n'
             exit 0
+        fi
+        d="$(_dupes)"
+        if [[ -n "$d" ]]; then
+            printf 'Two files answer to the same name, so the declaration would\n'
+            printf 'freeze one of them and hide the other:\n\n'
+            printf '%s\n' "$d" | sed 's/^/  /'
+            printf '\nMove or rename one, then run this again.\n'
+            exit 1
         fi
         _render > "$ROOT/lib.nut"
         printf 'wrote %s/lib.nut, %d modules\n' "$ROOT" "$(_scan | grep -c .)" ;;

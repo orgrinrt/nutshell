@@ -23,6 +23,7 @@ json::impl::perl         lib/json/impl/perl.sh        internal
 json::impl::python       lib/json/impl/python.sh      internal
 log                      lib/log.sh
 modgraph                 lib/modgraph.sh
+nutshell                 nutshell.sh
 os                       lib/os.sh
 prompt                   lib/prompt.sh
 string                   lib/string.sh

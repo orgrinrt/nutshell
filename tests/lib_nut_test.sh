@@ -291,3 +291,128 @@ it_loads_its_own_nested_module_by_name() {
     out="$(bash -c "cd '$ROOT_DIR'; . ./init; use text::impl::grep_match && printf OK" 2>&1)"
     assert_ok grep -q 'OK' <<<"$out"
 }
+
+# --- the ways a declaration was quietly wrong -----------------------------------------
+
+#[test]
+it_declares_a_module_flat_at_the_library_root() {
+    # The resolver tries three layouts and the scan walked two, so a module at
+    # the root resolved before the migration and was refused after it, with
+    # --check certifying the drop because it reads the same scan.
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/lib"; : > "$d/helper.sh"; : > "$d/lib/other.sh"
+    local out; out="$("$DECLARE" --print "$d")"
+    assert_ok grep -qE '^helper[[:space:]]+helper\.sh' <<<"$out"
+    assert_ok grep -qE '^other[[:space:]]+lib/other\.sh' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_refuses_to_declare_when_two_files_answer_to_one_name() {
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/lib" "$d/libs"
+    printf 'WHICH=lib\n'  > "$d/lib/dup.sh"
+    printf 'WHICH=libs\n' > "$d/libs/dup.sh"
+    # Writing one of them freezes a precedence and hides the other file for
+    # good. Better to say so than to pick.
+    out="$("$DECLARE" "$d" 2>&1 || "$DECLARE" "$d" 2>&1)"
+    assert_ok grep -q 'same name' <<<"$out"
+    assert_fails test -f "$d/lib.nut"
+    rm -rf "$d"
+}
+
+#[test]
+it_reports_two_files_answering_to_one_name_in_a_check() {
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/lib" "$d/libs"
+    : > "$d/lib/dup.sh"; : > "$d/libs/dup.sh"
+    printf 'dup lib/dup.sh\n' > "$d/lib.nut"
+    out="$("$DECLARE" --check "$d" 2>&1 || true)"
+    assert_ok grep -q 'one name' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_keeps_the_last_declaration_when_the_file_has_no_trailing_newline() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/lib"; : > "$d/lib/last.sh"
+    printf 'last lib/last.sh' > "$d/lib.nut"      # no newline
+    # An editor that trims the last newline would otherwise delete a module,
+    # and the checker agreed because it read the file another way.
+    assert_ok bash -c ". '$ROOT_DIR/init'; _lib_nut_lookup '$d' last"
+    rm -rf "$d"
+}
+
+#[test]
+it_reports_a_line_that_is_not_a_declaration() {
+    local d out; d="$(mktemp -d)"
+    printf 'nofile\n' > "$d/lib.nut"
+    out="$("$DECLARE" --check "$d" 2>&1 || true)"
+    # Rather than a raw bash error about an unset positional under set -u.
+    assert_ok    grep -q 'not a declaration' <<<"$out"
+    assert_fails grep -qi 'unbound\|bad substitution' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_reports_a_visibility_it_does_not_understand() {
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/lib"; : > "$d/lib/x.sh"
+    printf 'x lib/x.sh publicish\n' > "$d/lib.nut"
+    out="$("$DECLARE" --check "$d" 2>&1 || true)"
+    # A typo in the third column silently made an internal module public.
+    assert_ok grep -q 'unknown visibility' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_skips_an_indented_comment_the_way_the_resolver_does() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/lib"; : > "$d/lib/x.sh"
+    printf '   # indented\nx lib/x.sh\n' > "$d/lib.nut"
+    assert_ok "$DECLARE" --check "$d"
+    rm -rf "$d"
+}
+
+#[test]
+it_compares_a_module_name_as_a_word_not_as_a_pattern() {
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/lib"
+    : > "$d/lib/fs.impl.sh"
+    printf 'fsXimpl lib/other.sh\n' > "$d/lib.nut"
+    : > "$d/lib/other.sh"
+    out="$("$DECLARE" --check "$d" 2>&1 || true)"
+    # `fs.impl` as a regex matches `fsXimpl`, and the module would be reported
+    # as declared when nothing declares it.
+    assert_ok grep -q 'present but undeclared: fs.impl' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_loads_a_symlinked_module_once() {
+    # A logical path leaves a link and its target as two keys, so one file
+    # loads twice. Written to a file: the escaping needed to build this inside
+    # a -c inside a test is its own source of bugs.
+    local f; f="$(mktemp)"
+    cat > "$f" <<'PROBE'
+cd "$NUT_ROOT"
+. ./init
+a=$(mktemp -d); mkdir -p "$a/libs"
+printf 'COUNT=$(( ${COUNT:-0} + 1 ))
+' > "$a/libs/real.sh"
+ln -s real.sh "$a/libs/alias.sh"
+printf 'real libs/real.sh
+alias libs/alias.sh
+' > "$a/lib.nut"
+use extern
+extern_path() { printf '%s' "$a"; }
+use dep::real
+use dep::alias
+printf 'COUNT=%s
+' "$COUNT"
+rm -rf "$a"
+PROBE
+    local out; out="$(NUT_ROOT="$ROOT_DIR" bash "$f" 2>&1)"
+    rm -f "$f"
+    assert_ok grep -q 'COUNT=1' <<<"$out"
+}

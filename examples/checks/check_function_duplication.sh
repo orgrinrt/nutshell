@@ -139,38 +139,55 @@ compare_full_names() {
     local threshold="$2"
     
     echo "$func_data" | awk -F'|' -v threshold="$threshold" '
-    # Levenshtein distance function
-    function levenshtein(s1, s2,    len1, len2, i, j, c1, c2, cost, d, del, ins, repl, min) {
+    # Levenshtein distance, abandoned as soon as it cannot matter.
+    #
+    # `maxd` is the largest distance the caller could still accept. Past that
+    # the exact number is not wanted, so the row is checked and the whole thing
+    # abandoned rather than filled in: the answer only has to be "more than
+    # maxd", and returning maxd+1 says that.
+    #
+    # It matters because this is the whole cost of the check. 440 names is
+    # about 96,000 pairs, and the length prune below leaves most of them, each
+    # paying a full matrix. At the default threshold of 0.85 a twenty-character
+    # name accepts three edits, so three rows of no hope is the answer and the
+    # remaining seventeen were being computed for nothing.
+    #
+    # One row is kept rather than the matrix. Nothing reads the interior, and
+    # an awk associative array of len1*len2 cells per pair was most of the
+    # memory traffic.
+    function levenshtein(s1, s2, maxd,    len1, len2, i, j, c1, cost, prev, cur, best, subst) {
         len1 = length(s1)
         len2 = length(s2)
-        
+
         if (s1 == s2) return 0
         if (len1 == 0) return len2
         if (len2 == 0) return len1
-        
-        # Initialize first row and column
-        for (i = 0; i <= len1; i++) d[i, 0] = i
-        for (j = 0; j <= len2; j++) d[0, j] = j
-        
+        if (maxd == "") maxd = len1 + len2
+        # A difference in length is already that many edits.
+        if (len1 - len2 > maxd || len2 - len1 > maxd) return maxd + 1
+
+        for (j = 0; j <= len2; j++) prev[j] = j
+
         for (i = 1; i <= len1; i++) {
             c1 = substr(s1, i, 1)
+            cur[0] = i
+            best = cur[0]
             for (j = 1; j <= len2; j++) {
-                c2 = substr(s2, j, 1)
-                cost = (c1 == c2) ? 0 : 1
-                
-                del = d[i-1, j] + 1
-                ins = d[i, j-1] + 1
-                repl = d[i-1, j-1] + cost
-                
-                min = del
-                if (ins < min) min = ins
-                if (repl < min) min = repl
-                d[i, j] = min
+                cost = (c1 == substr(s2, j, 1)) ? 0 : 1
+                subst = prev[j-1] + cost
+                cur[j] = prev[j] + 1
+                if (cur[j-1] + 1 < cur[j]) cur[j] = cur[j-1] + 1
+                if (subst < cur[j]) cur[j] = subst
+                if (cur[j] < best) best = cur[j]
             }
+            # Every path through this row already costs more than the caller
+            # can accept, and a row only ever grows.
+            if (best > maxd) return maxd + 1
+            for (j = 0; j <= len2; j++) prev[j] = cur[j]
         }
-        return d[len1, len2]
+        return prev[len2]
     }
-    
+
     # Quick check: can these strings possibly have similarity >= threshold?
     function can_meet_threshold(s1, s2, threshold,    len1, len2, maxlen, minlen) {
         len1 = length(s1)
@@ -181,12 +198,16 @@ compare_full_names() {
         return ((minlen / maxlen) >= threshold)
     }
     
-    function similarity(s1, s2,    len1, len2, maxlen, dist) {
+    function similarity(s1, s2, threshold,    len1, len2, maxlen, dist, maxd) {
         len1 = length(s1)
         len2 = length(s2)
         maxlen = (len1 > len2) ? len1 : len2
         if (maxlen == 0) return 1.0
-        dist = levenshtein(s1, s2)
+        # The largest distance that could still clear the threshold. Anything
+        # past it is rejected either way, so it does not have to be counted.
+        maxd = int(maxlen * (1.0 - threshold))
+        dist = levenshtein(s1, s2, maxd)
+        if (dist > maxd) return 0.0
         return 1.0 - (dist / maxlen)
     }
     
@@ -223,7 +244,7 @@ compare_full_names() {
                 # Early exit: if lengths are too different, skip expensive Levenshtein
                 if (!can_meet_threshold(names[i], names[j], threshold)) continue
                 
-                score = similarity(names[i], names[j])
+                score = similarity(names[i], names[j], threshold)
                 
                 if (score < threshold) continue
 
@@ -237,7 +258,7 @@ compare_full_names() {
                     t1 = tail_of(names[i]); t2 = tail_of(names[j])
                     if (length(t1) > 0 && length(t2) > 0) {
                         if (!can_meet_threshold(t1, t2, threshold)) continue
-                        if (similarity(t1, t2) < threshold) continue
+                        if (similarity(t1, t2, threshold) < threshold) continue
                     }
                 }
 
@@ -284,51 +305,40 @@ compare_stripped_names() {
     local threshold="$2"
     
     echo "$func_data" | awk -F'|' -v threshold="$threshold" '
-    function levenshtein(s1, s2,    len1, len2, i, j, c1, c2, cost, d, del, ins, repl, min) {
-        len1 = length(s1)
-        len2 = length(s2)
-        
+    # The same abandoned-early distance as the first pass. See there for why.
+    function levenshtein(s1, s2, maxd,    len1, len2, i, j, c1, cost, prev, cur, best, subst) {
+        len1 = length(s1); len2 = length(s2)
         if (s1 == s2) return 0
         if (len1 == 0) return len2
         if (len2 == 0) return len1
-        
-        for (i = 0; i <= len1; i++) d[i, 0] = i
-        for (j = 0; j <= len2; j++) d[0, j] = j
-        
+        if (maxd == "") maxd = len1 + len2
+        if (len1 - len2 > maxd || len2 - len1 > maxd) return maxd + 1
+        for (j = 0; j <= len2; j++) prev[j] = j
         for (i = 1; i <= len1; i++) {
             c1 = substr(s1, i, 1)
+            cur[0] = i; best = cur[0]
             for (j = 1; j <= len2; j++) {
-                c2 = substr(s2, j, 1)
-                cost = (c1 == c2) ? 0 : 1
-                
-                del = d[i-1, j] + 1
-                ins = d[i, j-1] + 1
-                repl = d[i-1, j-1] + cost
-                
-                min = del
-                if (ins < min) min = ins
-                if (repl < min) min = repl
-                d[i, j] = min
+                cost = (c1 == substr(s2, j, 1)) ? 0 : 1
+                subst = prev[j-1] + cost
+                cur[j] = prev[j] + 1
+                if (cur[j-1] + 1 < cur[j]) cur[j] = cur[j-1] + 1
+                if (subst < cur[j]) cur[j] = subst
+                if (cur[j] < best) best = cur[j]
             }
+            if (best > maxd) return maxd + 1
+            for (j = 0; j <= len2; j++) prev[j] = cur[j]
         }
-        return d[len1, len2]
+        return prev[len2]
     }
-    
-    function can_meet_threshold(s1, s2, threshold,    len1, len2, maxlen, minlen) {
-        len1 = length(s1)
-        len2 = length(s2)
-        maxlen = (len1 > len2) ? len1 : len2
-        minlen = (len1 < len2) ? len1 : len2
-        if (maxlen == 0) return 1
-        return ((minlen / maxlen) >= threshold)
-    }
-    
-    function similarity(s1, s2,    len1, len2, maxlen, dist) {
+
+    function similarity(s1, s2, threshold,    len1, len2, maxlen, dist, maxd) {
         len1 = length(s1)
         len2 = length(s2)
         maxlen = (len1 > len2) ? len1 : len2
         if (maxlen == 0) return 1.0
-        dist = levenshtein(s1, s2)
+        maxd = int(maxlen * (1.0 - threshold))
+        dist = levenshtein(s1, s2, maxd)
+        if (dist > maxd) return 0.0
         return 1.0 - (dist / maxlen)
     }
     
@@ -363,7 +373,7 @@ compare_stripped_names() {
                 # Early exit: if lengths are too different, skip expensive Levenshtein
                 if (!can_meet_threshold(stripped[i], stripped[j], threshold)) continue
                 
-                score = similarity(stripped[i], stripped[j])
+                score = similarity(stripped[i], stripped[j], threshold)
                 
                 if (score >= threshold) {
                     printf "WARN|%.3f|%s|%s|%s|%s|%s|%s\n", score, stripped[i], original[i], stripped[j], original[j], files[i], files[j]
@@ -395,7 +405,14 @@ test_full_name_duplication() {
     echo ""
     
     local results
-    results=$(compare_full_names "$func_data" "$SIMILARITY_THRESHOLD")
+    # An awk that will not parse prints nothing and exits non-zero, and this
+    # check then reported a clean pass. That is how a reserved word used as a
+    # variable name went unnoticed: the program never ran, so nothing was
+    # similar to anything. A comparison that could not be made is not a pass.
+    if ! results=$(compare_full_names "$func_data" "$SIMILARITY_THRESHOLD"); then
+        log_fail "the name comparison could not run"
+        return 1
+    fi
     
     local failures=0
     
@@ -443,7 +460,10 @@ test_stripped_name_duplication() {
     echo ""
     
     local results
-    results=$(compare_stripped_names "$stripped_data" "$SIMILARITY_THRESHOLD")
+    if ! results=$(compare_stripped_names "$stripped_data" "$SIMILARITY_THRESHOLD"); then
+        log_fail "the stripped-name comparison could not run"
+        return 1
+    fi
     
     local warnings=0
     

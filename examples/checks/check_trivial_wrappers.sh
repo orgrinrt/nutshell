@@ -93,42 +93,99 @@ has_exempt_annotation() {
     [[ -n "${_TW_EXEMPT["${file}:${func_name}"]:-}" ]]
 }
 
+# How often every name appears, everywhere, counted once for the whole run.
+#
+# This was a `grep -c` per file per function. On 24 files and 440 functions
+# that is 10,560 greps, and `analyze_function` runs in a command substitution,
+# so nothing it worked out ever survived the return. Built here instead, in the
+# shell that runs the loop, once.
+#
+# Counts are lines-containing rather than occurrences, because that is what
+# `grep -c` gave and the thresholds were chosen against it.
+#
+# awk where there is one and the shell where there is not. This check needs awk
+# elsewhere already, so it is not a new dependency; the fallback is here so a
+# machine without it gets a slow answer rather than no answer.
+declare -gA _TW_LOCAL=()
+declare -gA _TW_GLOBAL=()
+declare -gi _TW_USAGE_DONE=0
+_TW_SEP=$'\034'
+
+_tw_count_with_awk() {
+    local key n
+    while IFS=$'\t' read -r key n; do
+        [[ -n "$key" ]] || continue
+        case "$key" in
+            G*) _TW_GLOBAL["${key#G}"]=$n ;;
+            L*) _TW_LOCAL["${key#L}"]=$n ;;
+        esac
+    done < <(get_script_files | tr '\n' '\0' | xargs -0 awk '
+        FNR == 1 { delete seen }
+        {
+            delete seen
+            line = $0
+            while (match(line, /[A-Za-z_][A-Za-z0-9_]*/)) {
+                seen[substr(line, RSTART, RLENGTH)] = 1
+                line = substr(line, RSTART + RLENGTH)
+            }
+            for (w in seen) { g[w]++; l[FILENAME "\034" w]++ }
+        }
+        END {
+            for (w in g) printf "G%s\t%d\n", w, g[w]
+            for (k in l) printf "L%s\t%d\n", k, l[k]
+        }' 2>/dev/null)
+}
+
+_tw_count_in_shell() {
+    local file line rest name n i
+    local -A onthisline=()
+    while IFS= read -r file; do
+        [[ -n "$file" ]] || continue
+        nut_load_file "$file" || continue
+        n="$(nut_file_lines "$file")"
+        for (( i = 1; i <= n; i++ )); do
+            line="$(nut_file_line "$file" "$i")"
+            onthisline=()
+            rest="$line"
+            while [[ "$rest" =~ ([A-Za-z_][A-Za-z0-9_]*) ]]; do
+                name="${BASH_REMATCH[1]}"
+                onthisline["$name"]=1
+                rest="${rest#*"$name"}"
+            done
+            for name in "${!onthisline[@]}"; do
+                _TW_GLOBAL["$name"]=$(( ${_TW_GLOBAL["$name"]:-0} + 1 ))
+                _TW_LOCAL["${file}${_TW_SEP}${name}"]=$(( ${_TW_LOCAL["${file}${_TW_SEP}${name}"]:-0} + 1 ))
+            done
+        done
+    done < <(get_script_files)
+}
+
+tw_load_usages() {
+    (( _TW_USAGE_DONE == 1 )) && return 0
+    _TW_USAGE_DONE=1
+    if command -v awk >/dev/null 2>&1 && command -v xargs >/dev/null 2>&1; then
+        _tw_count_with_awk
+    fi
+    # Nothing came back, so either there was no awk or it could not run. A
+    # count of zero everywhere would exempt every function in the library.
+    (( ${#_TW_GLOBAL[@]} == 0 )) && _tw_count_in_shell
+    return 0
+}
+
 # Count usages of a function in a specific file (excluding the definition)
 count_local_usages() {
-    local file="$1"
-    local func_name="$2"
-    
-    local count
-    count=$(grep -c "\b${func_name}\b" "$file" 2>/dev/null || echo "0")
-    count="${count//[^0-9]/}"
-    [[ -z "$count" ]] && count=0
-    
-    # Subtract 1 for the definition itself
-    count=$((count - 1))
-    [[ $count -lt 0 ]] && count=0
-    
-    echo "$count"
+    local count="${_TW_LOCAL["${1}${_TW_SEP}${2}"]:-0}"
+    count=$(( count - 1 ))
+    (( count < 0 )) && count=0
+    printf '%s' "$count"
 }
 
 # Count usages of a function across all files
 count_global_usages() {
-    local func_name="$1"
-    
-    local total=0
-    local file count
-    
-    while IFS= read -r file; do
-        count=$(grep -c "\b${func_name}\b" "$file" 2>/dev/null || echo "0")
-        count="${count//[^0-9]/}"
-        [[ -z "$count" ]] && count=0
-        total=$((total + count))
-    done < <(get_script_files)
-    
-    # Subtract 1 for the definition
-    total=$((total - 1))
-    [[ $total -lt 0 ]] && total=0
-    
-    echo "$total"
+    local total="${_TW_GLOBAL["${1:-}"]:-0}"
+    total=$(( total - 1 ))
+    (( total < 0 )) && total=0
+    printf '%s' "$total"
 }
 
 # Extract meaningful code lines from a function body
@@ -185,6 +242,22 @@ count_tokens() {
 
 # Analyze a single function for trivial wrapper status
 # Returns: pass, warn, or fail
+declare -g TW_STATUS="" TW_DETAILS=""
+
+# One place that splits "status:details" into the two globals.
+_tw_set() {
+    TW_STATUS="${1%%:*}"
+    TW_DETAILS="${1#*:}"
+    return 0
+}
+
+
+# Sets TW_STATUS and TW_DETAILS rather than printing them.
+#
+# It was read through a command substitution, which is a fork, once per
+# function: 386 of them on this library and most of what the check still cost
+# after the pipelines came out. Nothing about the analysis needed a subshell;
+# it needed a return value with two parts in it.
 analyze_function() {
     local file="$1"
     local func_name="$2"
@@ -195,13 +268,13 @@ analyze_function() {
     
     # Not a trivial wrapper if more than MAX_LINES
     if [[ $line_count -gt $MAX_LINES ]]; then
-        echo "pass:not_trivial"
+        _tw_set "pass:not_trivial"
         return
     fi
     
     # Check for exempt annotation
     if has_exempt_annotation "$file" "$func_name"; then
-        echo "pass:annotated"
+        _tw_set "pass:annotated"
         return
     fi
     
@@ -213,32 +286,32 @@ analyze_function() {
     
     # Check ergonomic passes (ANY of these = pass)
     if [[ $local_usages -ge $LOCAL_USAGE_THRESHOLD ]]; then
-        echo "pass:local_usage"
+        _tw_set "pass:local_usage"
         return
     fi
     
     if [[ $global_usages -ge $GLOBAL_USAGE_THRESHOLD ]]; then
-        echo "pass:global_usage"
+        _tw_set "pass:global_usage"
         return
     fi
     
     if [[ $var_count -ge $MIN_VARS_FOR_ERGONOMIC ]]; then
-        echo "pass:ergonomic_vars"
+        _tw_set "pass:ergonomic_vars"
         return
     fi
     
     if [[ $token_count -ge $TOKEN_COMPLEXITY_PASS ]]; then
-        echo "pass:complex"
+        _tw_set "pass:complex"
         return
     fi
     
     # Warn vs fail based on token complexity
     if [[ $token_count -ge $TOKEN_COMPLEXITY_WARN ]]; then
-        echo "warn:${line_count}:${local_usages}:${global_usages}:${var_count}:${token_count}"
+        _tw_set "warn:${line_count}:${local_usages}:${global_usages}:${var_count}:${token_count}"
         return
     fi
     
-    echo "fail:${line_count}:${local_usages}:${global_usages}:${var_count}:${token_count}"
+    _tw_set "fail:${line_count}:${local_usages}:${global_usages}:${var_count}:${token_count}"
 }
 
 # Get the first meaningful line of a function (for display)
@@ -288,6 +361,7 @@ test_trivial_wrappers() {
         # In this shell, before anything reads it from a subshell.
         nut_load_file "$file" || true
         tw_load_exemptions "$file"
+        tw_load_usages
 
         # Get all functions in this file
         local functions
@@ -296,11 +370,9 @@ test_trivial_wrappers() {
         while IFS= read -r func_name; do
             [[ -z "$func_name" ]] && continue
             
-            local result
-            result=$(analyze_function "$file" "$func_name")
-            
-            local status="${result%%:*}"
-            local details="${result#*:}"
+            analyze_function "$file" "$func_name"
+            local status="$TW_STATUS"
+            local details="$TW_DETAILS"
             
             case "$status" in
                 pass)

@@ -517,16 +517,31 @@ _is_excluded() {
 # Get all files matching include patterns, excluding configured paths
 #[pub]
 # Usage: get_lib_files -> prints file paths, one per line
+declare -g _NUT_LIB_FILES_CACHED=""
+declare -g _NUT_LIB_FILES=""
+
 get_lib_files() {
     _framework_init
-    
+
+    # The list, once. `find` per include pattern, per call, and the callers ask
+    # per function: 210 invocations in one run of the wrapper check alone. The
+    # tree does not change while a check runs.
+    if [[ -n "$_NUT_LIB_FILES_CACHED" ]]; then
+        printf '%s\n' "$_NUT_LIB_FILES"
+        return 0
+    fi
+
     local pattern file
-    for pattern in "${NUT_INCLUDE_PATTERNS[@]}"; do
-        while IFS= read -r -d '' file; do
-            _is_excluded "$file" && continue
-            echo "$file"
-        done < <(find "$LIB_DIR" -name "$pattern" -type f -print0 2>/dev/null)
-    done | sort -u
+    _NUT_LIB_FILES="$(
+        for pattern in "${NUT_INCLUDE_PATTERNS[@]}"; do
+            while IFS= read -r -d '' file; do
+                _is_excluded "$file" && continue
+                printf '%s\n' "$file"
+            done < <(find "$LIB_DIR" -name "$pattern" -type f -print0 2>/dev/null)
+        done | sort -u
+    )"
+    _NUT_LIB_FILES_CACHED=1
+    printf '%s\n' "$_NUT_LIB_FILES"
 }
 
 # Get all script files (same as lib files for nutshell)

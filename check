@@ -193,12 +193,27 @@ _run_check() {
     fi
     
     ((TOTAL_CHECKS++))
-    
+
     # Run the check
     local output
     local exit_code
-    output=$("$check_script" 2>&1)
-    exit_code=$?
+
+    # Sourced in a subshell of this process rather than started as one of its
+    # own. Eight checks meant eight nutshell startups and eight cold caches:
+    # each one re-read the same two dozen files, re-parsed the same config and
+    # re-walked the same attributes. A subshell inherits all of it and cannot
+    # write back, so the checks still cannot see each other's variables and
+    # `main` in one is not `main` in the next.
+    #
+    # A check that cannot be sourced is still run the old way, since a custom
+    # check is somebody else's file and may not be a nutshell script at all.
+    if [[ "${NUT_CHECK_ISOLATED:-0}" != "1" ]] && head -1 "$check_script" | grep -q 'env nutshell'; then
+        output=$( set +e; . "$check_script" 2>&1 )
+        exit_code=$?
+    else
+        output=$("$check_script" 2>&1)
+        exit_code=$?
+    fi
     
     # 2 means warnings and no failures, which is what `exit_with_status`
     # promises. The glyph grep below it is the fallback for a custom check that
@@ -263,6 +278,13 @@ _run_builtin_checks() {
     echo ""
     echo -e "${BOLD}Built-in Checks${NC}"
     echo ""
+
+    # Once, here, so every check below inherits it rather than building its own.
+    use srcfile 2>/dev/null || true
+    local f
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && nut_load_file "$f" 2>/dev/null
+    done < <(get_lib_files 2>/dev/null)
     
     for check in "${NUTSHELL_ROOT}"/examples/checks/check_*.sh; do
         [[ ! -f "$check" ]] && continue

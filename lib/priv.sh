@@ -153,14 +153,19 @@ priv_as_user() {
         return $?
     fi
 
+    # `doas` is in here because `priv_run` already handles it. Without it a
+    # machine that can elevate cannot step back down, which is precisely the
+    # failure this function exists to prevent: OpenBSD and some Alpine
+    # installs carry doas and none of the other three.
     local c
-    for c in runuser sudo su; do
+    for c in runuser sudo doas su; do
         command -v "$c" >/dev/null 2>&1 || continue
         case "$c" in
             # runuser is the one built for this: root to another user, no
             # password, no login shell in the way.
             runuser) runuser -u "$u" -- "$@"; return $? ;;
             sudo)    sudo -n -u "$u" -- "$@"; return $? ;;
+            doas)    doas -u "$u" -- "$@"; return $? ;;
             # Last, and through a shell, so the arguments have to be quoted
             # back into one string. Every other route avoids that.
             su)
@@ -175,7 +180,7 @@ priv_as_user() {
         esac
     done
 
-    log_error "${what}: cannot step down to ${u}; there is no runuser, sudo or su"
+    log_error "${what}: cannot step down to ${u}; there is no runuser, sudo, doas or su"
     return 2
 }
 

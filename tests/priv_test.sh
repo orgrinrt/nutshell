@@ -491,3 +491,36 @@ it_does_not_pass_su_a_flag_only_one_su_has() {
     assert_fails grep -qx -- "-s" <<<"$out"
     assert_contains "$out" "somebody"
 }
+
+#[test]
+it_steps_down_with_doas_where_that_is_what_the_machine_has() {
+    _priv_as_root
+    # `priv_run` already elevates with doas. Without the same here, a machine
+    # that can elevate cannot step back down, which is the exact failure this
+    # function exists to prevent. OpenBSD and some Alpine installs carry doas
+    # and none of the other three.
+    _priv_stubs doas
+    local out; out="$(priv_as_user "reading" git status)"
+    _priv_stubs_end; _priv_as_root_end
+    assert_eq "$(head -1 <<<"$out")" "doas"
+    assert_contains "$out" "somebody"
+}
+
+#[test]
+it_prefers_runuser_and_sudo_over_doas() {
+    _priv_as_root
+    _priv_stubs runuser sudo doas su
+    local out; out="$(priv_as_user "reading" git status)"
+    _priv_stubs_end; _priv_as_root_end
+    assert_eq "$(head -1 <<<"$out")" "runuser"
+}
+
+#[test]
+it_names_doas_when_it_cannot_step_down_at_all() {
+    _priv_as_root
+    _priv_stubs
+    local err; err="$(priv_as_user "reading" true 2>&1 >/dev/null)"
+    _priv_stubs_end; _priv_as_root_end
+    # The message lists what it looked for, so a reader knows what to install.
+    assert_contains "$err" "doas"
+}

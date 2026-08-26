@@ -22,6 +22,9 @@
 [[ -n "${_NUTSHELL_SRCFILE_SH:-}" ]] && return 0
 readonly _NUTSHELL_SRCFILE_SH=1
 
+# For `ATTR_DEFINES_PATTERN`: one answer about what a definition is.
+use attr
+
 declare -gA _NUT_FILE_BODY=()
 declare -gA _NUT_FILE_AT=()
 declare -gA _NUT_FILE_N=()
@@ -46,8 +49,12 @@ nut_load_file() {
     for (( i = 0; i < ${#lines[@]}; i++ )); do
         line="${lines[$i]}"
         _NUT_FILE_BODY["${file}:$((i + 1))"]="$line"
-        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_-]*)[[:space:]]*\( ]]; then
-            name="${BASH_REMATCH[2]}"
+        # The shared pattern, so a definition means the same thing here as it
+        # does to `attr`. The two had drifted: this one missed
+        # `function name {` and that one missed both a hyphen and a space
+        # before the parentheses.
+        if [[ "$line" =~ $ATTR_DEFINES_PATTERN ]]; then
+            name="${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}"
             [[ -n "${_NUT_FILE_AT["${file}:${name}"]:-}" ]] \
                 || _NUT_FILE_AT["${file}:${name}"]=$((i + 1))
         fi

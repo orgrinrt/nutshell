@@ -788,20 +788,35 @@ it_puts_the_store_where_it_is_told_to() {
 }
 
 #[test]
-it_does_not_put_the_store_under_the_cache_directory() {
-    _isolate
-    local root; root="$(_extern_cache_root)"
-    # Not merely somewhere else: specifically not in the directory a cleaner is
-    # entitled to empty.
-    assert_fails grep -q '/\.cache/' <<<"$root"
-}
-
-#[test]
 it_puts_the_store_under_the_data_directory_when_nothing_overrides_it() {
     local root
     root="$(unset NUTSHELL_STORE; XDG_DATA_HOME=/tmp/xdg-probe _extern_cache_root)"
     assert_contains "$root" "/tmp/xdg-probe"
     assert_contains "$root" "externs"
+    _isolate
+}
+
+#[test]
+it_does_not_put_the_store_under_the_cache_directory() {
+    # With nothing overriding it, so the branch that derives the path is the
+    # one under test. Asserting this with `NUTSHELL_STORE` pointing at a
+    # scratch directory, as this used to, is a claim about `mktemp` that no
+    # change to the derivation could ever falsify.
+    #
+    # Not merely somewhere else: specifically not in the directory a cleaner is
+    # entitled to empty, which is where every project's dependencies used to
+    # live.
+    local root cache
+    root="$(unset NUTSHELL_STORE XDG_DATA_HOME; _extern_cache_root)"
+    cache="$(unset XDG_CACHE_HOME; xdg_set_app_name nutshell; xdg_app_cache)"
+    assert_ne "$root" ""
+    assert_ne "$cache" ""
+    # Against what this platform actually calls its cache, not against the
+    # spelling one platform happens to use. Matching `/.cache/` passes on macOS
+    # whatever the derivation does, because the cache there is
+    # `~/Library/Caches`, so that assertion could not fail on half the machines
+    # it runs on.
+    assert_ne "${root%/externs}" "$cache"
     _isolate
 }
 

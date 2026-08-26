@@ -223,9 +223,24 @@ _run_check() {
     if [[ $exit_code -ne 0 ]]; then
         local failures shown total
         failures="$(echo "$output" | grep -E "^\s*(✗|FAIL|ERROR|\[FAIL\]|\[ERROR\])")"
+
+        # A check that failed and said nothing is worse than one that passed
+        # wrongly, because there is no thread to pull. It happens because the
+        # quiet mode this runner sets suppresses the child's own report, so
+        # ask again with the report turned on rather than leaving the reader
+        # with a bare cross.
+        if [[ -z "$failures" ]]; then
+            failures="$(NUTSHELL_CHECK_QUIET=0 "$check_script" 2>&1 \
+                | grep -E "^\s*(✗|FAIL|ERROR|\[FAIL\]|\[ERROR\])")"
+        fi
+
         total=$(printf '%s' "$failures" | grep -c . || true)
         shown=5
-        printf '%s' "$failures" | head -"$shown" | sed 's/^/      /'
+        if [[ -z "$failures" ]]; then
+            echo "      it failed and printed nothing; run ${check_script#"${NUTSHELL_ROOT}"/} to see why"
+        else
+            printf '%s' "$failures" | head -"$shown" | sed 's/^/      /'
+        fi
         if [[ "$total" -gt "$shown" ]]; then
             echo "      ... and $((total - shown)) more; run ${check_script#"${NUTSHELL_ROOT}"/} to see them"
         fi

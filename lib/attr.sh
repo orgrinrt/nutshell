@@ -44,6 +44,31 @@ nut_once || return 0
 # parenthesised argument, `]`. Anything else is an ordinary comment.
 readonly ATTR_PATTERN='^[[:space:]]*#\[[a-z_][a-z0-9_]*(\(.*\))?\][[:space:]]*$'
 
+# What a function definition looks like, in one place.
+#
+# Both spellings bash accepts, and both were being missed. `function name {`
+# has no parentheses at all; `name ()` puts a space before them. A `#[pub]` on
+# either was invisible, so the public-API check skipped those functions in
+# silence rather than reporting them undocumented.
+#
+# One pattern because there were two, here and in `srcfile`, and they had
+# already drifted apart: this one took no hyphen and no `function` keyword,
+# that one took both. A definition is one thing and the readers of it agree
+# about what it is.
+#
+# Group 2 is the name after `function`, group 3 the name before `()`. Exactly
+# one of them matches.
+readonly ATTR_DEFINES_PATTERN='^[[:space:]]*(function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_-]*)|([a-zA-Z_][a-zA-Z0-9_-]*)[[:space:]]*\(\))'
+
+#[pub]
+# The function a line defines, or nothing. The one answer both this module and
+# `srcfile` use, so a definition means the same thing to each.
+# Usage: attr_defines_on "foo() {" -> prints "foo"
+attr_defines_on() {
+    [[ "${1:-}" =~ $ATTR_DEFINES_PATTERN ]] || return 1
+    printf '%s' "${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}"
+}
+
 # The three below are matched with bash's own regex rather than by piping each
 # line through `sed`.
 #
@@ -72,11 +97,7 @@ _attr_arg() {
 }
 
 # _attr_defines <line> -> the function name this line defines, or nothing
-_attr_defines() {
-    local l="$1"
-    [[ "$l" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\) ]] || return 1
-    printf '%s' "${BASH_REMATCH[1]}"
-}
+_attr_defines() { attr_defines_on "${1:-}"; }
 
 # attr_on <file> <function>
 #
@@ -100,8 +121,8 @@ attr_on() {
         # The helper stays for callers and for the tests; the loop cannot
         # afford it.
         defines=""
-        [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\) ]] \
-            && defines="${BASH_REMATCH[1]}"
+        [[ "$line" =~ $ATTR_DEFINES_PATTERN ]] \
+            && defines="${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}"
         if [[ -n "$defines" ]]; then
             if [[ "$defines" == "$want" ]]; then
                 for line in "${pending[@]}"; do
@@ -184,8 +205,8 @@ attr_find() {
         fi
 
         defines=""
-        [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\) ]] \
-            && defines="${BASH_REMATCH[1]}"
+        [[ "$line" =~ $ATTR_DEFINES_PATTERN ]] \
+            && defines="${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}"
         if [[ -n "$defines" ]]; then
             [[ "$pending" -eq 1 ]] && printf '%s\n' "$defines"
             pending=0

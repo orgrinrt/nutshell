@@ -123,3 +123,59 @@ exit_with_status')"
     _crp_run "$d" >/dev/null
     assert_eq "$(grep -c . "$d/ran.log" 2>/dev/null || printf 0)" "1"
 }
+
+
+# --- a check sourced into this process must not inherit it ---------------------
+#
+# The runner sources a check with the nutshell shebang into a subshell rather
+# than starting eight interpreters. All eight built-in checks take that branch
+# and every fixture in this file used `#!/usr/bin/env bash`, so the branch that
+# runs in production had no coverage at all.
+
+# A project whose check carries the nutshell shebang, which is the branch the
+# built-in checks take.
+_crp_nut_project() {
+    local name="$1" body="$2"
+    local d="$_CRP_TMP/$name"
+    mkdir -p "$d/checks"
+    printf '[qa]\ncustom_checks = ["checks/probe.sh"]\nrun_builtins = false\n' > "$d/nut.toml"
+    printf '#!/usr/bin/env nutshell\n%s\n' "$body" > "$d/checks/probe.sh"
+    chmod +x "$d/checks/probe.sh"
+    printf '%s' "$d"
+}
+
+#[test]
+it_gives_a_sourced_check_no_arguments_of_its_own() {
+    local d; d="$(_crp_nut_project args '
+if [[ $# -ne 0 ]]; then
+    printf "  ✗ inherited %s argument(s): %s\n" "$#" "$*"
+    exit 1
+fi
+exit 0')"
+    local out; out="$(_crp_run "$d")"
+    # It used to get the runner's `$1` and `$2`: the check path and its display
+    # name. Any check reading `$1` or `$@` was operating on itself.
+    assert_fails grep -q 'inherited' <<<"$out"
+    assert_contains "$out" "✓"
+}
+
+#[test]
+it_runs_a_sourced_check_at_all() {
+    # The control for the one above: the nutshell-shebang branch is genuinely
+    # taken and its exit code is genuinely read.
+    local d; d="$(_crp_nut_project taken '
+printf "  ✗ this check ran and failed on purpose\n"
+exit 1')"
+    local out; out="$(_crp_run "$d")"
+    assert_contains "$out" "ran and failed on purpose"
+}
+
+#[test]
+it_reports_a_sourced_checks_warnings_through_its_exit_code() {
+    local d; d="$(_crp_nut_project warned '
+use check-runner
+TESTS_WARNED=1
+exit_with_status')"
+    local out; out="$(_crp_run "$d")"
+    assert_contains "$out" "⚠"
+}

@@ -22,9 +22,9 @@ git clone https://github.com/orgrinrt/nutshell.git
 
 ### When a project needs a version the machine does not have
 
-Copy `find-nutshell` into the project and let it resolve. It is one file, it
-depends on nothing, and it is what has to be on disk before anything else can
-be found:
+Copy `find-nutshell` into the project and let it resolve. It is one file, it needs no nutshell module, and it is what has to be on disk
+before anything else can be found. It does use `git`, `date`, `uname` and the
+ordinary file tools, since fetching is what it is for:
 
 ```bash
 # in the project
@@ -74,9 +74,10 @@ machine carrying four of them is the ordinary state.
   toolchains/branches/<ref>/<revision>/
 ```
 
-The store is `${XDG_DATA_HOME:-~/.local/share}/nutshell` on Linux and
-`~/Library/Application Support/nutshell` on macOS. Both are where that platform
-puts application data, which is the point: it is not the cache directory.
+`XDG_DATA_HOME` names the store wherever it is set, on any platform. With it
+unset the store is `~/.local/share/nutshell` on Linux and
+`~/Library/Application Support/nutshell` on macOS, which is where each puts
+application data. The point of both is that neither is the cache directory.
 
 `NUTSHELL_STORE` moves the root, `NUTSHELL_TOOLCHAINS` just the toolchains, and
 `NUTSHELL_REMOTE` says where a fetch goes. Under the data directory and not the
@@ -114,21 +115,36 @@ revision runs and says which one it is.
 
 ## Quick Start
 
-Every script that uses nutshell needs **one line** at the top:
+With nutshell installed, a script needs no boilerplate at all. The shebang is
+the whole of it:
 
 ```bash
-#!/usr/bin/env bash
-. "${0%/*}/lib/nutshell/init"
+#!/usr/bin/env nutshell
 
 use os log
 
-log_info "Hello from nutshell!"
+log_info "hello"
 ```
 
-The `. "${0%/*}/lib/nutshell/init"` line is the **only boilerplate**. Copy it exactly.
+For a script that has to run where nutshell may not be installed, source the
+resolver instead and let it find one:
 
-> **What does `${0%/*}` mean?**  
-> It's bash for "directory containing this script". It ensures the script works regardless of where it's called from.
+```bash
+#!/usr/bin/env bash
+HERE="${BASH_SOURCE[0]%/*}"
+. "$HERE/find-nutshell"
+nutshell_find "$HERE" dev || exit 1
+. "$NUTSHELL_INIT"
+
+use os log
+
+log_info "hello"
+```
+
+That second form is what a project carries when it pins a version, and
+`find-nutshell` is the only file it needs beside its own source. There is no
+third form: a copy of nutshell in the tree is the arrangement the section above
+tells you not to adopt.
 
 ---
 
@@ -136,7 +152,7 @@ The `. "${0%/*}/lib/nutshell/init"` line is the **only boilerplate**. Copy it ex
 
 ```
 nutshell/
-├── init                    # Source this: . "${0%/*}/lib/nutshell/init"
+├── init                    # what `nutshell` and `find-nutshell` source
 ├── check                   # Main QA entry point (executable)
 ├── bin/
 │   └── nutshell           # Interpreter for #!/usr/bin/env nutshell
@@ -195,7 +211,7 @@ Each script is independent. Each one has the init line:
 ```bash
 #!/usr/bin/env bash
 # scripts/build.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT"
 
 use os log fs
 
@@ -213,7 +229,7 @@ One script bootstraps, others use the clean shebang:
 ```bash
 #!/usr/bin/env bash
 # scripts/main.sh - The entry point
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT"
 
 # PATH is already set by init, so internal scripts can use nutshell shebang
 "${0%/*}/internal/build.sh" "$@"
@@ -306,9 +322,6 @@ use os log json http
 | `srcfile` | A source file read once (`nut_load_file`, `nut_defined_at`, `nut_body_of`) |
 | `checkcache` | A check's answer kept until it can change (`nut_cache_hit`, `nut_cache_read`) |
 | `priv` | Elevating for one step and stepping back (`priv_run`, `priv_as_user`) |
-| `extern` | Declared dependencies out of the store (`extern_path`, `extern_declared`) |
-| `modgraph` | What a module declares against what it calls |
-| `git` | Repository questions (`git_root`, `git_branch`, `git_is_clean`) |
 | `git` | Reading a repository (`git_trunk`, `git_changed_files`, `git_trailers`) |
 | `modgraph` | The module graph and its violations (`modgraph_build`, `modgraph_audit`) |
 | `extern` | Libraries from elsewhere (`extern_path`, `extern_resolve`) |
@@ -503,7 +516,7 @@ happens.
 ```bash
 #!/usr/bin/env bash
 # scripts/build.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT"
 
 use os log deps fs
 
@@ -530,7 +543,7 @@ log_success "Build complete!"
 ```bash
 #!/usr/bin/env bash
 # scripts/fetch-data.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT"
 
 use log http json
 
@@ -553,7 +566,7 @@ fi
 ```bash
 #!/usr/bin/env bash
 # scripts/install.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT"
 
 use log prompt fs color
 
@@ -581,13 +594,13 @@ log_success "Installation complete!"
 Every script needs this line:
 
 ```bash
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT"
 ```
 
 Breaking it down:
 - `.` sources a file (same as `source`)
 - `"${0%/*}"` is the directory containing this script
-- `/lib/nutshell/init` is the path to nutshell's init file
+- `find-nutshell` is the resolver a project carries when it pins a version
 
 This works regardless of:
 - Where the script is called from (`./scripts/build.sh` or `scripts/build.sh`)
@@ -651,17 +664,27 @@ See `examples/configs/` for configuration templates:
 
 ## Why This Design?
 
-**Q: Why not a global install?**  
-A: Nutshell is designed to be bundled with your project. When someone clones your repo and runs `npm run build`, it should just work, with no "please install nutshell first".
+**Q: Why a global install rather than a copy in the project?**  
+A: Because a copy in the project is a second version, and it drifts from the
+machine's without saying so. It resolves the modules that existed when it was
+added and none added since, so what you get is an error naming a missing
+function rather than one naming a stale copy. That happened twice in one day in
+the projects this was written for.
 
-**Q: Why not `#!/usr/bin/env nutshell` everywhere?**  
-A: That requires `nutshell` to be on PATH. `./install` links it there in one step, but the source line works on a fresh clone with no setup at all, so it stays the default.
+**Q: Then what about a fresh clone with nothing installed?**  
+A: `find-nutshell` is for that. One file in the project, depending on nothing,
+which finds an installed one or fetches the version the project pins. It is
+what the second Quick Start form uses.
 
-**Q: Can I use the pretty shebang?**  
-A: Yes. The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`, and `./install` makes it resolve everywhere else. This suits internal scripts in larger script suites.
+**Q: Can I use `#!/usr/bin/env nutshell` everywhere?**  
+A: Yes, once `./install` has linked it onto PATH, and that is the shape to
+prefer. `init` also puts nutshell's `bin/` on PATH, so anything a script starts
+after sourcing it can use the shebang without the install.
 
 **Q: What if I have many scripts?**  
-A: Each standalone script needs the init line. It's one line of boilerplate per file. For large script suites, consider Pattern 2 (entry point + internal scripts).
+A: Then the shebang is worth the one-time install: no boilerplate per file at
+all. Where that is not available, an entry point resolves once and everything
+it calls inherits PATH, which is Pattern 2 below.
 
 ---
 

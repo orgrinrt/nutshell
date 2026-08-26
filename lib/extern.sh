@@ -178,6 +178,17 @@ extern_declared() {
 # git will answer for them. None of that can change while a script runs, and a
 # program taking five modules out of one library paid it five times -- about
 # four hundred milliseconds before anything of its own happened.
+# What has been resolved this process.
+#
+# It reads as a working memo and has never been one: everything that writes to
+# it is reached through a command substitution, so the assignment happens in a
+# subshell and is gone when that returns. The per-process property callers
+# actually get comes from `init`'s loaded-module table short-circuiting the
+# `use` before this is reached.
+#
+# Left in place rather than deleted, because `extern_forget` is a public door
+# onto it and removing that is a change for consumers. Marked so the next
+# person to optimise this path does not find it and believe it.
 declare -gA _EXTERN_RESOLVED=()
 
 #[pub]
@@ -319,6 +330,12 @@ _extern_guard() {
     local dir="$1"; shift
     local lock="${dir}.lock" waited=0
 
+    # The parent, first. `mkdir "$lock"` is the lock, so it must not have a
+    # second reason to fail: a missing parent directory failed it exactly the
+    # way contention does, and the loop below then waited out the full eleven
+    # minutes for a lock nobody was holding.
+    mkdir -p "${lock%/*}" 2>/dev/null || true
+
     while ! mkdir "$lock" 2>/dev/null; do
         # Ready means ready, so a waiter never returns a half-written tree.
         _extern_is_repo "$dir" && return 0
@@ -351,7 +368,15 @@ _extern_guard() {
         fi
     done
 
-    printf '%s' "$$" > "${lock}/pid" 2>/dev/null
+    # `$BASHPID`, not `$$`.
+    #
+    # This runs inside a command substitution: `init` calls `extern_resolve`
+    # in `$( )`, which calls `extern_path`, which calls this. `$$` in a
+    # subshell is the *parent's* pid, so the lock recorded a process that
+    # outlives the one holding it. A subshell that died mid-clone left a lock
+    # naming a pid that `kill -0` still says is alive, and the takeover branch
+    # below never fired: the next process sat out the full wait instead.
+    printf '%s' "$BASHPID" > "${lock}/pid" 2>/dev/null
 
     local rc=0
     if ! _extern_is_repo "$dir"; then

@@ -212,7 +212,11 @@ _run_check() {
         # check whose own source moved has to read everything again, and
         # without this the cache would keep answering with the old one's
         # opinion.
-        output=$( set +e; NUT_CACHE_CHECKER="$check_script" . "$check_script" 2>&1 )
+        # `set --` first, so the check does not inherit this function's own
+        # arguments. Sourced, `$1` was the check's path and `$2` its display
+        # name, so any check reading `$1` or `$@` silently operated on itself.
+        # Started as its own process it had none, which is what it expects.
+        output=$( set +e; set --; NUT_CACHE_CHECKER="$check_script" . "$check_script" 2>&1 )
         exit_code=$?
     else
         output=$("$check_script" 2>&1)
@@ -283,13 +287,19 @@ _run_builtin_checks() {
     echo -e "${BOLD}Built-in Checks${NC}"
     echo ""
 
-    # Once, here, so every check below inherits it rather than building its own.
+    # Once, here, so every check below inherits it rather than building its
+    # own. `get_lib_files` lives in `check-runner`, which this file does not
+    # load, so the loop was reading nothing and pre-warming zero files while
+    # its comment said otherwise.
     use srcfile 2>/dev/null || true
     use checkcache 2>/dev/null || true
-    local f
-    while IFS= read -r f; do
-        [[ -n "$f" ]] && nut_load_file "$f" 2>/dev/null
-    done < <(get_lib_files 2>/dev/null)
+    if declare -F get_lib_files >/dev/null 2>&1 \
+       && declare -F nut_load_file >/dev/null 2>&1; then
+        local f
+        while IFS= read -r f; do
+            [[ -n "$f" ]] && nut_load_file "$f" 2>/dev/null
+        done < <(get_lib_files 2>/dev/null)
+    fi
     
     for check in "${NUTSHELL_ROOT}"/examples/checks/check_*.sh; do
         [[ ! -f "$check" ]] && continue

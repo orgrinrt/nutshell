@@ -10,6 +10,7 @@
 # Environment:
 #   LOG_LEVEL - debug|info|warn|error (default: info)
 #   LOG_COLOR - auto|always|never (default: auto)
+#   LOG_MARKS - auto|icon|text|none (default: auto)
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -62,6 +63,185 @@ _log_format() {
     else
         printf '[%s] %s\n' "$level" "$message"
     fi
+}
+
+# -----------------------------------------------------------------------------
+# Marks and depth
+# -----------------------------------------------------------------------------
+#
+# A run of forty lines where one went wrong should not need reading forty times
+# to find it. Two things make that work, and both are about skimming.
+#
+# Every line can start with a mark saying what kind of line it is, in one
+# column, so the eye scans down rather than across. Icons where the terminal
+# can draw them, words where it cannot, and the caller may insist on either.
+#
+# And a line sits at the depth of the step it belongs to. `log_step` already
+# opened a heading and `log_substep` indented one line under it; what was
+# missing was nesting past one level and a way to close a step with how it
+# went. What produced a message is then a matter of looking left.
+
+LOG_MARKS="${LOG_MARKS:-auto}"
+
+declare -gi LOG_DEPTH=0
+declare -gi LOG_WARNINGS=0
+declare -gi LOG_FAILURES=0
+
+_LOG_MARKS_SET=0
+_LOG_M_OK="+"; _LOG_M_BAD="x"; _LOG_M_WARN="!"; _LOG_M_STEP=">"; _LOG_M_FLAT=" "
+
+# Can this terminal draw a character outside ASCII? A locale that is not UTF-8
+# renders one as several bytes of noise, and the linux console before a font is
+# loaded is where that happens, which is where a recovery script runs.
+_log_unicode_ok() {
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *UTF-8*|*utf8*|*UTF8*|*utf-8*) ;;
+        *) return 1 ;;
+    esac
+    [[ "${TERM:-}" != "linux" ]]
+}
+
+_log_marks_init() {
+    (( _LOG_MARKS_SET == 1 )) && return 0
+    _LOG_MARKS_SET=1
+    case "$LOG_MARKS" in
+        none) _LOG_M_OK=" "; _LOG_M_BAD=" "; _LOG_M_WARN=" "; _LOG_M_STEP=" " ;;
+        text) _LOG_M_OK="+"; _LOG_M_BAD="x"; _LOG_M_WARN="!"; _LOG_M_STEP=">" ;;
+        icon) _log_marks_unicode ;;
+        *)    _log_unicode_ok && _log_marks_unicode ;;
+    esac
+}
+
+_log_marks_unicode() {
+    printf -v _LOG_M_OK   '%b' '\u2713'
+    printf -v _LOG_M_BAD  '%b' '\u2717'
+    printf -v _LOG_M_WARN '%b' '\u26a0'
+    printf -v _LOG_M_STEP '%b' '\u203a'
+}
+
+#[pub]
+# Choose how lines are marked, overriding what was detected.
+# Usage: log_marks icon | text | none | auto
+log_marks() { LOG_MARKS="${1:-auto}"; _LOG_MARKS_SET=0; _log_marks_init; }
+
+#[pub]
+# Forget the depth and the counts, for a caller starting a fresh run.
+# Usage: log_reset
+log_reset() { LOG_DEPTH=0; LOG_WARNINGS=0; LOG_FAILURES=0; }
+
+_log_pad() {
+    local n=$(( LOG_DEPTH * 2 ))
+    (( n > 0 )) || return 0
+    printf '%*s' "$n" ''
+}
+
+# One marked line. The mark sits outside the indent, so every mark in a run is
+# in the same column however deep its line is.
+_log_marked() {
+    local mark="$1" color="$2" text="$3" reset=""
+    _log_marks_init
+    _log_should_color && reset='\033[0m' || color=""
+    printf '%b%s%b %s%s\n' "$color" "$mark" "$reset" "$(_log_pad)" "$text"
+}
+
+#[pub]
+# Open a step. Everything after it is indented under it until it is ended.
+# Unlike log_step, which is a flat heading, these nest.
+# Usage: log_open "Partitioning"
+log_open() {
+    _log_should_emit info || { LOG_DEPTH=$(( LOG_DEPTH + 1 )); return 0; }
+    _log_marks_init
+    local bold="" reset=""
+    if _log_should_color; then bold='\033[1m'; reset='\033[0m'; fi
+    _log_marked "$_LOG_M_STEP" '\033[0;36m' "$(printf '%b%s%b' "$bold" "$*" "$reset")"
+    LOG_DEPTH=$(( LOG_DEPTH + 1 ))
+}
+
+#[pub]
+# Close the step, with how it went: ok, warn, fail, or nothing for silence.
+# Usage: log_close ok "3 partitions"
+log_close() {
+    (( LOG_DEPTH > 0 )) && LOG_DEPTH=$(( LOG_DEPTH - 1 ))
+    local how="${1:-}"; shift 2>/dev/null || true
+    case "$how" in
+        ok)   log_ok   "$@" ;;
+        warn) log_warned "$@" ;;
+        fail) log_failed "$@" ;;
+        "")   return 0 ;;
+        *)    log_flat "$how" "$@" ;;
+    esac
+}
+
+#[pub]
+# It worked. Marked, indented, and counted.
+# Usage: log_ok "made an ESP at /dev/sdb1"
+log_ok() {
+    _log_should_emit info || return 0
+    _log_marked "$_LOG_M_OK" '\033[0;32m' "$*"
+}
+
+#[pub]
+# Worth a look, and the run goes on.
+# Usage: log_warned "the free region is tight"
+log_warned() {
+    LOG_WARNINGS=$(( LOG_WARNINGS + 1 ))
+    _log_should_emit warn || return 0
+    _log_marked "$_LOG_M_WARN" '\033[0;33m' "$*"
+}
+
+#[pub]
+# It did not work.
+# Usage: log_failed "could not set the esp flag"
+log_failed() {
+    LOG_FAILURES=$(( LOG_FAILURES + 1 ))
+    _log_should_emit error || return 0
+    _log_marked "$_LOG_M_BAD" '\033[0;31m' "$*"
+}
+
+#[pub]
+# Something true that is neither good nor bad. Unmarked, so a run of these does
+# not read as a run of results.
+# Usage: log_flat "sgdisk: 3 partitions"
+log_flat() {
+    _log_should_emit info || return 0
+    _log_marked "$_LOG_M_FLAT" "" "$*"
+}
+
+#[pub]
+# Run a command as a step: its output indented under it, and a mark on the end
+# saying how it went. Returns what the command returned, which is the reason to
+# use it rather than printing around it.
+# Usage: log_run "writing the table" sgdisk --zap-all /dev/sdb
+log_run() {
+    local label="$1"; shift
+    log_open "$label"
+    local line rc=""
+    while IFS= read -r line; do
+        # The status travels in the stream, because a pipeline loses it and a
+        # runner that reports success on a failed command is worse than none.
+        # Read, never printed: a marker, not output.
+        if [[ "${line:0:1}" == $'\037' ]]; then rc="${line:1}"; break; fi
+        log_flat "$line"
+    done < <("$@" 2>&1; printf '\037%d\n' "$?")
+    [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
+    if (( rc == 0 )); then log_close ok "$label"
+    else log_close fail "${label} (exit ${rc})"; fi
+    return "$rc"
+}
+
+#[pub]
+# How the run went overall: fail if anything failed, warn if anything warned,
+# ok otherwise. Counted even when LOG_LEVEL hid the line, because the verdict
+# is about what happened rather than about what was displayed.
+#
+# The counts live in the shell that logged. A run inside `$( )` or one side of
+# a pipe is a subshell, and what it counted does not come back; capture the
+# text or keep the count, not both from the same call.
+# Usage: log_worst -> ok | warn | fail
+log_worst() {
+    (( LOG_FAILURES > 0 )) && { printf 'fail'; return 0; }
+    (( LOG_WARNINGS > 0 )) && { printf 'warn'; return 0; }
+    printf 'ok'
 }
 
 # -----------------------------------------------------------------------------

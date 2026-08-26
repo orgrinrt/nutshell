@@ -437,3 +437,119 @@ it_does_not_hand_back_a_checkout_that_has_gone() {
     extern_path fixture >/dev/null 2>&1 || true
     assert_empty "${_EXTERN_RESOLVED[fixture]:-}"
 }
+
+# --- how a module path is spelled ----------------------------------------------
+#
+# `::` separates modules the whole way down. A `/` used to work, because the
+# tail was handed to the filesystem unchanged, so `shebang::tui/key` found the
+# file and read as two different separators in one path. It is refused now, and
+# the refusal names the spelling that works.
+
+#[test]
+it_takes_a_nested_module_separated_all_the_way_down() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/dep/libs/tui"
+    printf 'MARKER=reached\n' > "$d/dep/libs/tui/key.sh"
+    printf '[meta]\nname="dep"\n' > "$d/dep/nut.toml"
+    extern_path() { printf '%s/dep' "$d"; }
+    local out; out="$(extern_resolve 'dep::tui::key')"
+    assert_eq "$out" "$d/dep/libs/tui/key.sh"
+    unset -f extern_path
+    rm -rf "$d"
+}
+
+#[test]
+it_refuses_a_module_path_that_uses_a_slash() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/dep/libs/tui"
+    printf 'MARKER=reached\n' > "$d/dep/libs/tui/key.sh"
+    extern_path() { printf '%s/dep' "$d"; }
+    # The file is right there. It is still refused, because a separator that
+    # works by accident ends up used in half the call sites and not the other.
+    assert_fails extern_resolve 'dep::tui/key'
+    unset -f extern_path
+    rm -rf "$d"
+}
+
+#[test]
+it_says_the_spelling_that_would_have_worked() {
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/dep/libs/tui"
+    : > "$d/dep/libs/tui/key.sh"
+    extern_path() { printf '%s/dep' "$d"; }
+    out="$(extern_resolve 'dep::tui/key' 2>&1 || true)"
+    assert_ok grep -q 'dep::tui::key' <<<"$out"
+    unset -f extern_path
+    rm -rf "$d"
+}
+
+#[test]
+it_still_takes_a_flat_module() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/dep/lib"
+    : > "$d/dep/lib/plain.sh"
+    extern_path() { printf '%s/dep' "$d"; }
+    assert_eq "$(extern_resolve 'dep::plain')" "$d/dep/lib/plain.sh"
+    unset -f extern_path
+    rm -rf "$d"
+}
+
+# --- one file, one load ----------------------------------------------------------
+#
+# A module is reachable by more than one name: its own unit calls it
+# `super::tui::key`, a consumer calls it `dep::tui::key`, and both are the same
+# file. Loaded-ness was keyed on the words rather than the file, so each name
+# sourced it again, and a module without a guard of its own ran twice.
+
+#[test]
+it_loads_a_module_once_however_it_was_named() {
+    local out
+    out="$(bash -c '
+        cd '"$PWD"'
+        . ./init
+        d=$(mktemp -d); mkdir -p "$d/libs/tui"
+        printf "COUNT=\$(( \${COUNT:-0} + 1 ))\n" > "$d/libs/tui/key.sh"
+        use extern
+        extern_path() { printf "%s" "$d"; }
+        use one::tui::key
+        use two::tui::key
+        printf "%s" "$COUNT"
+        rm -rf "$d"')"
+    assert_eq "$out" "1"
+}
+
+#[test]
+it_answers_that_a_module_is_loaded_by_either_name() {
+    local out
+    out="$(bash -c '
+        cd '"$PWD"'
+        . ./init
+        d=$(mktemp -d); mkdir -p "$d/libs/tui"
+        : > "$d/libs/tui/key.sh"
+        use extern
+        extern_path() { printf "%s" "$d"; }
+        use one::tui::key
+        nutshell_loaded one::tui::key && printf "first "
+        use two::tui::key
+        nutshell_loaded two::tui::key && printf "second"
+        rm -rf "$d"')"
+    assert_eq "$out" "first second"
+}
+
+#[test]
+it_does_not_record_a_module_that_failed_to_load() {
+    local out
+    out="$(bash -c '
+        cd '"$PWD"'
+        . ./init
+        d=$(mktemp -d); mkdir -p "$d/libs"
+        printf "return 1\n" > "$d/libs/bad.sh"
+        use extern
+        extern_path() { printf "%s" "$d"; }
+        use dep::bad 2>/dev/null
+        nutshell_loaded dep::bad && printf "recorded" || printf "not recorded"
+        rm -rf "$d"')"
+    # Leaving the mark would make a later retry succeed against a module that
+    # was never sourced.
+    assert_eq "$out" "not recorded"
+}

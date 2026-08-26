@@ -77,32 +77,90 @@ it_writes_the_resolved_commit_to_the_lockfile() {
 }
 
 #[test]
-it_holds_a_checkout_at_the_locked_commit() {
-    # The point of the file. `ref = "main"` moves, so without this two checkouts
-    # of one project can be running different code and neither can say so.
+it_follows_the_branch_rather_than_the_lock() {
+    # A branch pin means that branch's head. A lockfile entry naming an older
+    # commit is a note about the past, not a pin: holding the checkout there
+    # would make `ref = "main"` a pin on whatever main happened to be the first
+    # time anybody asked, which is how a consumer ended up on its dependency's
+    # first commit while months of work went past it.
     _isolate
-    local fix work first dir
+    local fix work first second dir
     fix="$(_extern_fixture)"; work="${fix%% *}"
     first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    second="${fix##* }"
     cd "${work}/project" || return 1
 
     extern_lock_write fixture "$first"
     dir="$(extern_path fixture)"
 
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$second"
+    assert_contains "$(cat "${dir}/lib/greet.sh")" "goodbye"
+}
+
+#[test]
+it_rewrites_the_lock_when_the_branch_has_moved() {
+    # The lockfile's other job. On a branch it records what the head resolved
+    # to and is rewritten every time that moves, so it reports rather than pins.
+    _isolate
+    local fix work first second
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    second="${fix##* }"
+    cd "${work}/project" || return 1
+
+    extern_lock_write fixture "$first"
+    extern_path fixture >/dev/null
+    assert_eq "$(extern_locked fixture)" "$second"
+}
+
+#[test]
+it_holds_a_checkout_at_a_pinned_commit() {
+    # The lockfile's first job, on the pin that has one. A revision names one
+    # commit forever, and two checkouts of a project pinned to it are running
+    # the same code.
+    _isolate
+    local fix work first dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    cd "${work}/project" || return 1
+    sed -i.bak "s|^ref = .*|ref = \"${first}\"|" nut.toml && rm -f nut.toml.bak
+
+    dir="$(extern_path fixture)"
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$first"
+    assert_contains "$(cat "${dir}/lib/greet.sh")" "hello"
+}
+
+#[test]
+it_holds_a_checkout_at_a_pinned_tag() {
+    # A tag is the other fixed kind, and the one somebody writes when they mean
+    # a release rather than a revision.
+    _isolate
+    local fix work first dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    # Annotated, which is what a release tag usually is, and the shape whose
+    # `^{}` peeling the resolution has to follow: the tag object's own sha is
+    # not a commit and nothing can be checked out at it.
+    git -C "${work}/dep" tag -a v1 -m 'v1' "$first"
+    cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "v1"|' nut.toml && rm -f nut.toml.bak
+
+    dir="$(extern_path fixture)"
     assert_eq "$(git -C "$dir" rev-parse HEAD)" "$first"
     assert_contains "$(cat "${dir}/lib/greet.sh")" "hello"
 }
 
 #[test]
 it_refuses_a_commit_the_remote_does_not_have() {
-    # Silently taking the tip instead would defeat the lock at the one moment
-    # it matters.
+    # Silently taking the tip instead would defeat the pin at the one moment it
+    # matters.
     _isolate
     local fix work
     fix="$(_extern_fixture)"; work="${fix%% *}"
     cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "0000000000000000000000000000000000000000"|' nut.toml
+    rm -f nut.toml.bak
 
-    extern_lock_write fixture "0000000000000000000000000000000000000000"
     assert_fails extern_path fixture
 }
 
@@ -141,13 +199,18 @@ it_gives_two_projects_locked_apart_their_own_checkouts() {
     mkdir -p "${work}/other"
     cp "${work}/project/nut.toml" "${work}/other/nut.toml"
 
+    # Pinned apart by their manifests, since that is what a pin is now: a lock
+    # entry on a branch is rewritten to the head and cannot hold two projects
+    # apart.
+    sed -i.bak "s|^ref = .*|ref = \"${first}\"|"  "${work}/project/nut.toml"
+    sed -i.bak "s|^ref = .*|ref = \"${second}\"|" "${work}/other/nut.toml"
+    rm -f "${work}/project/nut.toml.bak" "${work}/other/nut.toml.bak"
+
     local dir_a dir_b
     cd "${work}/project" || return 1
-    extern_lock_write fixture "$first"
     dir_a="$(extern_path fixture)"
 
     cd "${work}/other" || return 1
-    extern_lock_write fixture "$second"
     dir_b="$(extern_path fixture)"
 
     assert_ne "$dir_a" "$dir_b" "a checkout per commit, not per ref"
@@ -578,4 +641,130 @@ it_finds_a_units_manifest_when_run_from_somewhere_else() {
         printf '%s' \"\${MARKER:-unset}\"" 2>&1)"
     assert_ok grep -q 'reached' <<<"$out"
     rm -rf "$d"
+}
+
+# --- taking the newest commit on a ref ---------------------------------------
+#
+# `nut.lock` tells a reader that deleting an entry takes the newest commit on
+# its ref again. A mirror cloned once and never fetched cannot do that: it
+# answers with whatever the ref pointed at the first time anybody asked. In the
+# case that produced these tests the answer was the dependency's first commit,
+# and months of work in it had never reached the consumer.
+
+_ex_origin() {
+    local d; d="$(mktemp -d)"
+    git -C "$d" init --quiet -b dev
+    git -C "$d" config user.email t@t; git -C "$d" config user.name t
+    mkdir -p "$d/libs"
+    printf 'first\n' > "$d/libs/thing.sh"
+    printf 'x = 1\n' > "$d/nut.toml"
+    git -C "$d" add -A; git -C "$d" commit --quiet -m first
+    printf '%s' "$d"
+}
+
+_ex_advance() {
+    printf 'second\n' > "$1/libs/thing.sh"
+    printf 'second\n' > "$1/libs/later.sh"
+    git -C "$1" add -A; git -C "$1" commit --quiet -m second
+}
+
+#[test]
+it_takes_the_newest_commit_when_the_lock_says_nothing() {
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    local before; before="$(_extern_ref_commit "$mirror" dev)"
+
+    _ex_advance "$origin"
+    _extern_refresh "$mirror" dev
+    local after; after="$(_extern_ref_commit "$mirror" dev)"
+
+    local head_only; head_only="$(git -C "$mirror" rev-parse HEAD)"
+    rm -rf "$origin" "$mirror"
+
+    assert_ne "$after" "$before"
+    # The control for the whole thing: `rev-parse HEAD` on the mirror, which is
+    # what this replaced, still answers with the old commit after the refresh.
+    assert_eq "$head_only" "$before"
+}
+
+#[test]
+it_answers_with_the_commit_it_already_has_when_the_ref_cannot_be_fetched() {
+    # A machine with no network still has whatever it cloned. A stale answer
+    # beats no answer for a tool whose job is a machine that is broken.
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    local before; before="$(_extern_ref_commit "$mirror" dev)"
+    rm -rf "$origin"
+
+    assert_ok _extern_refresh "$mirror" dev
+    local after; after="$(_extern_ref_commit "$mirror" dev)"
+    rm -rf "$mirror"
+    assert_eq "$after" "$before"
+}
+
+#[test]
+it_refuses_a_ref_the_mirror_has_never_heard_of() {
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    local rc=0
+    _extern_ref_commit "$mirror" "no-such-ref" >/dev/null 2>&1 || rc=$?
+    rm -rf "$origin" "$mirror"
+    # HEAD is the last resort and it exists, so this answers rather than fails.
+    # What must not happen is inventing a commit for a ref that is not there.
+    assert_eq "$rc" "0"
+}
+
+#[test]
+it_takes_a_commit_that_carries_a_file_the_old_one_did_not() {
+    # The shape of the failure this fixes: a consumer pinned at the first
+    # commit of a library resolved every module that existed then and none of
+    # the ones added since, and the error named the module rather than the pin.
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    _ex_advance "$origin"
+    _extern_refresh "$mirror" dev
+    local c; c="$(_extern_ref_commit "$mirror" dev)"
+    local has; has="$(git -C "$mirror" ls-tree --name-only "$c" libs/ 2>/dev/null | tr '\n' ' ')"
+    rm -rf "$origin" "$mirror"
+    assert_contains "$has" "later.sh"
+}
+
+#[test]
+it_lets_the_lockfile_win_over_a_tag_that_disagrees() {
+    # Written down because it surprises: a tag names one commit and the lock
+    # names another, and the lock is what the checkout goes to. That is right
+    # when an upstream tag has moved under a project that already resolved it,
+    # and it means a hand-edited lock silently redirects a tag pin.
+    _isolate
+    local fix work first second dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    second="${fix##* }"
+    git -C "${work}/dep" tag -a v1 -m 'v1' "$first"
+    cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "v1"|' nut.toml && rm -f nut.toml.bak
+
+    extern_lock_write fixture "$second"
+    dir="$(extern_path fixture)"
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$second"
+}
+
+#[test]
+it_resolves_the_tag_again_when_the_lock_entry_is_gone() {
+    # The way back, and the reason the behaviour above is safe: deleting the
+    # entry is how you ask for the ref to decide.
+    _isolate
+    local fix work first dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    git -C "${work}/dep" tag -a v1 -m 'v1' "$first"
+    cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "v1"|' nut.toml && rm -f nut.toml.bak
+
+    dir="$(extern_path fixture)"
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$first"
 }

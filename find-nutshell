@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell/find-nutshell - Where the interpreter is, in preference order
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# Sourced by a tool before nutshell exists, so it is plain bash and depends on
+# nothing.
+#
+# The order matters and the reason is the whole point: an installed nutshell is
+# shared by everything on the machine, and a copy inside one project is a
+# second version that drifts from it in silence. Every other package manager
+# settled this the same way. cargo keeps one shared registry and resolves the
+# toolchain separately; pnpm keeps one content-addressed store and links into
+# it; yarn 2 has no per-project tree at all. A per-project physical copy is the
+# thing that goes stale, and it went stale here twice in one day.
+#
+# So: what the caller named, then what is installed, then what is vendored. The
+# vendored copy is the fallback for a machine with nothing installed, which is
+# the machine this tool is usually rescuing.
+#
+# Usage:
+#   . "${HERE}/find-nutshell"
+#   nutshell_find "$HERE" || exit 1
+#   . "$NUTSHELL_INIT"
+# =============================================================================
+
+# Where the init was found, and how.
+NUTSHELL_INIT=""
+NUTSHELL_FROM=""
+
+# The root of a nutshell given its `init`, or nothing when that file is not one.
+_nutshell_root_of() {
+    [[ -f "${1:-}" ]] || return 1
+    # `init` alone is not proof: a tool with its own file of that name would be
+    # sourced and would fail somewhere less obvious.
+    #
+    # Read in the shell rather than through grep. This runs before anything is
+    # set up, on a machine that may be broken in ways that include its PATH,
+    # and a resolver that needs a tool to find the interpreter is a resolver
+    # that fails exactly when it is needed.
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            *NUTSHELL_VERSION*) printf '%s' "$1"; return 0 ;;
+        esac
+    done < "$1"
+    return 1
+}
+
+# Find an interpreter. Sets NUTSHELL_INIT and NUTSHELL_FROM.
+#
+# `<vendored-root>` is the project root, and the vendored copy is looked for at
+# `<root>/lib/nutshell/init`.
+nutshell_find() {
+    local root="${1:-}" cand bin
+
+    # 1. What the caller named. An override exists so somebody working on
+    #    nutshell itself can point a tool at their checkout.
+    if [[ -n "${NUTSHELL_HOME:-}" ]]; then
+        if cand="$(_nutshell_root_of "${NUTSHELL_HOME}/init")"; then
+            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="NUTSHELL_HOME"
+            return 0
+        fi
+        printf 'nutshell: NUTSHELL_HOME is %s and there is no init in it\n' \
+            "$NUTSHELL_HOME" >&2
+        return 1
+    fi
+
+    # 2. What is installed. Followed through its links, because the launcher on
+    #    PATH is usually a link into a checkout and the init sits beside it.
+    if bin="$(command -v nutshell 2>/dev/null)"; then
+        local seen=0
+        while [[ -L "$bin" ]] && (( seen < 20 )); do
+            local target; target="$(readlink "$bin")"
+            case "$target" in
+                /*) bin="$target" ;;
+                *)  bin="$(cd "$(dirname "$bin")" && pwd)/${target}" ;;
+            esac
+            seen=$(( seen + 1 ))
+        done
+        if cand="$(_nutshell_root_of "$(cd "$(dirname "$bin")/.." && pwd)/init")"; then
+            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="installed"
+            return 0
+        fi
+    fi
+
+    # 3. What is vendored, for a machine with nothing installed.
+    if [[ -n "$root" ]] && cand="$(_nutshell_root_of "${root}/lib/nutshell/init")"; then
+        NUTSHELL_INIT="$cand"; NUTSHELL_FROM="vendored"
+        return 0
+    fi
+
+    printf 'nutshell: no interpreter found. Install one, set NUTSHELL_HOME, or run:\n' >&2
+    printf '  git submodule update --init\n' >&2
+    return 1
+}
+
+# Refuse an interpreter older than the tool needs.
+#
+# A refusal naming the version, at startup, rather than a missing function
+# somewhere in the middle of a run. That is the whole difference between this
+# and `declare -F thing >/dev/null || skip` at forty call sites: the guard is
+# what a project writes when it does not know what version it has.
+#
+# Versions are `x.y.z` and compared piece by piece, so `0.10.0` is newer than
+# `0.9.0` rather than older, which is what a text compare would say.
+nutshell_at_least() {
+    local want="${1:-}" have="${NUTSHELL_VERSION:-0.0.0}"
+    [[ -n "$want" ]] || return 0
+
+    local -a w h
+    IFS=. read -r -a w <<< "$want"
+    IFS=. read -r -a h <<< "$have"
+    local i wi hi
+    for i in 0 1 2; do
+        wi="${w[$i]:-0}"; hi="${h[$i]:-0}"
+        [[ "$wi" =~ ^[0-9]+$ ]] || wi=0
+        [[ "$hi" =~ ^[0-9]+$ ]] || hi=0
+        (( hi > wi )) && return 0
+        (( hi < wi )) && {
+            printf 'nutshell %s is here and this needs %s or newer.\n' "$have" "$want" >&2
+            printf 'It came from: %s (%s)\n' "${NUTSHELL_INIT:-unknown}" "${NUTSHELL_FROM:-unknown}" >&2
+            return 1
+        }
+    done
+    return 0
+}

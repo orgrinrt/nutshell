@@ -231,3 +231,192 @@ orders, the checker's second parser, the symlink key. Written down instead:
       migration refuses to write one; a hand-edited file can still have it.
 - [ ] **`nutshell_modules` changed its output from names to paths.** Nothing
       in the tree reads it. Decide which it is and say so.
+
+## Pinning, as op wants it
+
+op, verbatim:
+
+> imports, as well as the nutshell binary itself, should be pinnable by git ref
+> (if a git dep), or a version (basically a git ref; tag). So if `dev` branch
+> is pinned, that means it's always the remote head on dev. So if the current
+> one is stale, it's evident on each call and will be fetched and updated as
+> per the pin. We should do the same thing as `renki` does, but just in bash.
+
+### The intent
+
+**A branch pin is a moving pin.** `ref = "dev"` means the remote head of `dev`,
+now, on every call: staleness is visible each time and the dependency is
+fetched and updated to match. A tag or a sha is the fixed kind. Both are "a git
+ref", and the distinction is whether the ref moves, not a separate concept.
+
+**Nutshell itself is pinnable the same way.** The interpreter is a dependency
+like any other and takes the same declaration.
+
+**`renki` is the reference**, in bash rather than whatever it is written in.
+The intent is the semantics; how much of renki's shape carries over is a
+judgement to make after reading it.
+
+op, on what the lockfile is then for:
+
+> lockfile should hold back. But if the pin is the branch itself, it's
+> implicitly meaning its head. If the pin is a specific commit or tag, then
+> that's actually something that needs to be held back by the lockfile. And
+> lockfile itself should obviously update to match each time the head moves and
+> the pinned branch head is something new
+
+So the lockfile has two jobs and which one it is doing depends on the pin. On a
+commit or a tag it holds the checkout back, which is what a lockfile is for. On
+a branch it records what the head resolved to and is rewritten every time that
+moves, which makes it a report rather than a pin.
+
+## A library that is not at the root of its repository
+
+op:
+
+> also that means nutshell should be able to depend on a nut library that is
+> not in the root of the repo, but has a path from the root. I think git has a
+> standard notation for this which should be expressible and respected on
+> nutshell's side
+
+### The intent
+
+**A dependency is a directory, not necessarily a repository.** One repository
+may carry several nut libraries and a consumer names the one it wants.
+
+On the notation: git itself has none. There is no URL form git understands that
+means "this subdirectory of that repository", because git clones repositories
+and nothing smaller. What exists is a convention borrowed by other tools, the
+double slash of go-getter and Terraform, `https://host/repo.git//sub/dir`, and
+it is theirs rather than git's. So the choice is between adopting that
+convention because people recognise it, and a second key beside `git` because
+it cannot be mistaken for something git will parse. Worth settling before it is
+built, and worth checking my claim about git rather than taking it: `git help
+clone` and `git help submodule` are where the answer is if there is one.
+
+## A shell renki
+
+op, thinking aloud rather than deciding:
+
+> I wonder if we shouldn't have a renki-sh or some subdir in the renki repo,
+> that would contain both a nut.toml for the same concept, same design, same
+> impl, but in posix compliant sh/bash. And also a raw entrypoint to source for
+> those that don't use nutshell. Could we even write attribute macros in fact,
+> on the renki rust side itself, to generate the sh version?
+
+Recorded as a question, not a mandate. What is being asked: whether the pin and
+launcher concept should exist twice, in rust and in shell, from one design; and
+whether the shell half could be generated from the rust half rather than
+written twice. The second is the interesting half and the risky one, since a
+generator that produces shell from rust attributes is a project of its own.
+
+Nothing here is scheduled.
+
+## Do not vendor the interpreter
+
+op:
+
+> Hmm. I don't think we should vendor in nutshell in the libs, honestly. Or at
+> least if there is a global nutshell interp / bin instance in path, or
+> otherwise reachable, it should be used as opposed to the vendored one, which
+> avoids random version differences between libs
+
+and, on the guard-every-call shape that comes out of it:
+
+> This problem seems like we shouldn't even have it...
+>
+> How do things like yarn 2, pnpm, cargo, deno, solve this very problem?
+
+### What those four actually do
+
+None of them keeps a per-project physical copy of anything, and none of them
+degrades when a version is wrong.
+
+**cargo** separates the toolchain from the libraries. The toolchain is resolved
+by rustup from `rust-toolchain.toml`; the libraries live in one shared
+`~/.cargo/registry` and are selected by a lockfile. A crate states the minimum
+compiler it needs with `rust-version`, and an older one is a refusal naming the
+version, never a build that half works.
+
+**pnpm** keeps one content-addressed store and makes `node_modules` a tree of
+links into it, so a version exists once on the machine however many projects
+want it. It is strict about declarations: a package may import what it declared
+and nothing else.
+
+**yarn 2** goes further and has no `node_modules` at all. One map from every
+import to a zip in the shared cache, and an undeclared import is an error.
+
+**deno** has one global cache keyed by URL with a lockfile of hashes, and the
+runtime is a single binary the project names.
+
+The two properties they share, and the two we do not have:
+
+1. **One copy per version on the machine, shared, never a copy per project.**
+   nutshell already does this for externs: `~/.cache/nutshell/externs/<key>` is
+   content-addressed by url and commit. The submodule is the exception, and it
+   is the thing that goes stale.
+2. **A wrong version is a refusal, not a degradation.** `declare -F thing ||
+   skip` at every call site is what a project writes when it does not know what
+   version it has. With a declared minimum and honest resolution the guard is
+   dead code.
+
+### The intent
+
+**The interpreter is resolved like any other dependency.** A library declares
+which nutshell it needs and a launcher on PATH finds or fetches it, the way
+rustup does for cargo and the way renki already does for its engine. A global
+one that satisfies the declaration is used in preference to anything vendored.
+
+**A dependency declares a minimum, and too old is an error at startup**, naming
+the dependency and the pin, rather than a missing function at line 426 of
+something the reader was in the middle of.
+
+Both are the same fix from two directions, and both make the guards go away.
+
+## Elevation is one step, not a mode
+
+op:
+
+> in general, I think the elevation should be nutshell api and abstracted so
+> that it only ever does a single disjoint thing elevated, then returns back to
+> original user. So it's really suDO, not just switching to su like it
+> presently behaves
+>
+> And the reason for being nutshell is that this should apply elsewhere, so we
+> don't accidentally end up writing things I expect in my home, to root's home
+> etc
+
+### The intent
+
+**One elevated step, then back.** The unit is a single thing that needs root,
+run as root, and everything around it stays the user who asked. Not a mode the
+process enters and stays in, which is what running a whole task under `sudo`
+is: `su` with extra steps.
+
+**It belongs in nutshell**, because the failure it prevents is not one tool's.
+Anything that elevates and then keeps going writes the user's files as root:
+their state directory, their cache, their config, their journal.
+
+### The evidence, from the machine, today
+
+Fetching an image needs the stick mounted, mounting needs root, so the whole
+task ran under `sudo`. The result, on the lifebook:
+
+    ~/.local/state/hulilupteri/journal        orgrinrt orgrinrt   22 lines
+    /run/hulilupteri/home/journal             root     root       10 lines
+
+Two histories of one tool, split by which user happened to run it, and the
+second one the user can no longer write: `test -w` says no. The next ordinary
+run either fails to record what it did or silently does not.
+
+Nothing was misconfigured. The tool asked for root for a reason and then kept
+it, which is the whole of the defect.
+
+### What the API has to do
+
+- run one command as root and return, with the caller's identity unchanged
+- try `sudo -n` first, so a machine needing no password never shows a prompt
+- refuse rather than hang where there is no terminal to answer a prompt on
+- name what is being elevated, so the sudo prompt and the log both say it
+- give a caller the real user's home, name and id even while the one step runs,
+  so nothing computes a path from `$HOME` at the wrong moment
+- say plainly when it cannot elevate, rather than falling back to trying anyway

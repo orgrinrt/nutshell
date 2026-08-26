@@ -122,9 +122,11 @@ extern_lock_write() {
 
     tmp="${lock}.tmp.$$"
     {
-        printf '# nut.lock - resolved dependency commits. Generated; commit it.\n'
+        printf '# nut.lock - what each dependency resolved to. Generated; commit it.\n'
         printf '#\n'
-        printf '# Delete an entry to take the newest commit on its ref again.\n'
+        printf '# A commit or a tag in nut.toml is a pin, and this holds the checkout\n'
+        printf '# there. A branch is a pin on that branch, meaning its head, and this\n'
+        printf '# records what the head was and is rewritten whenever it moves.\n'
 
         # Every other entry, carried across unchanged.
         if [[ -f "$lock" ]]; then
@@ -176,7 +178,7 @@ extern_forget() {
 #[pub]
 # Usage: extern_path shebang -> prints the checkout, fetching it once if needed
 extern_path() {
-    local name="$1" spec url ref mirror commit dir
+    local name="$1" spec url ref mirror commit dir out
 
     if [[ -n "${_EXTERN_RESOLVED[$name]:-}" ]]; then
         # Still checked, because a cached path whose checkout has been removed
@@ -194,10 +196,25 @@ extern_path() {
 
     mirror="$(_extern_mirror "$name" "$url" "$ref")" || return 1
 
-    commit="$(extern_locked "$name")" || commit=""
-    if [[ -z "$commit" ]]; then
-        commit="$(git -C "$mirror" rev-parse HEAD 2>/dev/null)" || return 1
+    # What the ref means decides whether the lock has anything to say. A branch
+    # is the remote's head of that branch now, so a recorded commit is a note
+    # about the past rather than a pin, and the lock is written rather than
+    # read. A tag or a revision names one commit, so the lock is the answer.
+    local kind="" resolved=""
+    if out="$(extern_resolve_ref "$url" "$ref")"; then
+        kind="${out%% *}"; resolved="${out#* }"
+    fi
+
+    if [[ "$kind" == "moving" ]]; then
+        commit="$resolved"
         extern_lock_write "$name" "$commit"
+    else
+        commit="$(extern_locked "$name")" || commit=""
+        if [[ -z "$commit" ]]; then
+            commit="${resolved:-$(_extern_ref_commit "$mirror" "$ref")}" || return 1
+            [[ -n "$commit" ]] || return 1
+            extern_lock_write "$name" "$commit"
+        fi
     fi
 
     dir="$(_extern_cache_root)/$(_extern_key "${url}@${commit}")"
@@ -371,6 +388,169 @@ _extern_mirror() {
 
     _extern_guard "$dir" _extern_fetch "$name" "$url" "$ref" "$dir" || return 1
     printf '%s' "$dir"
+}
+
+# -----------------------------------------------------------------------------
+# What a ref means
+# -----------------------------------------------------------------------------
+#
+# Two kinds, and the difference is whether the ref moves. A branch names the
+# remote's head of that branch, now, so the dependency comes up to it on every
+# run. A tag or a revision names one commit forever.
+#
+# A branch pin that locks itself the first time is not a pin on a branch, it is
+# a pin on whatever that branch happened to be. That is how a consumer ended up
+# holding its dependency's first commit while months of work went past it, and
+# the only symptom was a module that would not resolve.
+#
+# Asking the remote is a round trip, so the answer is kept for an hour: long
+# enough that a script in a loop does not talk to the network every time, short
+# enough that somebody who just pushed sees it on the next run.
+
+declare -gi EXTERN_BRANCH_TTL="${EXTERN_BRANCH_TTL:-3600}"
+
+# What the remote calls this ref. Prints "heads <sha>" or "tags <sha>", and
+# nothing when the remote has neither.
+#
+# The full refspec on both sides, because a bare name matches a tag as well as
+# a branch and which one wins is otherwise down to the order the remote lists
+# them. A branch wins where both exist: it is the one somebody meant to track.
+_extern_remote_ref() {
+    local url="$1" ref="$2" line sha
+    [[ -n "$ref" ]] || return 1
+
+    while IFS= read -r line; do
+        [[ "$line" == *"refs/heads/${ref}" ]] || continue
+        sha="${line%%[[:space:]]*}"
+        [[ -n "$sha" ]] && { printf 'heads %s' "$sha"; return 0; }
+    done < <(git ls-remote "$url" "refs/heads/${ref}" 2>/dev/null)
+
+    # `^{}` is the commit an annotated tag points at, and it is the one to
+    # build from; the bare line is the tag object itself.
+    local peeled="" plain=""
+    while IFS= read -r line; do
+        sha="${line%%[[:space:]]*}"
+        case "$line" in
+            *"refs/tags/${ref}^{}") peeled="$sha" ;;
+            *"refs/tags/${ref}")    plain="$sha"  ;;
+        esac
+    done < <(git ls-remote "$url" "refs/tags/${ref}" 2>/dev/null)
+    [[ -n "$peeled" ]] && { printf 'tags %s' "$peeled"; return 0; }
+    [[ -n "$plain" ]]  && { printf 'tags %s' "$plain";  return 0; }
+    return 1
+}
+
+# Where a branch resolution is remembered.
+_extern_resolution_path() {
+    printf '%s/branch-%s' "$(_extern_cache_root)" "$(_extern_key "${1}@${2}")"
+}
+
+_extern_read_resolution() {
+    local f="$1" ts sha
+    [[ -r "$f" ]] || return 1
+    { IFS= read -r ts; IFS= read -r sha; } < "$f" || return 1
+    [[ -n "$sha" ]] || return 1
+    printf '%s %s' "${ts:-0}" "$sha"
+}
+
+# The remembered resolution, if it is younger than the window.
+_extern_fresh_resolution() {
+    local out ts sha now
+    out="$(_extern_read_resolution "$1")" || return 1
+    ts="${out%% *}"; sha="${out#* }"
+    [[ "$ts" =~ ^[0-9]+$ ]] || return 1
+    now="$(date -u +%s 2>/dev/null)" || return 1
+    (( now - ts <= EXTERN_BRANCH_TTL )) || return 1
+    printf '%s' "$sha"
+}
+
+# The remembered resolution whatever its age, for when the remote cannot be
+# asked at all.
+_extern_any_resolution() {
+    local out; out="$(_extern_read_resolution "$1")" || return 1
+    printf '%s' "${out#* }"
+}
+
+_extern_remember_resolution() {
+    local f="$1" sha="$2"
+    fs_mkdir "${f%/*}" 2>/dev/null || return 0
+    printf '%s\n%s\n' "$(date -u +%s 2>/dev/null || printf 0)" "$sha" > "$f" 2>/dev/null || true
+    return 0
+}
+
+#[pub]
+# What a declared ref resolves to right now, and whether it can move.
+#
+# Prints "moving <sha>" for a branch and "fixed <sha>" for a tag or a
+# revision. A branch is asked of the remote, at most once an hour. Offline, the
+# last answer is used and said out loud: a revision that was the head an hour
+# ago is very probably still in the cache, and running from it beats refusing
+# to run on a machine somebody is in the middle of fixing.
+# Where a fixed ref and the lockfile disagree, the lockfile wins and the
+# checkout goes to the commit it names. That is what a lockfile is for and it is
+# right when an upstream tag has moved under a project that already resolved it.
+# It also means a hand-edited or damaged lock silently redirects a tag pin:
+# nothing checks that the locked commit is reachable from the ref, and deleting
+# the entry is how you ask for the ref to be resolved again.
+# Usage: extern_resolve_ref <url> <ref> -> prints "moving <sha>" or "fixed <sha>"
+extern_resolve_ref() {
+    local url="$1" ref="$2" out kind sha f
+
+    # A revision is itself, and asking a remote about it tells nobody anything.
+    if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        printf 'fixed %s' "$ref"
+        return 0
+    fi
+
+    f="$(_extern_resolution_path "$url" "$ref")"
+    if sha="$(_extern_fresh_resolution "$f")"; then
+        printf 'moving %s' "$sha"
+        return 0
+    fi
+
+    if out="$(_extern_remote_ref "$url" "$ref")"; then
+        kind="${out%% *}"; sha="${out#* }"
+        if [[ "$kind" == "heads" ]]; then
+            _extern_remember_resolution "$f" "$sha"
+            printf 'moving %s' "$sha"
+        else
+            printf 'fixed %s' "$sha"
+        fi
+        return 0
+    fi
+
+    if sha="$(_extern_any_resolution "$f")"; then
+        log_warn "could not ask ${url} about ${ref}; using the revision it named before" >&2
+        printf 'moving %s' "$sha"
+        return 0
+    fi
+    return 1
+}
+
+# Bring a mirror up to date with its ref. Best effort: a machine with no
+# network still has whatever it cloned, and a stale answer beats no answer for
+# a tool whose whole point is working on a machine that is broken.
+_extern_refresh() {
+    local mirror="$1" ref="$2"
+    [[ -n "$ref" ]] || return 0
+    # `--depth 1` because the mirror is only ever read at one commit, and the
+    # clone that made it was shallow too.
+    git -C "$mirror" fetch --quiet --depth 1 origin "$ref" 2>/dev/null || return 0
+    return 0
+}
+
+# What a ref points at in a mirror. FETCH_HEAD first, since that is what the
+# refresh just wrote; then the remote branch; then HEAD, which is the answer
+# for a mirror that was cloned at a sha.
+_extern_ref_commit() {
+    local mirror="$1" ref="$2" c
+    for c in FETCH_HEAD "origin/${ref}" "$ref" HEAD; do
+        [[ -n "$ref" || "$c" == "HEAD" ]] || continue
+        if git -C "$mirror" rev-parse --verify --quiet "${c}^{commit}" >/dev/null 2>&1; then
+            git -C "$mirror" rev-parse "${c}^{commit}" 2>/dev/null && return 0
+        fi
+    done
+    return 1
 }
 
 # _extern_fetch <name> <url> <ref> <dir>

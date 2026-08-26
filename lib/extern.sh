@@ -401,6 +401,14 @@ extern_resolve() {
     rest="${spec#*::}"
     [[ "$name" == "$spec" ]] && return 1
 
+    # `::` separates modules the whole way down. A `/` is refused rather than
+    # handed to the filesystem, which is what made it work by accident.
+    if [[ "$rest" == */* ]]; then
+        log_error "'${spec}' separates modules with '/'; use '::': ${spec//\//::}"
+        return 1
+    fi
+    rest="${rest//:://}"
+
     root="$(extern_path "$name")" || return 1
 
     # Two shapes, tried in order: a library laid out as `libs/<group>/<mod>.sh`,

@@ -437,3 +437,59 @@ it_does_not_hand_back_a_checkout_that_has_gone() {
     extern_path fixture >/dev/null 2>&1 || true
     assert_empty "${_EXTERN_RESOLVED[fixture]:-}"
 }
+
+# --- how a module path is spelled ----------------------------------------------
+#
+# `::` separates modules the whole way down. A `/` used to work, because the
+# tail was handed to the filesystem unchanged, so `shebang::tui/key` found the
+# file and read as two different separators in one path. It is refused now, and
+# the refusal names the spelling that works.
+
+#[test]
+it_takes_a_nested_module_separated_all_the_way_down() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/dep/libs/tui"
+    printf 'MARKER=reached\n' > "$d/dep/libs/tui/key.sh"
+    printf '[meta]\nname="dep"\n' > "$d/dep/nut.toml"
+    extern_path() { printf '%s/dep' "$d"; }
+    local out; out="$(extern_resolve 'dep::tui::key')"
+    assert_eq "$out" "$d/dep/libs/tui/key.sh"
+    unset -f extern_path
+    rm -rf "$d"
+}
+
+#[test]
+it_refuses_a_module_path_that_uses_a_slash() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/dep/libs/tui"
+    printf 'MARKER=reached\n' > "$d/dep/libs/tui/key.sh"
+    extern_path() { printf '%s/dep' "$d"; }
+    # The file is right there. It is still refused, because a separator that
+    # works by accident ends up used in half the call sites and not the other.
+    assert_fails extern_resolve 'dep::tui/key'
+    unset -f extern_path
+    rm -rf "$d"
+}
+
+#[test]
+it_says_the_spelling_that_would_have_worked() {
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/dep/libs/tui"
+    : > "$d/dep/libs/tui/key.sh"
+    extern_path() { printf '%s/dep' "$d"; }
+    out="$(extern_resolve 'dep::tui/key' 2>&1 || true)"
+    assert_ok grep -q 'dep::tui::key' <<<"$out"
+    unset -f extern_path
+    rm -rf "$d"
+}
+
+#[test]
+it_still_takes_a_flat_module() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/dep/lib"
+    : > "$d/dep/lib/plain.sh"
+    extern_path() { printf '%s/dep' "$d"; }
+    assert_eq "$(extern_resolve 'dep::plain')" "$d/dep/lib/plain.sh"
+    unset -f extern_path
+    rm -rf "$d"
+}

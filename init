@@ -147,6 +147,25 @@ use() {
     done
 }
 
+# _use_mod_fragment <rest>
+#
+# The path fragment a module path names. `::` separates modules the whole way
+# down, so `tui::key` is the `key` module of the `tui` group and reads the same
+# as the `shebang::` that got you there.
+#
+# A `/` is refused rather than translated. It worked for a while, because the
+# tail was handed to the filesystem unchanged, and a separator that works by
+# accident is one that half the call sites end up using.
+_use_mod_fragment() {
+    local rest="$1"
+    if [[ "$rest" == */* ]]; then
+        echo "nutshell: '${rest}' separates modules with '/'" >&2
+        echo "  use '::' the whole way down: ${rest//\//::}" >&2
+        return 1
+    fi
+    printf '%s' "${rest//:://}"
+}
+
 # _use_super_resolve <rest>
 #
 # The file `super::<rest>` names, from the unit's own manifest directory. The
@@ -158,6 +177,7 @@ use() {
 # something the author did not write and did not mean.
 _use_super_resolve() {
     local rest="$1" from="$2" root candidate dir
+    rest="$(_use_mod_fragment "$rest")" || return 1
 
     # Walk up from the file that wrote the `use`, not from the entry point.
     #

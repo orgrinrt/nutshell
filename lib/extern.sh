@@ -407,9 +407,25 @@ extern_resolve() {
         log_error "'${spec}' separates modules with '/'; use '::': ${spec//\//::}"
         return 1
     fi
+    local declared="${spec#*::}"
     rest="${rest//:://}"
 
     root="$(extern_path "$name")" || return 1
+
+    # A library that declares its modules is answered from the declaration and
+    # from nowhere else. Falling back to a search would put the guessing back
+    # underneath the declaration, where a wrong entry resolves anyway and
+    # nothing says so.
+    if [[ -r "${root}/lib.nut" ]]; then
+        local from_nut
+        if from_nut="$(_lib_nut_lookup "$root" "$declared" public)"; then
+            [[ -f "$from_nut" ]] && { printf '%s' "$from_nut"; return 0; }
+            log_error "${name}'s lib.nut declares '${declared}' at ${from_nut#$root/}, which is not there"
+            return 1
+        fi
+        log_error "'${declared}' is not among the modules ${name} declares"
+        return 1
+    fi
 
     # Two shapes, tried in order: a library laid out as `libs/<group>/<mod>.sh`,
     # and a flat `lib/<mod>.sh` like nutshell's own. Nothing else is guessed at,

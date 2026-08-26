@@ -43,8 +43,14 @@ export PATH="${_NUTSHELL_ROOT}/bin:$PATH"
 # Module tracking
 # =============================================================================
 
-# Track loaded modules to avoid double-sourcing
+# What has been loaded, keyed by the file rather than by the words that asked
+# for it. One module is reachable by several names: its own unit calls it
+# `super::tui::key`, a consumer calls it `shebang::tui::key`, and both are the
+# same file. Keyed by the spelling, each of those loaded it again, and a module
+# without a guard of its own ran twice.
 declare -gA _NUTSHELL_LOADED=() 2>/dev/null || declare -A _NUTSHELL_LOADED=()
+# The names that reached each file, so `nutshell_loaded <name>` still answers.
+declare -gA _NUTSHELL_LOADED_AS=() 2>/dev/null || declare -A _NUTSHELL_LOADED_AS=()
 
 # nut_once
 #
@@ -89,8 +95,9 @@ nut_once() {
 use() {
     local mod
     for mod in "$@"; do
-        # Skip if already loaded
-        [[ -n "${_NUTSHELL_LOADED[$mod]:-}" ]] && continue
+        # A name already known to point at a loaded file, answered without
+        # touching the filesystem.
+        [[ -n "${_NUTSHELL_LOADED_AS[$mod]:-}" ]] && continue
         
         # Find and source the module
         # A namespaced module comes from a library declared in nut.toml, so
@@ -125,18 +132,32 @@ use() {
             mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
         fi
         if [[ -f "$mod_path" ]]; then
+            # The file decides identity, so a module reached by two names is
+            # loaded once. Canonical, because a relative path and an absolute
+            # one naming the same file are the same module.
+            local _real
+            _real="$(cd "${mod_path%/*}" 2>/dev/null && printf '%s/%s' "$PWD" "${mod_path##*/}")" \
+                || _real="$mod_path"
+
+            if [[ -n "${_NUTSHELL_LOADED[$_real]:-}" ]]; then
+                _NUTSHELL_LOADED_AS[$mod]="$_real"
+                continue
+            fi
+
             # Marked before sourcing, not after. A module that declares its own
             # dependencies can be part of a cycle, and marking afterwards means
             # neither module in one is ever recorded as loaded while it is being
             # loaded, so the pair recurses until the stack gives out. Marking
             # first makes the second entry a no-op, which is what "already
             # loading" should mean.
-            _NUTSHELL_LOADED[$mod]=1
+            _NUTSHELL_LOADED[$_real]=1
+            _NUTSHELL_LOADED_AS[$mod]="$_real"
             if ! source "$mod_path"; then
                 # Failed to load, so it is not loaded. Leaving the mark would
                 # make a later retry silently succeed against a module that was
                 # never sourced.
-                unset "_NUTSHELL_LOADED[$mod]"
+                unset "_NUTSHELL_LOADED[$_real]"
+                unset "_NUTSHELL_LOADED_AS[$mod]"
                 return 1
             fi
         else
@@ -145,6 +166,63 @@ use() {
             return 1
         fi
     done
+}
+
+# _lib_nut_lookup <root> <module-path>
+#
+# The file a library says a module lives in, from the `lib.nut` at its root.
+#
+# A library declares what it provides, in one place, instead of the resolver
+# guessing among three layouts and taking whichever answered first. That guess
+# is why a module could be found in the wrong place and why nothing could say,
+# before running, that a name would not resolve. A declaration turns "no file
+# answered" into "not in the tree", which is checkable without running
+# anything.
+#
+# The format is one module per line, `<module-path> <file>`, because this is
+# read before any module is loaded and the TOML parser is itself a module. A
+# declaration file needing a parser you must load a module to obtain is a cycle
+# at the very bottom of the stack.
+#
+#   # anything after a hash is a comment
+#   log                 lib/log.sh
+#   tui::term           libs/tui/term.sh
+#   json::impl::jq      lib/json/impl/jq.sh      internal
+#
+# `internal` means the library's own file, reachable by `super::` from inside
+# and not by name from outside. Files picked at runtime by capability, like the
+# json and fs implementations, are that: they are sourced directly by the
+# module that chooses between them, and were never modules anybody names.
+# The third argument, when given, is the visibility a caller is allowed to
+# reach: `any` from inside the unit, `public` from outside it.
+_lib_nut_lookup() {
+    local root="$1" want="$2" reach="${3:-any}" name file vis
+    [[ -r "${root}/lib.nut" ]] || return 1
+    while read -r name file vis; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        [[ "$name" == "$want" ]] || continue
+        [[ -n "$file" ]] || return 1
+        if [[ "$reach" == "public" && "${vis:-}" == "internal" ]]; then
+            echo "nutshell: '${want}' is internal to that library" >&2
+            return 1
+        fi
+        printf '%s/%s' "$root" "$file"
+        return 0
+    done < "${root}/lib.nut"
+    return 1
+}
+
+# _lib_nut_modules <root>
+#
+# Every module a library declares, one per line. For the checker, and for an
+# error that can list what was actually available.
+_lib_nut_modules() {
+    local root="$1" name _rest
+    [[ -r "${root}/lib.nut" ]] || return 1
+    while read -r name _rest; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        printf '%s\n' "$name"
+    done < "${root}/lib.nut"
 }
 
 # _use_mod_fragment <rest>
@@ -177,6 +255,7 @@ _use_mod_fragment() {
 # something the author did not write and did not mean.
 _use_super_resolve() {
     local rest="$1" from="$2" root candidate dir
+    local declared="$rest"
     rest="$(_use_mod_fragment "$rest")" || return 1
 
     # Walk up from the file that wrote the `use`, not from the entry point.
@@ -204,6 +283,20 @@ _use_super_resolve() {
         echo "  super:: names this unit's own lib/, and the manifest is what marks the unit" >&2
         return 1
     fi
+    # What the unit declares, if it declares anything. A library with a lib.nut
+    # is answered from it and nowhere else: falling back to a search would put
+    # the guessing back under the declaration and hide a wrong entry.
+    if [[ -r "${root}/lib.nut" ]]; then
+        candidate="$(_lib_nut_lookup "$root" "$declared")" || {
+            echo "nutshell: '${declared}' is not in this unit's lib.nut" >&2
+            echo "  it declares: $(_lib_nut_modules "$root" | tr '\n' ' ')" >&2
+            return 1
+        }
+        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+        echo "nutshell: lib.nut declares '${declared}' at ${candidate#$root/}, which is not there" >&2
+        return 1
+    fi
+
     for candidate in "${root}/lib/${rest}.sh" "${root}/libs/${rest}.sh" "${root}/${rest}.sh"; do
         [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
     done
@@ -275,6 +368,10 @@ export -f use
 # Check if a module is loaded
 # Usage: if nutshell_loaded json; then ...
 nutshell_loaded() {
+    # By name, because that is what a caller has. The name is looked up to a
+    # file first, so a module loaded as `super::x` answers yes when asked about
+    # `dep::x` too, which is the same module.
+    [[ -n "${_NUTSHELL_LOADED_AS[$1]:-}" ]] && return 0
     [[ -n "${_NUTSHELL_LOADED[$1]:-}" ]]
 }
 export -f nutshell_loaded

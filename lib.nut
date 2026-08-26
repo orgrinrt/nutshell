@@ -27,6 +27,7 @@ nutshell                 nutshell.sh
 os                       lib/os.sh
 priv                     lib/priv.sh
 prompt                   lib/prompt.sh
+srcfile                  lib/srcfile.sh
 string                   lib/string.sh
 test                     lib/test.sh
 text                     lib/text.sh

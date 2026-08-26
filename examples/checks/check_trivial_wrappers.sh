@@ -134,77 +134,53 @@ count_global_usages() {
 # Extract meaningful code lines from a function body
 # Excludes: comments, blank lines, local declarations, opening/closing braces
 get_meaningful_lines() {
-    local file="$1"
-    local func_name="$2"
-    
-    # Find the line number where the function starts
-    local func_line
-    func_line=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    
-    if [[ -z "$func_line" ]]; then
-        # Try alternate syntax: function name() or function name ()
-        func_line=$(grep -n "^[[:space:]]*function[[:space:]]\+${func_name}[[:space:]]*(" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    fi
-    
-    [[ -z "$func_line" ]] && return
-    
-    # Find the closing brace - simple heuristic: next line starting with }
-    # This works for most well-formatted shell functions
-    local end_line
-    end_line=$(tail -n "+$((func_line + 1))" "$file" | grep -n "^}" | head -1 | cut -d: -f1)
-    
-    if [[ -z "$end_line" ]]; then
-        # Fallback: look for } at start of line with possible whitespace
-        end_line=$(tail -n "+$((func_line + 1))" "$file" | grep -n "^[[:space:]]*}[[:space:]]*$" | head -1 | cut -d: -f1)
-    fi
-    
-    [[ -z "$end_line" ]] && return
-    
-    # Adjust end_line to be absolute (it's relative to func_line+1)
-    end_line=$((func_line + end_line))
-    
-    # Extract lines between func start and end, filter out non-meaningful lines
-    sed -n "$((func_line + 1)),$((end_line - 1))p" "$file" 2>/dev/null | \
-        grep -v '^[[:space:]]*#' | \
-        grep -v '^[[:space:]]*$' | \
-        grep -v '^[[:space:]]*local[[:space:]]' | \
-        grep -v '^[[:space:]]*readonly[[:space:]]' | \
-        grep -v '^[[:space:]]*return[[:space:]]*$' | \
-        grep -v '^[[:space:]]*return[[:space:]]\+\$?' | \
-        grep -v '^[[:space:]]*}[[:space:]]*$'
+    local -a __body=()
+    nut_body_of "$1" "$2" __body || return
+    (( ${#__body[@]} > 0 )) && printf '%s\n' "${__body[@]}"
+    return 0
 }
 
 # Count meaningful lines in a function
 count_meaningful_lines() {
-    local file="$1"
-    local func_name="$2"
-    
-    get_meaningful_lines "$file" "$func_name" | wc -l | tr -d ' '
+    local -a __body=()
+    nut_body_of "$1" "$2" __body || { printf '0'; return; }
+    printf '%s' "${#__body[@]}"
 }
 
 # Count unique variables used in function body
 count_variables_used() {
-    local file="$1"
-    local func_name="$2"
-    
-    get_meaningful_lines "$file" "$func_name" | \
-        grep -oE '\$\{?[a-zA-Z_][a-zA-Z0-9_]*' | \
-        sed 's/[${}]//g' | \
-        sort -u | \
-        wc -l | \
-        tr -d ' '
+    local -a __body=()
+    nut_body_of "$1" "$2" __body || { printf '0'; return; }
+    # A five-stage pipeline per function, in the shell instead. `grep -oE`,
+    # `sed`, `sort -u`, `wc` and `tr` is five processes to count distinct names
+    # in a handful of lines the shell is already holding.
+    local -A seen=()
+    local line rest name
+    for line in "${__body[@]}"; do
+        rest="$line"
+        while [[ "$rest" =~ \$\{?([a-zA-Z_][a-zA-Z0-9_]*) ]]; do
+            name="${BASH_REMATCH[1]}"
+            seen["$name"]=1
+            rest="${rest#*"${BASH_REMATCH[0]}"}"
+        done
+    done
+    printf '%s' "${#seen[@]}"
 }
 
 # Count tokens (complexity indicator) in function body
 count_tokens() {
-    local file="$1"
-    local func_name="$2"
-    
-    get_meaningful_lines "$file" "$func_name" | \
-        tr -s '[:space:]' '\n' | \
-        grep -v '^$' | \
-        wc -l | \
-        tr -d ' '
+    local -a __body=()
+    nut_body_of "$1" "$2" __body || { printf '0'; return; }
+    # Word splitting is the shell's own job; `tr | grep | wc | tr` is four
+    # processes to ask it.
+    local line n=0
+    local -a words=()
+    for line in "${__body[@]}"; do
+        # shellcheck disable=SC2206
+        words=($line)
+        n=$(( n + ${#words[@]} ))
+    done
+    printf '%s' "$n"
 }
 
 # Analyze a single function for trivial wrapper status
@@ -310,6 +286,7 @@ test_trivial_wrappers() {
         local file_issues=""
         
         # In this shell, before anything reads it from a subshell.
+        nut_load_file "$file" || true
         tw_load_exemptions "$file"
 
         # Get all functions in this file

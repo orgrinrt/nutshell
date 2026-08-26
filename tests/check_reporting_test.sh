@@ -66,3 +66,60 @@ exit 0')"
     _crp_run "$d" >/dev/null
     assert_eq "$(grep -c . "$d/ran.log" 2>/dev/null || printf 0)" "1"
 }
+
+# --- the verdict is an exit code, not a glyph in the output --------------------
+#
+# `exit_with_status` promised "2 on warnings only" in its own usage line and
+# had two branches that never returned 2. So the only way the runner could tell
+# a warning from a clean pass was to grep tens of kilobytes of the child's
+# stdout for the character it prints, which needs quiet mode to have left the
+# line in and needs whichever `grep` is installed to read the pattern the same
+# way. A check reporting 23 warnings came out as a clean pass.
+
+#[test]
+it_reports_warnings_through_the_exit_code() {
+    local d; d="$(_crp_project warned '
+. "'"$_CRP_NUT"'/init"
+use check-runner
+log_warn_test() { :; }
+TESTS_WARNED=1
+exit_with_status')"
+    local out; out="$(_crp_run "$d")"
+    assert_contains "$out" "⚠"
+    assert_fails grep -q '✓ probe' <<<"$out"
+}
+
+#[test]
+it_reports_a_clean_run_as_clean() {
+    local d; d="$(_crp_project clean '
+. "'"$_CRP_NUT"'/init"
+use check-runner
+exit_with_status')"
+    local out; out="$(_crp_run "$d")"
+    assert_fails grep -q '⚠' <<<"$out"
+}
+
+#[test]
+it_still_reads_the_glyph_from_a_check_that_cannot_say_two() {
+    # A custom check that does not use the framework has no `exit_with_status`
+    # to call, so the fallback stays.
+    local d; d="$(_crp_project glyphonly '
+printf "  ⚠ something wants a look\n"
+exit 0')"
+    local out; out="$(_crp_run "$d")"
+    assert_contains "$out" "⚠"
+}
+
+#[test]
+it_does_not_ask_a_warning_to_explain_itself() {
+    # Re-running is for a failure that said nothing. A warning is not a
+    # failure, and asking cost a whole second run of the check.
+    local d; d="$(_crp_project quietwarn '
+. "'"$_CRP_NUT"'/init"
+use check-runner
+printf "%s\n" "ran" >> "$PWD/ran.log"
+TESTS_WARNED=1
+exit_with_status')"
+    _crp_run "$d" >/dev/null
+    assert_eq "$(grep -c . "$d/ran.log" 2>/dev/null || printf 0)" "1"
+}

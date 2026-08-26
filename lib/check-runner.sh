@@ -37,6 +37,7 @@ NUTSHELL_DEFAULTS_FILE="${NUTSHELL_ROOT}/examples/configs/empty.nut.toml"
 # that loads its dependencies invisibly is exactly the case that check exists
 # to catch, so the framework running it must not be the one exception.
 use log validate toml attr string
+use srcfile
 
 # =============================================================================
 # PATHS - Determined after config is loaded
@@ -44,6 +45,8 @@ use log validate toml attr string
 
 # These are set by _framework_init after config discovery
 REPO_ROOT=""
+# Whether a passing check prints a line. Resolved once by `_framework_init`.
+declare -g SHOW_PASSING="true"
 LIB_DIR=""
 CONFIG_FILE=""
 
@@ -353,6 +356,9 @@ _framework_init() {
         LIB_DIR="${REPO_ROOT}/${lib_dir_config}"
     fi
     
+    # Resolved here so the loggers do not go back to the file. See `log_pass`.
+    SHOW_PASSING="$(cfg_get_or "output.show_passing" "true")"
+
     # Cache exclude paths
     cfg_get_array "paths.exclude" NUT_EXCLUDE_PATHS || NUT_EXCLUDE_PATHS=()
     
@@ -456,11 +462,16 @@ log_test() {
 log_pass() {
     TESTS_PASSED=$((TESTS_PASSED + 1))
     TESTS_RUN=$((TESTS_RUN + 1))
-    
-    local show_passing
-    show_passing="$(cfg_get_or "output.show_passing" "true")"
-    
-    if is_truthy "$show_passing"; then
+
+    # Read once, at init, rather than per passing check.
+    #
+    # This ran a full TOML parse every time a check passed. `cfg_get_or` does
+    # cache, but a check runs its per-item work inside a command substitution
+    # and a subshell's cache dies when it returns, so the cache never held.
+    # Traced over one run of the docs check: 318 config lookups, 312 of them
+    # this one key, each re-parsing the whole file line by line and character
+    # by character. It was most of the run.
+    if is_truthy "$SHOW_PASSING"; then
         echo -e "${GREEN}  ✓${NC} $*"
     fi
 }
@@ -763,10 +774,21 @@ print_summary() {
 }
 
 # Exit with appropriate code based on test results
+#
+# The 2 is what this always said it did and never did. Its own usage line
+# promised "2 on warnings only" while the body had two branches and returned 0
+# for a run with warnings in it, so the only way the runner could tell a warning
+# from a clean pass was to grep the child's output for the glyph it prints.
+#
+# That is why a check with 23 warnings could be reported as a clean pass: the
+# grep is over tens of kilobytes of a child's stdout, it depends on quiet mode
+# leaving the line in, on which `grep` is installed, and on the glyph surviving
+# the pipe. A verdict belongs in an exit code.
 #[pub]
 # Usage: exit_with_status -> does not return; exits 0 clean, 1 on failures, 2 on warnings only
 exit_with_status() {
     [[ $TESTS_FAILED -gt 0 ]] && exit 1
+    [[ $TESTS_WARNED -gt 0 ]] && exit 2
     exit 0
 }
 

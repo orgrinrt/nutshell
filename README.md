@@ -54,6 +54,12 @@ ${NUTSHELL_STORE:-~/.local/share/nutshell}/
 cache directory, because a cache is something a cleaner is entitled to delete
 and this is where every project's dependencies actually live.
 
+The store used to sit under the cache directory. Nothing migrates it: what was
+there is reproducible, so the first resolution after upgrading fetches into the
+new place and the old directory is left for you to delete. It is
+`${XDG_CACHE_HOME:-~/.cache}/nutshell` on Linux and
+`~/Library/Caches/nutshell` on macOS.
+
 A tool resolves in this order: `NUTSHELL_HOME` if it is set, then an installed
 interpreter if it satisfies what the tool asked for, then the store, then a
 fetch into the store, then whatever the project has vendored. One shared

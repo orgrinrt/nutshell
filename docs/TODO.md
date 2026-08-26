@@ -211,3 +211,23 @@ same regex for the loc escape hatch, and `trivial_wrapper` is named at both
 - [ ] **viola should read TOML.** It has JSON already, so the schema carries
       over without redesign. Filed here because there is no agenda tool on this
       machine to file it in; move it when there is.
+
+## Left from the module-system review
+
+Acted on: the stub recursion, the two guards keyed differently, super:: cached
+globally, the bare-`use` bypass, the missing third layout, the two precedence
+orders, the checker's second parser, the symlink key. Written down instead:
+
+- [ ] **`extern_resolve` runs inside a command substitution, so its memo dies
+      in the subshell.** `lib/extern.sh` writes `_EXTERN_RESOLVED[...]` and
+      `use` calls it as `$( )`, so every resolution pays full price. Measured
+      at 421ms for eight modules in the review. The fix is a resolver that
+      returns through a variable rather than through stdout, which touches
+      every caller.
+- [ ] **A declared path is not confined to the library root.** `../../etc/x`
+      in a `lib.nut` resolves. A declaration is written by the library's own
+      author, so this is not a trust boundary, but it should still refuse.
+- [ ] **Duplicate names inside one `lib.nut` are accepted, first wins.** The
+      migration refuses to write one; a hand-edited file can still have it.
+- [ ] **`nutshell_modules` changed its output from names to paths.** Nothing
+      in the tree reads it. Decide which it is and say so.

@@ -235,6 +235,110 @@ arm_memfs_table() {
     printf '%s' "$last"
 }
 
+# G: slots addressed by arithmetic, with the caller holding the index.
+#
+#    The table is `_g0.._gN`, and a lookup is one `eval` on a name built from a
+#    number. No per-character encoding anywhere, because nothing has to turn a
+#    key into a name: whatever resolved the key once handed back the index and
+#    the caller kept it.
+#
+#    This is the ceiling for the technique, and it is not a map. It is what a
+#    map becomes once the key lookup has already happened, so it says what the
+#    key lookup is actually costing in every other arm.
+arm_slots_by_index() {
+    local i last=""
+    for (( i = 0; i < ENTRIES; i++ )); do eval "_g${i}=\${VALS[\$i]}"; done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        eval "last=\${_g$(( i * ENTRIES / LOOKUPS )):-}"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        eval "last=\${_g$(( ENTRIES + i )):-MISS}"
+    done
+    printf '%s' "$last"
+}
+
+# G2: the same slots, several fields per entry, addressed by stride.
+#
+#     `_h$(( i * 3 + f ))` is a record of three fields. Whether striding costs
+#     anything over one field is the question; the arithmetic is native and the
+#     name is still just a number.
+arm_slots_by_stride() {
+    local i last="" base
+    for (( i = 0; i < ENTRIES; i++ )); do
+        base=$(( i * 3 ))
+        eval "_h${base}=\${KEYS[\$i]}"
+        eval "_h$(( base + 1 ))=\${VALS[\$i]}"
+        eval "_h$(( base + 2 ))=\$i"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        base=$(( (i * ENTRIES / LOOKUPS) * 3 ))
+        eval "last=\${_h$(( base + 1 )):-}"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        base=$(( (ENTRIES + i) * 3 ))
+        eval "last=\${_h$(( base + 1 )):-MISS}"
+    done
+    printf '%s' "$last"
+}
+
+# H: a hash table built by hand over those slots.
+#
+#    The honest version of "index it yourself": hash the key with shell
+#    arithmetic, probe linearly on collision, store key and value side by side
+#    so a probe can tell a hit from a neighbour. This is what it costs to keep
+#    string keys without the shell's own symbol table doing the work.
+#
+#    The hash is over every character, which is where the cost goes, and that
+#    is the point of measuring it: the shell's symbol table hashes in C.
+_hash_into() {
+    local __s="${2:-}" __n __i __h=5381 __c
+    __n=${#__s}
+    for (( __i = 0; __i < __n; __i++ )); do
+        printf -v __c '%d' "'${__s:__i:1}"
+        __h=$(( (__h * 33 + __c) & 0x7fffffff ))
+    done
+    printf -v "$1" '%d' "$(( __h % BUCKETS ))"
+}
+
+arm_hand_rolled_hash() {
+    local BUCKETS=$(( ENTRIES * 2 ))
+    local i last="" h probe k
+    for (( i = 0; i < ENTRIES; i++ )); do
+        _hash_into h "${KEYS[$i]}"
+        probe=$h
+        while :; do
+            eval "k=\${_kk${probe}+set}"
+            [[ -z "$k" ]] && break
+            probe=$(( (probe + 1) % BUCKETS ))
+        done
+        eval "_kk${probe}=\${KEYS[\$i]}"
+        eval "_vv${probe}=\${VALS[\$i]}"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        local want="${KEYS[$(( i * ENTRIES / LOOKUPS ))]}"
+        _hash_into h "$want"
+        probe=$h; last="MISS"
+        while :; do
+            eval "k=\${_kk${probe}-}"
+            [[ -z "$k" ]] && break
+            if [[ "$k" == "$want" ]]; then eval "last=\${_vv${probe}}"; break; fi
+            probe=$(( (probe + 1) % BUCKETS ))
+        done
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        local want="no/such-key.sh:$i"
+        _hash_into h "$want"
+        probe=$h; last="MISS"
+        while :; do
+            eval "k=\${_kk${probe}-}"
+            [[ -z "$k" ]] && break
+            if [[ "$k" == "$want" ]]; then eval "last=\${_vv${probe}}"; break; fi
+            probe=$(( (probe + 1) % BUCKETS ))
+        done
+    done
+    printf '%s' "$last"
+}
+
 # -----------------------------------------------------------------------------
 # Running them
 # -----------------------------------------------------------------------------
@@ -259,16 +363,20 @@ main() {
     printf '  host      %s %s\n\n' "$(uname -s)" "$(uname -m)"
 
     local -a names=(arm_bash_assoc arm_eval_names arm_eval_names_nofork
-                    arm_one_string arm_one_file arm_dir_table arm_memfs_table)
+                    arm_one_string arm_one_file arm_dir_table arm_memfs_table
+                    arm_slots_by_index arm_slots_by_stride arm_hand_rolled_hash)
     local -a labels=("bash declare -A" "eval names, encoded via subshell"
                      "eval names, encoded in place" "one string, scanned"
                      "one file, read in shell" "one file per key"
-                     "one file per key, in memory")
+                     "one file per key, in memory"
+                     "slots by index, caller holds it"
+                     "slots by stride, three fields"
+                     "hash table rolled by hand")
     # Above these sizes an arm takes long enough that running it stops being
     # worth the wait. Stated per arm rather than hidden, because which arms
     # have a ceiling at all is itself the result: the two that address a key
     # directly have none.
-    local -a ceiling=(0 4000 0 800 4000 0 0)
+    local -a ceiling=(0 4000 0 800 4000 0 0 0 0 4000)
     local -a took=()
     local i t base=""
 

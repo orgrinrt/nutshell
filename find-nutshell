@@ -77,13 +77,21 @@ nutshell_find() {
     # remote cannot be reached. This is the shape op settled on for every other
     # dependency, and the interpreter is not an exception to it.
     if [[ -n "$want" ]] && ! _nutshell_is_version "$want"; then
+        # What the caller named still wins, before the remote is asked. An
+        # override that is quietly ignored is worse than one that fails, and a
+        # test suite that exports this must not be sent to the network by every
+        # child process it starts.
+        if [[ -n "${NUTSHELL_HOME:-}" ]]; then
+            if cand="$(_nutshell_root_of "${NUTSHELL_HOME}/init")"; then
+                NUTSHELL_INIT="$cand"; NUTSHELL_FROM="NUTSHELL_HOME"
+                return 0
+            fi
+            printf 'nutshell: NUTSHELL_HOME is %s and there is no init in it\n' \
+                "$NUTSHELL_HOME" >&2
+            return 1
+        fi
         if cand="$(_nutshell_branch "$want")"; then
             NUTSHELL_INIT="$cand"; NUTSHELL_FROM="branch:${want}"
-            return 0
-        fi
-        if [[ -n "${NUTSHELL_HOME:-}" ]] \
-           && cand="$(_nutshell_root_of "${NUTSHELL_HOME}/init")"; then
-            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="NUTSHELL_HOME"
             return 0
         fi
         if [[ -n "$root" ]] \

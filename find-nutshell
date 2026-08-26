@@ -71,6 +71,31 @@ _nutshell_root_of() {
 nutshell_find() {
     local root="${1:-}" want="${2:-}" cand bin
 
+    # A branch pin is not a floor, it is an identity: `dev` means the head of
+    # dev, today. Nothing already on the machine can be assumed to be that, so
+    # it is resolved against the remote first and only falls through when the
+    # remote cannot be reached. This is the shape op settled on for every other
+    # dependency, and the interpreter is not an exception to it.
+    if [[ -n "$want" ]] && ! _nutshell_is_version "$want"; then
+        if cand="$(_nutshell_branch "$want")"; then
+            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="branch:${want}"
+            return 0
+        fi
+        if [[ -n "${NUTSHELL_HOME:-}" ]] \
+           && cand="$(_nutshell_root_of "${NUTSHELL_HOME}/init")"; then
+            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="NUTSHELL_HOME"
+            return 0
+        fi
+        if [[ -n "$root" ]] \
+           && cand="$(_nutshell_root_of "${root}/lib/nutshell/init")"; then
+            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="vendored"
+            return 0
+        fi
+        printf 'nutshell: could not reach %s and there is no copy here\n' \
+            "$want" >&2
+        return 1
+    fi
+
     # 1. What the caller named. An override exists so somebody working on
     #    nutshell itself can point a tool at their checkout.
     if [[ -n "${NUTSHELL_HOME:-}" ]]; then
@@ -131,9 +156,90 @@ nutshell_find() {
         return 0
     fi
 
-    printf 'nutshell: no interpreter found. Install one, set NUTSHELL_HOME, or run:\n' >&2
-    printf '  git submodule update --init\n' >&2
+    # Named in the order somebody would actually reach for them. The submodule
+    # advice that used to be here assumed every consumer vendored a checkout,
+    # which is the arrangement this file exists to make unnecessary.
+    printf 'nutshell: nothing here satisfies %s. Any of:\n' "${want:-any version}" >&2
+    printf '  NUTSHELL_HOME=/path/to/a/nutshell   point at a checkout\n' >&2
+    printf '  install one on PATH                 shared by everything\n' >&2
+    printf '  tag %s on the remote              so it can be fetched\n' "${want:-the version}" >&2
     return 1
+}
+
+# Does this name a version, or a branch? Versions are digits and dots, so
+# anything else is a ref. `0.4.0` and `dev` are the two shapes a pin takes.
+_nutshell_is_version() {
+    [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+)*$ ]]
+}
+
+# The head of a branch, as a checkout in the store, refreshed when it moves.
+#
+# Kept under `branches/` so it cannot collide with the version directories,
+# whose names are checked against their own contents. A branch checkout has no
+# such invariant: the version inside it changes whenever the branch does, and
+# that is the point of pinning one.
+#
+# The remote is asked at most once an hour. A pin that means "the head" and
+# checks on every invocation turns a shell prompt into a network client; one
+# that never checks is not a branch pin at all.
+_nutshell_branch() {
+    local ref="$1" store dir stamp remote head now last
+    store="$(nutshell_toolchain_dir)/branches"
+    dir="${store}/${ref}"
+    stamp="${dir}.checked"
+    remote="${NUTSHELL_REMOTE:-https://github.com/orgrinrt/nutshell.git}"
+
+    now="$(date +%s 2>/dev/null)" || now=0
+    last=0
+    [[ -r "$stamp" ]] && read -r last < "$stamp" 2>/dev/null
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+
+    # Inside the window, what is here is what the pin means.
+    if [[ -f "${dir}/init" ]] \
+       && (( now - last < ${NUTSHELL_BRANCH_TTL:-3600} )); then
+        printf '%s' "${dir}/init"
+        return 0
+    fi
+
+    command -v git >/dev/null 2>&1 || {
+        [[ -f "${dir}/init" ]] && { printf '%s' "${dir}/init"; return 0; }
+        return 1
+    }
+
+    head="$(git ls-remote "$remote" "refs/heads/${ref}" 2>/dev/null)"
+    head="${head%%[[:space:]]*}"
+    if [[ -z "$head" ]]; then
+        # Offline, or no such branch. What is already here is better than
+        # nothing, and stale is a thing this can say rather than pretend about.
+        if [[ -f "${dir}/init" ]]; then
+            printf 'nutshell: could not reach %s, using the %s already here\n' \
+                "$remote" "$ref" >&2
+            printf '%s' "${dir}/init"
+            return 0
+        fi
+        return 1
+    fi
+
+    if [[ -f "${dir}/init" ]] \
+       && [[ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" == "$head" ]]; then
+        mkdir -p "$store" 2>/dev/null && printf '%s\n' "$now" > "$stamp"
+        printf '%s' "${dir}/init"
+        return 0
+    fi
+
+    mkdir -p "$store" 2>/dev/null || return 1
+    local tmp="${dir}.fetching.$$"
+    rm -rf "$tmp"
+    printf 'nutshell: %s moved, fetching\n' "$ref" >&2
+    if ! git clone --quiet --depth 1 --branch "$ref" "$remote" "$tmp" 2>/dev/null; then
+        rm -rf "$tmp"
+        [[ -f "${dir}/init" ]] && { printf '%s' "${dir}/init"; return 0; }
+        return 1
+    fi
+    rm -rf "$dir"
+    mv "$tmp" "$dir" || { rm -rf "$tmp"; return 1; }
+    printf '%s\n' "$now" > "$stamp"
+    printf '%s' "${dir}/init"
 }
 
 #[pub]

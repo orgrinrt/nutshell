@@ -520,3 +520,61 @@ is shared as data rather than copied as prose in two languages.
 A `renki-sh` subdirectory remains reasonable on top of that if a Rust project
 ever wants the launcher half in shell. It is a second consumer of the same
 fixtures, not a way of avoiding the second implementation.
+
+## The git ref is the version, and the constant in `init` is the parallel system
+
+> okay the problem is that you have invented a parallel disjoint system from the
+> git we target here. you have some env var / const-like for the version, but
+> that is redundant. The git tag *is* the version. If none, then its version is
+> the commit hash
+
+> you should let the nut.toml version pin handle the fetch. No reason to pin a
+> version while we are actively developing. Just pin to dev and it keeps always
+> up-to-date with latest dev, that's what we want
+
+**The intent: identity comes from git and from nowhere else.** A tag is the
+version; with no tag the commit hash is the version. A pin is a git ref, and a
+branch pin means that branch's head, always. Nothing declares a version about
+itself in a file.
+
+### What this falsifies
+
+Named before what it enables, because a closed gap reads as progress while a
+falsified claim announces nothing.
+
+- **`init:29`'s `NUTSHELL_VERSION`.** A constant somebody has to remember to
+  bump, which is why `main` says 0.2.0, `dev` says 0.4.0, and neither is a fact
+  about the code. It goes.
+- **`find-nutshell:_nutshell_version_of`.** Reads that constant out of `init`
+  without sourcing it. The whole function exists to serve the constant.
+- **The store's name-equals-contents invariant.** `nutshell_toolchains` skips a
+  directory whose `init` disagrees with its directory name. With git as the
+  identity there is nothing to disagree: the directory is a checkout and
+  `git -C dir describe --tags --always` says what it is.
+- **`_nutshell_num` and the prerelease ordering.** Already unreachable, as the
+  review found. Under git identity the question is whether a ref resolves, not
+  how a suffix sorts.
+- **`nutshell_at_least`, and `HULI_NEEDS_NUTSHELL` as a floor.** A floor is a
+  statement about the constant. A consumer pins a ref; if it needs a specific
+  tag it names that tag.
+- **`_nutshell_fetch`'s `--branch "$want"` with a version-shaped want.** Right
+  by accident, because tags here are bare. It should be resolving a ref.
+
+### What it should be instead
+
+The pin lives in `nut.toml` beside every other dependency, one shape for all of
+them, `git` and `ref`. `ref` is a branch, a tag or a commit. A branch is
+resolved with `git ls-remote`, TTL cached, which `lib/extern.sh` already does
+for externs in `extern_resolve_ref`; the interpreter stops being the exception
+that has its own arrangement.
+
+The store is keyed by the resolved commit, not by a version string, which is
+also what makes two consumers on one commit share a checkout. `nutshell --version`
+answers from `git describe --tags --always --dirty` in its own checkout.
+
+**Interim state, so the next reader is not misled.** `find-nutshell` on
+`feat/toolchains` now takes a branch ref as well as a version, and hulilupteri
+pins `dev` through it, so the working shape is already the right one. What is
+underneath it is still the constant: the version arm, the store's naming rule
+and `nutshell_at_least` are all live. This is a half-migration and it should not
+be described as anything else until the constant is gone.

@@ -369,5 +369,10 @@ export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
 
 # Sourced, not executed, so the script runs in this environment with `use`
 # already defined.
+#
+# By the absolute path, never by the bare name it was typed as: `source` with a
+# no-slash argument searches PATH first, so `nutshell test` in a directory
+# holding a script called `test` sourced `/bin/test` and reported that a binary
+# cannot be executed. The file the argument named was right there.
 # shellcheck source=/dev/null
-source "$_SCRIPT"
+source "$NUTSHELL_SCRIPT"

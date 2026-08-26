@@ -397,3 +397,128 @@ it_does_not_close_a_literal_body_on_a_basic_delimiter() {
     rm -rf "$d"
     assert_contains "$got" "and ends after"
 }
+
+#[test]
+it_decodes_an_escaped_quote_in_a_basic_string() {
+    # TOML gives a basic string escapes. Handing back the backslashes means a
+    # value never survives a write and a read, and every consumer that spliced
+    # the result into a command got a stray backslash.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "say \\"hi\\""\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" a.v)"
+    rm -rf "$d"
+    assert_eq "$got" 'say "hi"'
+}
+
+#[test]
+it_decodes_a_backslash_and_the_named_escapes() {
+    local d; d="$(mktemp -d)"
+    printf '[a]\np = "C:\\\\tools"\nt = "one\\ttwo"\n' > "$d/t.toml"
+    local p t
+    p="$(toml_get "$d/t.toml" a.p)"
+    t="$(toml_get "$d/t.toml" a.t)"
+    rm -rf "$d"
+    assert_eq "$p" 'C:\tools'
+    assert_eq "$t" "$(printf 'one\ttwo')"
+}
+
+#[test]
+it_decodes_a_unicode_escape() {
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "caf\\u00e9"\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" a.v)"
+    rm -rf "$d"
+    assert_eq "$got" "café"
+}
+
+#[test]
+it_keeps_a_backslash_that_starts_no_escape() {
+    # Not every backslash is an escape. Eating one that introduces nothing
+    # loses a character with no warning.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "a\\qb"\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" a.v)"
+    rm -rf "$d"
+    assert_eq "$got" 'a\qb'
+}
+
+#[test]
+it_leaves_a_literal_string_exactly_as_typed() {
+    # The control: a literal string has no escapes at all, so decoding one is
+    # as wrong as failing to decode a basic string.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = \047C:\\tools\047\n' > "$d/t.toml"
+    local got; got="$(toml_get "$d/t.toml" a.v)"
+    rm -rf "$d"
+    assert_eq "$got" 'C:\tools'
+}
+
+#[test]
+it_does_not_end_a_basic_string_at_an_escaped_quote() {
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "he said \\"no\\" #1"\nw = 5\n' > "$d/t.toml"
+    local v w
+    v="$(toml_get "$d/t.toml" a.v)"
+    w="$(toml_get "$d/t.toml" a.w)"
+    rm -rf "$d"
+    assert_eq "$v" 'he said "no" #1'
+    assert_eq "$w" "5"
+}
+
+#[test]
+it_keeps_a_hash_after_a_single_escaped_quote_on_the_hot_path() {
+    # `_toml_clean_into` is the copy every value read goes through, and the
+    # escaped-quote fix landed only in `_toml_clean_line`. The two cases the
+    # suite had both carried an even number of escaped quotes before the `#`,
+    # where the broken counting cancels out and gets the right answer by luck.
+    # One is the shape that breaks.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "a \\" b # c"\nafter = 5\n' > "$d/t.toml"
+    local v after
+    v="$(toml_get "$d/t.toml" a.v)"
+    after="$(toml_get "$d/t.toml" a.after)"
+    rm -rf "$d"
+    assert_eq "$v" 'a " b # c'
+    assert_eq "$after" "5"
+}
+
+#[test]
+it_cleans_a_line_the_same_way_through_both_cleaners() {
+    # Two implementations of one rule is two places for it to be wrong, and
+    # only one of them was fixed. Whatever they answer, they answer together.
+    local -a cases=(
+        'v = "a \" b # c"'
+        'v = "a \" b \" c # d"'
+        'v = "plain # hash"'
+        "v = 'literal # hash'"
+        'v = 1  # a real comment'
+        'v = "trailing backslash \\\\"'
+    )
+    local c into wrong=""
+    for c in "${cases[@]}"; do
+        _toml_clean_into into "$c"
+        [[ "$into" == "$(_toml_clean_line "$c")" ]] || wrong="${wrong} [${c}]"
+    done
+    assert_empty "$wrong"
+}
+
+#[test]
+it_has_a_detector_that_notices_the_two_cleaners_disagreeing() {
+    # The control for the comparison above: it has to be able to see a
+    # difference, or its silence means nothing.
+    local into
+    _toml_clean_into into 'v = 1  # comment'
+    assert_ne "$into" "$(_toml_clean_line 'v = 2  # comment')"
+    assert_eq "$into" "$(_toml_clean_line 'v = 1  # comment')"
+}
+
+#[test]
+it_reads_a_section_pair_with_an_escaped_quote_in_it() {
+    # `toml_section_pairs` goes through the hot-path cleaner too.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "say \\" now"\nn = 2\n' > "$d/t.toml"
+    local pairs; pairs="$(toml_section_pairs "$d/t.toml" a)"
+    rm -rf "$d"
+    assert_contains "$pairs" 'say " now'
+    assert_contains "$pairs" "n=2"
+}

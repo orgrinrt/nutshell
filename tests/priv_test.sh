@@ -405,6 +405,39 @@ it_keeps_the_arguments_apart_through_runuser() {
 }
 
 #[test]
+it_quotes_every_metacharacter_so_any_posix_shell_reads_it_back() {
+    # `printf %q` was doing this, and it emits bash's `$'...'` for a tab, a
+    # newline or a control character. `dash` is `/bin/sh` on Debian and Ubuntu
+    # and reads that as the four characters it is written with, so the path
+    # arrived silently wrong. This function writes a person's files as that
+    # person; a mangled path is root writing somewhere nobody asked it to.
+    #
+    # The round trip is through `sh`, and asserts the argument comes back as
+    # itself rather than pinning a spelling.
+    #
+    # It cannot catch the bash-only form on a machine whose `sh` is bash, which
+    # macOS is, so it passes there either way. The case below it is the one
+    # that holds everywhere; this one is what says the replacement is correct.
+    local sh; sh="$(command -v sh)"
+    local t q back
+    for t in "plain" "/home/some body" "$(printf 'a\tb')" "it's" 'a$b' 'a*b' \
+             'a"b' 'a\b' 'a;b' 'a|b' 'a`b`' 'a&b' 'a
+b' "" "-x"; do
+        q="$(_priv_sq "$t")"
+        back="$("$sh" -c "printf %s $q")"
+        assert_eq "$back" "$t"
+    done
+}
+
+#[test]
+it_does_not_reach_for_the_bash_only_quoting_form() {
+    # The specific thing that was wrong, stated as its own case so a later
+    # change back to `printf %q` fails here rather than on somebody's Debian.
+    local q; q="$(_priv_sq "$(printf 'a\tb')")"
+    assert_fails grep -q "\$'" <<<"$q"
+}
+
+#[test]
 it_keeps_the_arguments_apart_through_su_which_goes_via_a_shell() {
     _priv_as_root
     _priv_stubs su
@@ -445,4 +478,16 @@ it_says_so_when_there_is_no_way_to_step_down_at_all() {
     priv_as_user "reading" true 2>/dev/null || rc=$?
     _priv_stubs_end; _priv_as_root_end
     assert_ne "$rc" "0"
+}
+
+#[test]
+it_does_not_pass_su_a_flag_only_one_su_has() {
+    _priv_as_root
+    _priv_stubs su
+    local out; out="$(priv_as_user "reading" true)"
+    _priv_stubs_end; _priv_as_root_end
+    # `-s` is util-linux. BSD and macOS `su` is `su [-] [-flm] [login [args]]`
+    # and refuses it, and this is the branch a busybox rescue console takes.
+    assert_fails grep -qx -- "-s" <<<"$out"
+    assert_contains "$out" "somebody"
 }

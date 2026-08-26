@@ -111,6 +111,22 @@ priv_uid()  { _priv_learn_user; printf '%s' "$PRIV_UID"; }
 # Usage: priv_user_home -> a path
 priv_user_home() { _priv_learn_user; printf '%s' "$PRIV_HOME"; }
 
+# One argument, quoted so any POSIX shell reads it back as itself.
+#
+# Not `printf %q`. That emits bash's ANSI-C form for anything holding a tab, a
+# newline or a control character, and `$'...'` is a bashism: dash, which is
+# `/bin/sh` on Debian and Ubuntu, reads `$'\t'` as the four characters and the
+# path arrives silently wrong. This function's whole job is writing a person's
+# files as that person, so a mangled path is root writing somewhere nobody
+# asked it to.
+#
+# Single quotes take everything literally, so the only character needing work
+# is the single quote itself: close, escape it outside the quotes, reopen.
+_priv_sq() {
+    local s="${1:-}"
+    printf "'%s'" "${s//\'/\'\\\'\'}"
+}
+
 #[pub]
 # Run one step as the person, from inside something that elevated.
 #
@@ -149,8 +165,11 @@ priv_as_user() {
             # back into one string. Every other route avoids that.
             su)
                 local q="" a
-                for a in "$@"; do q+="${q:+ }$(printf '%q' "$a")"; done
-                su -s /bin/sh "$u" -c "$q"
+                for a in "$@"; do q+="${q:+ }$(_priv_sq "$a")"; done
+                # No `-s`. That flag is util-linux; BSD and macOS `su` is
+                # `su [-] [-flm] [login [args]]` and refuses it, and this is
+                # the branch a busybox rescue console actually takes.
+                su "$u" -c "$q"
                 return $?
                 ;;
         esac

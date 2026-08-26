@@ -49,17 +49,28 @@ _nutshell_root_of() {
     return 1
 }
 
-# Find an interpreter. Sets NUTSHELL_INIT and NUTSHELL_FROM.
+# Find an interpreter that satisfies the caller. Sets NUTSHELL_INIT and
+# NUTSHELL_FROM.
 #
 # `<vendored-root>` is the project root, and the vendored copy is looked for at
-# `<root>/lib/nutshell/init`.
+# `<root>/lib/nutshell/init`. `<minimum>` is the oldest version the caller can
+# use, and a candidate older than it is skipped rather than taken.
+#
+# Skipped rather than taken is the whole of it. Preferring an installed
+# interpreter is right; preferring one that cannot run the caller is not, and
+# taking it and failing afterwards is how a tool ends up reporting a missing
+# function instead of a version. This is what rustup does for cargo: resolve to
+# something that satisfies the requirement, not to whichever came first.
 nutshell_find() {
-    local root="${1:-}" cand bin
+    local root="${1:-}" want="${2:-}" cand bin
 
     # 1. What the caller named. An override exists so somebody working on
     #    nutshell itself can point a tool at their checkout.
     if [[ -n "${NUTSHELL_HOME:-}" ]]; then
         if cand="$(_nutshell_root_of "${NUTSHELL_HOME}/init")"; then
+            # What the caller named is taken even when it is too old. An
+            # override that is quietly ignored is worse than one that fails,
+            # and somebody working on nutshell itself needs it honoured.
             NUTSHELL_INIT="$cand"; NUTSHELL_FROM="NUTSHELL_HOME"
             return 0
         fi
@@ -81,8 +92,14 @@ nutshell_find() {
             seen=$(( seen + 1 ))
         done
         if cand="$(_nutshell_root_of "$(cd "$(dirname "$bin")/.." && pwd)/init")"; then
-            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="installed"
-            return 0
+            if _nutshell_satisfies "$cand" "$want"; then
+                NUTSHELL_INIT="$cand"; NUTSHELL_FROM="installed"
+                return 0
+            fi
+            # Said out loud. Silently falling through to the vendored copy
+            # would hide exactly the version skew this is here to surface.
+            printf 'nutshell: the installed one at %s is %s and this needs %s; using the vendored copy\n' \
+                "$cand" "$(_nutshell_version_of "$cand")" "$want" >&2
         fi
     fi
 
@@ -95,6 +112,47 @@ nutshell_find() {
     printf 'nutshell: no interpreter found. Install one, set NUTSHELL_HOME, or run:\n' >&2
     printf '  git submodule update --init\n' >&2
     return 1
+}
+
+# The version an interpreter reports, without loading it. Reading the file
+# rather than sourcing it, because a candidate that is about to be rejected must
+# not be allowed to run first.
+_nutshell_version_of() {
+    local init="$1" line
+    [[ -r "$init" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            *NUTSHELL_VERSION=*)
+                line="${line#*NUTSHELL_VERSION=}"
+                # The quotes come off first: trimming at the first character
+                # that is not a digit or a dot would trim at the opening quote
+                # and answer with nothing.
+                line="${line#[\"\']}"
+                line="${line%%[!0-9.]*}"
+                [[ -n "$line" ]] || continue
+                printf '%s' "$line"; return 0 ;;
+        esac
+    done < "$init"
+    return 1
+}
+
+# Is this candidate new enough? No minimum means anything will do.
+_nutshell_satisfies() {
+    local init="$1" want="${2:-}" have
+    [[ -n "$want" ]] || return 0
+    have="$(_nutshell_version_of "$init")" || return 1
+    local -a w h
+    IFS=. read -r -a w <<< "$want"
+    IFS=. read -r -a h <<< "$have"
+    local i wi hi
+    for i in 0 1 2; do
+        wi="${w[$i]:-0}"; hi="${h[$i]:-0}"
+        [[ "$wi" =~ ^[0-9]+$ ]] || wi=0
+        [[ "$hi" =~ ^[0-9]+$ ]] || hi=0
+        (( hi > wi )) && return 0
+        (( hi < wi )) && return 1
+    done
+    return 0
 }
 
 # Refuse an interpreter older than the tool needs.

@@ -170,3 +170,102 @@ it_finds_the_interpreter_with_nothing_on_the_path_at_all() {
     rm -rf "$root"; _reset
     assert_eq "$from" "vendored"
 }
+
+# --- resolving to something that can actually run the caller -------------------
+#
+# Both copies on the machine this was written on reported `0.3.0` while only one
+# had the feature the caller needed, so a floor of `0.3.0` passed against an
+# interpreter that could not run it. A version that does not move with the code
+# is not a version, and preferring an installed one that cannot run the caller
+# is not a preference worth having.
+
+#[test]
+it_reads_a_version_without_running_the_interpreter() {
+    # Read rather than sourced: a candidate about to be rejected must not be
+    # given the chance to run first.
+    local d; d="$(mktemp -d)"; _fake_nutshell "$d/n" "1.2.3"
+    local v; v="$(_nutshell_version_of "$d/n/init")"
+    rm -rf "$d"
+    assert_eq "$v" "1.2.3"
+}
+
+#[test]
+it_takes_the_quotes_off_the_version() {
+    # Trimming at the first character that is not a digit or a dot trims at the
+    # opening quote and answers with nothing.
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/n"
+    printf 'export NUTSHELL_VERSION="0.4.0"\n' > "$d/n/init"
+    local v; v="$(_nutshell_version_of "$d/n/init")"
+    rm -rf "$d"
+    assert_eq "$v" "0.4.0"
+}
+
+#[test]
+it_skips_an_installed_one_that_is_too_old() {
+    _reset
+    local d; d="$(mktemp -d)"; _fake_nutshell "$d/installed" "0.3.0"
+    local root; root="$(mktemp -d)"; _fake_nutshell "$root/lib/nutshell" "0.4.0"
+    PATH="$d/installed/bin:$PATH" nutshell_find "$root" "0.4.0" 2>/dev/null
+    local from="$NUTSHELL_FROM"
+    rm -rf "$d" "$root"; _reset
+    assert_eq "$from" "vendored"
+}
+
+#[test]
+it_says_out_loud_when_it_skips_the_installed_one() {
+    # Silently falling through would hide exactly the version skew this exists
+    # to surface.
+    _reset
+    local d; d="$(mktemp -d)"; _fake_nutshell "$d/installed" "0.3.0"
+    local root; root="$(mktemp -d)"; _fake_nutshell "$root/lib/nutshell" "0.4.0"
+    local out
+    out="$(PATH="$d/installed/bin:$PATH" nutshell_find "$root" "0.4.0" 2>&1)"
+    rm -rf "$d" "$root"; _reset
+    assert_contains "$out" "0.3.0"
+    assert_contains "$out" "0.4.0"
+}
+
+#[test]
+it_still_prefers_an_installed_one_that_is_new_enough() {
+    # The control. Skipping the too-old must not stop it preferring the rest.
+    _reset
+    local d; d="$(mktemp -d)"; _fake_nutshell "$d/installed" "0.5.0"
+    local root; root="$(mktemp -d)"; _fake_nutshell "$root/lib/nutshell" "0.4.0"
+    PATH="$d/installed/bin:$PATH" nutshell_find "$root" "0.4.0"
+    local from="$NUTSHELL_FROM"
+    rm -rf "$d" "$root"; _reset
+    assert_eq "$from" "installed"
+}
+
+#[test]
+it_prefers_an_installed_one_when_no_minimum_is_named() {
+    _reset
+    local d; d="$(mktemp -d)"; _fake_nutshell "$d/installed" "0.1.0"
+    local root; root="$(mktemp -d)"; _fake_nutshell "$root/lib/nutshell" "9.9.9"
+    PATH="$d/installed/bin:$PATH" nutshell_find "$root"
+    local from="$NUTSHELL_FROM"
+    rm -rf "$d" "$root"; _reset
+    assert_eq "$from" "installed"
+}
+
+#[test]
+it_honours_a_named_home_even_when_it_is_too_old() {
+    # An override quietly ignored is worse than one that fails, and somebody
+    # working on nutshell itself needs theirs honoured.
+    _reset
+    local d; d="$(mktemp -d)"; _fake_nutshell "$d/named" "0.0.1"
+    local root; root="$(mktemp -d)"; _fake_nutshell "$root/lib/nutshell" "9.9.9"
+    NUTSHELL_HOME="$d/named" nutshell_find "$root" "0.4.0"
+    local from="$NUTSHELL_FROM"
+    rm -rf "$d" "$root"; _reset
+    assert_eq "$from" "NUTSHELL_HOME"
+}
+
+#[test]
+it_compares_the_pieces_as_numbers_when_choosing_too() {
+    local d; d="$(mktemp -d)"; _fake_nutshell "$d/n" "0.10.0"
+    assert_ok    _nutshell_satisfies "$d/n/init" "0.9.0"
+    assert_fails _nutshell_satisfies "$d/n/init" "0.11.0"
+    rm -rf "$d"
+}

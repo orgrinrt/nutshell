@@ -18,9 +18,13 @@
 # =============================================================================
 
 [meta]
+# The schema's version, not nutshell's. `examples/configs/empty.nut.toml` says
+# so where the field is documented, and a review read it as a third claim about
+# what nutshell is, next to `init`'s constant and the newest tag. Said here so
+# the next reader does not have to go and check.
 version = "1.0.0"
-name = "Tough Configuration"
-description = "Strict conventions. No compromises. No technical debt."
+name = "nutshell"
+description = "Everything you need, in a nutshell. Strict conventions, no compromises."
 
 # -----------------------------------------------------------------------------
 # Paths

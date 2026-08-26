@@ -44,15 +44,26 @@ is not on the machine yet is fetched at its tag rather than being a failure. A
 machine carrying four of them is the ordinary state.
 
 ```
-${NUTSHELL_STORE:-~/.local/share/nutshell}/
+<store>/
   externs/       one directory per url and commit
   toolchains/    one directory per version
+  toolchains/branches/<ref>/<revision>/
 ```
+
+The store is `${XDG_DATA_HOME:-~/.local/share}/nutshell` on Linux and
+`~/Library/Application Support/nutshell` on macOS. Both are where that platform
+puts application data, which is the point: it is not the cache directory.
 
 `NUTSHELL_STORE` moves the root, `NUTSHELL_TOOLCHAINS` just the toolchains, and
 `NUTSHELL_REMOTE` says where a fetch goes. Under the data directory and not the
 cache directory, because a cache is something a cleaner is entitled to delete
 and this is where every project's dependencies actually live.
+
+A pin that names a version gets a directory named for that version, and one
+that names a branch gets a directory named for the revision that branch
+resolved to. The second is what makes the store safe to share: a revision
+directory is written once and never replaced, so somebody else's push cannot
+delete the tree a running interpreter is reading out of.
 
 The store used to sit under the cache directory. Nothing migrates it: what was
 there is reproducible, so the first resolution after upgrading fetches into the
@@ -60,12 +71,20 @@ new place and the old directory is left for you to delete. It is
 `${XDG_CACHE_HOME:-~/.cache}/nutshell` on Linux and
 `~/Library/Caches/nutshell` on macOS.
 
-A tool resolves in this order: `NUTSHELL_HOME` if it is set, then an installed
-interpreter if it satisfies what the tool asked for, then the store, then a
-fetch into the store, then whatever the project has vendored. One shared
-interpreter that everything uses is still the good state; the store is for the
-tools that cannot use it, and the vendored copy is the last resort for a
-machine with no network.
+A pin that names a version resolves in this order: `NUTSHELL_HOME` if it is
+set, then an installed interpreter if it satisfies what the tool asked for,
+then the store, then a fetch into the store, then whatever the project has
+vendored. One shared interpreter that everything uses is still the good state;
+the store is for the tools that cannot use it, and the vendored copy is the
+last resort for a machine with no network.
+
+A pin that names a branch is a different question and takes a different route:
+`NUTSHELL_HOME`, then the branch's head, then vendored. It does not consult the
+installed interpreter or the version store, because neither can answer it. A
+branch pin is not a floor, it is an identity: `dev` means the head of dev
+today, and nothing already on the machine can be assumed to be that. The remote
+is asked at most once an hour, and when it cannot be reached the last known
+revision runs and says which one it is.
 
 ---
 

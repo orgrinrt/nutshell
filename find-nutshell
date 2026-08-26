@@ -14,10 +14,15 @@
 # keyed by version, one resolution step in front of it, and a fetch when the
 # asked-for one is not there yet.
 #
-# The order: what the caller named, then what is installed if it satisfies,
-# then the store, then a fetch into the store, then whatever is vendored. Only
-# the last of those is a compromise, and it is there for the machine with no
-# network that this tool is usually rescuing.
+# The order for a version pin: what the caller named, then what is installed if
+# it satisfies, then the store, then a fetch into the store, then whatever is
+# vendored. Only the last of those is a compromise, and it is there for the
+# machine with no network that this tool is usually rescuing.
+#
+# A branch pin takes a different route and it is stated here because the two
+# get conflated: what the caller named, then the branch's head, then vendored.
+# Neither the installed interpreter nor the version store can answer a branch
+# pin, so neither is consulted. Why, at `nutshell_find`.
 #
 # Preferring an installed interpreter over the store is deliberate. One shared
 # nutshell that everything uses is the good state; the store exists for the
@@ -77,6 +82,16 @@ nutshell_find() {
     # remote cannot be reached. This is the shape op settled on for every other
     # dependency, and the interpreter is not an exception to it.
     if [[ -n "$want" ]] && ! _nutshell_is_version "$want"; then
+        # Said before anything is attempted, because the message at the bottom
+        # of this branch reports what could not be reached and nothing was.
+        # `feat/toolchains` is a legal branch name and is not a directory name
+        # here; the limit is real and it should not read as a network failure.
+        if ! _nutshell_safe_name "$want"; then
+            printf 'nutshell: %s cannot name a toolchain directory, so it cannot be pinned\n' \
+                "$want" >&2
+            printf '  a ref here is one path component: no slash, no leading dot, no space\n' >&2
+            return 1
+        fi
         # What the caller named still wins, before the remote is asked. An
         # override that is quietly ignored is worse than one that fails, and a
         # test suite that exports this must not be sent to the network by every

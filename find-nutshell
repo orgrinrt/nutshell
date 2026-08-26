@@ -44,7 +44,13 @@
 NUTSHELL_INIT=""
 NUTSHELL_FROM=""
 
-# The root of a nutshell given its `init`, or nothing when that file is not one.
+# An `init` path, given one, when the file at it really is a nutshell's.
+#
+# Named `_nutshell_root_of` and documented as returning the root. It returns
+# the init path, and every caller assigns it to `NUTSHELL_INIT`, so the
+# behaviour was right and the name and the comment were both false. Left named
+# this way rather than renamed here: this file is copied verbatim into
+# consumers and a rename is a change every copy has to take at once.
 _nutshell_root_of() {
     [[ -f "${1:-}" ]] || return 1
     # `init` alone is not proof: a tool with its own file of that name would be

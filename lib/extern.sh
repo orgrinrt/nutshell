@@ -178,6 +178,17 @@ extern_declared() {
 # git will answer for them. None of that can change while a script runs, and a
 # program taking five modules out of one library paid it five times -- about
 # four hundred milliseconds before anything of its own happened.
+# What has been resolved this process.
+#
+# It reads as a working memo and has never been one: everything that writes to
+# it is reached through a command substitution, so the assignment happens in a
+# subshell and is gone when that returns. The per-process property callers
+# actually get comes from `init`'s loaded-module table short-circuiting the
+# `use` before this is reached.
+#
+# Left in place rather than deleted, because `extern_forget` is a public door
+# onto it and removing that is a change for consumers. Marked so the next
+# person to optimise this path does not find it and believe it.
 declare -gA _EXTERN_RESOLVED=()
 
 #[pub]

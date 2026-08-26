@@ -15,10 +15,27 @@
 # be no way to tell. The config counts for the same reason: the thresholds come
 # out of `nut.toml` and they are what the answer was measured against.
 #
-# Freshness is decided with `-nt` rather than by hashing. A hash is a process
-# per file, which is the cost this is trying to avoid; the file test is a stat
-# the shell does itself. The trade is that touching a file without changing it
-# re-runs the check, which is the harmless direction to be wrong in.
+# Freshness is a recorded stamp, not `-nt`.
+#
+# `-nt` only sees mtime moving forward, and `tar -x`, `rsync -a`, `cp -p` and
+# `touch -t` all move it backward. A review reproduced it: content replaced
+# wholesale, mtime set to 2000, and the cache served "no findings" for the new
+# file. That is the one direction a cache must never be wrong in, and the
+# header used to assert it could not happen.
+#
+# So an entry records what its inputs were, and a hit needs every one to match:
+# the file's mtime and size, the same for the check script and the config, the
+# newest mtime anywhere under the interpreter, and a format number.
+#
+# The interpreter is in there because a check is not one file. Editing
+# `lib/srcfile.sh` changes what `check_trivial_wrappers` reports while touching
+# neither the check nor the config, and op's ruling is explicit that a check
+# gaining a step has to read everything again.
+#
+# The stamps come from one `stat` for every input at once rather than one per
+# file, because a fork per lookup is the cost this exists to avoid, and the
+# first version of this cache was measurably slower than no cache for exactly
+# that reason.
 #
 # Usage:
 #   use checkcache
@@ -43,6 +60,59 @@ fi
 # worse than a check that is slow.
 declare -g NUT_CACHE_ENABLED="${NUT_CACHE:-0}"
 
+# Bumped when the entry format or the meaning of a stamp changes, so entries
+# written by an older nutshell are misses rather than lies.
+declare -g _NUT_CACHE_FORMAT=2
+
+declare -gA _NUT_CACHE_STAMP=()
+declare -g  _NUT_CACHE_BASE=""
+
+# `<mtime> <size>` for a set of paths, in one call.
+_nut_cache_stat_into() {
+    local out line path
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        _NUT_CACHE_STAMP["${line#* * }"]="${line%% * *} ${line#* }"
+    done < <(
+        if stat -f '%m %z %N' "$@" 2>/dev/null; then :
+        else stat -c '%Y %s %n' "$@" 2>/dev/null; fi
+    )
+    return 0
+}
+
+# The stamp for one path, or nothing when it could not be read.
+_nut_cache_stamp_of() {
+    local p="${1:-}" v
+    [[ -n "$p" ]] || return 1
+    v="${_NUT_CACHE_STAMP[$p]:-}"
+    if [[ -z "$v" ]]; then
+        _nut_cache_stat_into "$p"
+        v="${_NUT_CACHE_STAMP[$p]:-}"
+    fi
+    [[ -n "$v" ]] || return 1
+    printf '%s' "${v%% *} ${v##* }"
+}
+
+# What every entry shares: the interpreter's newest file and the format.
+#
+# One `find` per run, not per file. Editing any module under the interpreter
+# moves it and every entry becomes a miss, which is the coarse but correct
+# answer to "the checker is more than one file".
+_nut_cache_base() {
+    [[ -n "$_NUT_CACHE_BASE" ]] && { printf '%s' "$_NUT_CACHE_BASE"; return 0; }
+    local root="${NUTSHELL_ROOT:-}" newest=""
+    if [[ -n "$root" && -d "$root/lib" ]]; then
+        newest="$(find "$root/lib" -type f -newer "$root/lib" -print 2>/dev/null | head -1)"
+        newest="$(
+            if stat -f '%m' "$root/lib" "$root/init" 2>/dev/null; then :
+            else stat -c '%Y' "$root/lib" "$root/init" 2>/dev/null; fi
+        )"
+        newest="${newest//$'\n'/-}"
+    fi
+    _NUT_CACHE_BASE="f${_NUT_CACHE_FORMAT}:${newest:-none}"
+    printf '%s' "$_NUT_CACHE_BASE"
+}
+
 # Where an answer is kept. Under the store, beside the toolchains and externs,
 # because it is derived data about this machine and not part of any project.
 _nut_cache_root() {
@@ -57,61 +127,83 @@ _nut_cache_root() {
     printf '%s/nutshell/checks' "${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}"
 }
 
-# One file's answer, for one check. The path a source file flattens to.
+# One file's answer, for one check.
+#
+# The path is percent-encoded rather than flattened. Replacing every `/` with
+# `_` maps `lib/toml/json.sh` and `lib/toml_json.sh` onto one entry, and the
+# answer for one is then served for the other.
+_nut_cache_escape() {
+    local in="${1:-}" out="" i c
+    for (( i = 0; i < ${#in}; i++ )); do
+        c="${in:i:1}"
+        case "$c" in
+            [A-Za-z0-9._-]) out+="$c" ;;
+            *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
 _nut_cache_path() {
-    local check="${1:-}" file="${2:-}" flat
+    local check="${1:-}" file="${2:-}"
     [[ -n "$check" && -n "$file" ]] || return 1
-    flat="${file//\//_}"
-    flat="${flat//[^A-Za-z0-9._-]/_}"
-    printf '%s/%s/%s' "$(_nut_cache_root)" "${check//[^A-Za-z0-9._-]/_}" "$flat"
+    printf '%s/%s/%s' "$(_nut_cache_root)" \
+        "$(_nut_cache_escape "$check")" "$(_nut_cache_escape "$file")"
+}
+
+# Everything an entry's freshness depends on, as one line.
+_nut_cache_key() {
+    local file="${1:-}" src="${NUT_CACHE_CHECKER:-}" cfg="${CONFIG_FILE:-}"
+    local sf sc sg
+    sf="$(_nut_cache_stamp_of "$file")" || return 1
+    sc="$(_nut_cache_stamp_of "$src")"  || return 1
+    sg="$(_nut_cache_stamp_of "$cfg")"  || return 1
+    printf '%s|%s|%s|%s' "$(_nut_cache_base)" "$sf" "$sc" "$sg"
 }
 
 #[pub]
 # Is there an answer for this file that nothing has invalidated?
 #
-# Fresh means newer than the file, newer than the check that produced it, and
-# newer than the config the thresholds came from. Any of the three moving means
-# the answer could be different and has to be worked out again.
+# Every input has to be exactly as it was: the file, the check script, the
+# config, the interpreter, and the entry format. Any of them unreadable is a
+# miss rather than a hit, because an input that cannot be checked has not been
+# checked.
+#
+# `NUT_CACHE_CHECKER` and `CONFIG_FILE` are both required. The config used to
+# be tested only when the variable happened to be set, so an unset one skipped
+# the test and the entry hit anyway.
 # Usage: nut_cache_hit <check> <file> -> returns 0 on a usable answer
 nut_cache_hit() {
     [[ "${NUT_CACHE_ENABLED:-0}" == "1" ]] || return 1
-    local check="${1:-}" file="${2:-}" entry
+    local check="${1:-}" file="${2:-}" entry want have
     entry="$(_nut_cache_path "$check" "$file")" || return 1
     [[ -f "$entry" ]] || return 1
-    [[ -e "$file" ]] || return 1
-    [[ "$entry" -nt "$file" ]] || return 1
-
-    # The check itself. Named by the caller, because only it knows which file
-    # it is; a check that does not say cannot be cached.
-    local src="${NUT_CACHE_CHECKER:-}"
-    [[ -n "$src" && -e "$src" ]] || return 1
-    [[ "$entry" -nt "$src" ]] || return 1
-
-    # And the thresholds it measured against.
-    if [[ -n "${CONFIG_FILE:-}" && -e "${CONFIG_FILE}" ]]; then
-        [[ "$entry" -nt "$CONFIG_FILE" ]] || return 1
-    fi
-    return 0
+    want="$(_nut_cache_key "$file")" || return 1
+    IFS= read -r have < "$entry" 2>/dev/null || return 1
+    [[ "$have" == "$want" ]]
 }
 
 #[pub]
-# The answer that was kept. Nothing, and non-zero, when there is none.
+# The answer that was kept, without its stamp line.
 # Usage: nut_cache_read <check> <file> -> prints what was cached
 nut_cache_read() {
     local entry; entry="$(_nut_cache_path "$1" "$2")" || return 1
     [[ -r "$entry" ]] || return 1
-    cat "$entry"
+    tail -n +2 "$entry"
 }
 
 #[pub]
-# Keep an answer. A failure to write is not a failure of the check: the run
-# still has the answer, it just will not have it next time.
+# Keep an answer, with the stamp of everything it depended on. A failure to
+# write is not a failure of the check: the run still has the answer, it just
+# will not have it next time.
 # Usage: nut_cache_write <check> <file> <findings>
 nut_cache_write() {
     [[ "${NUT_CACHE_ENABLED:-0}" == "1" ]] || return 0
-    local entry; entry="$(_nut_cache_path "$1" "$2")" || return 0
+    local entry key
+    entry="$(_nut_cache_path "$1" "$2")" || return 0
+    key="$(_nut_cache_key "$2")" || return 0
     mkdir -p "${entry%/*}" 2>/dev/null || return 0
-    printf '%s' "${3:-}" > "$entry" 2>/dev/null || return 0
+    { printf '%s\n' "$key"; printf '%s' "${3:-}"; } > "$entry" 2>/dev/null || return 0
     return 0
 }
 
@@ -121,7 +213,7 @@ nut_cache_write() {
 nut_cache_clear() {
     local root; root="$(_nut_cache_root)"
     if [[ -n "${1:-}" ]]; then
-        rm -rf "${root}/${1//[^A-Za-z0-9._-]/_}"
+        rm -rf "${root}/$(_nut_cache_escape "$1")"
     else
         rm -rf "$root"
     fi

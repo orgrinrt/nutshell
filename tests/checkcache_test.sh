@@ -132,11 +132,102 @@ it_can_be_thrown_away() {
 }
 
 #[test]
-it_does_not_let_a_path_escape_the_cache_directory() {
+it_keeps_every_computed_entry_inside_the_cache_directory() {
     _cc_setup
-    local outside="$CCROOT/outside"; mkdir -p "$outside"; printf 'keep\n' > "$outside/f"
-    nut_cache_write '../../outside' '../../outside/f' 'nope'
-    assert_ok test -f "$outside/f"
-    assert_eq "$(cat "$outside/f")" "keep"
+    local root; root="$(_nut_cache_root)"
+    local name entry
+    # The old version of this asserted a file outside was not overwritten,
+    # which held for every possible argument because the substitution had
+    # already removed every `/`. It read as a security test and restated a
+    # substitution. This asserts the computed path instead, over names chosen
+    # to escape if anything could.
+    for name in '../../etc/passwd' '/etc/passwd' '..' '.' '-rf' \
+                'a/b/../../../c' "$(printf 'new\nline')" '$(touch /tmp/nut-pwn)' \
+                '~/x' 'a b' "*"; do
+        entry="$(_nut_cache_path probe "$name")" || continue
+        assert_contains "$entry" "$root"
+        assert_fails grep -q '/\.\./' <<<"$entry"
+    done
+    assert_fails test -e /tmp/nut-pwn
+    _cc_end
+}
+
+#[test]
+it_does_not_give_one_file_the_answer_meant_for_another() {
+    _cc_setup
+    # Flattening every separator to `_` mapped `lib/toml/json.sh` and
+    # `lib/toml_json.sh` onto one entry, so the answer for one was served for
+    # the other. Both exist in this repository.
+    printf 'one\n' > "$CCROOT/a.sh"; printf 'two\n' > "$CCROOT/b.sh"
+    sleep 1
+    nut_cache_write probe "$CCROOT/a.sh" "answer for a"
+    assert_ne "$(_nut_cache_path probe 'lib/toml/json.sh')" \
+              "$(_nut_cache_path probe 'lib/toml_json.sh')"
+    assert_fails nut_cache_hit probe "$CCROOT/b.sh"
+    _cc_end
+}
+
+#[test]
+it_forgets_when_a_file_changes_without_its_time_moving_forward() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'FINDING: none'
+    # `tar -x`, `rsync -a`, `cp -p` and `touch -t` all move mtime backwards,
+    # and `-nt` only sees it move forward. Reproduced before this was fixed:
+    # the cache served "no findings" for a file whose contents had been
+    # replaced wholesale, which is the one direction a cache must not be wrong.
+    printf 'COMPLETELY DIFFERENT AND LONGER\n' > "$CCROOT/src.sh"
+    touch -t 200001010000 "$CCROOT/src.sh"
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_forgets_when_the_file_changes_size_but_not_its_time() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'answer'
+    local when; when="$(stat -f '%Sm' -t '%Y%m%d%H%M.%S' "$CCROOT/src.sh" 2>/dev/null                         || stat -c '%y' "$CCROOT/src.sh")"
+    printf 'a much longer line than before\n' > "$CCROOT/src.sh"
+    touch -t 200001010000 "$CCROOT/src.sh"
+    # Size alone is enough to know it moved.
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_forgets_when_a_module_the_check_uses_changes() {
+    _cc_setup
+    # A check is not one file. `check_trivial_wrappers` gets its behaviour from
+    # `lib/srcfile.sh`, so editing that changes what it reports while touching
+    # neither the check nor the config. op's ruling is that a check gaining a
+    # step reads everything again.
+    nut_cache_write probe "$CCROOT/src.sh" 'answer'
+    assert_ok nut_cache_hit probe "$CCROOT/src.sh"
+    # The interpreter's own stamp is part of the key, so moving it is a miss.
+    _NUT_CACHE_BASE="f2:something-else"
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_refuses_a_hit_when_the_config_is_not_named_at_all() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'answer'
+    unset CONFIG_FILE
+    # The config test used to sit inside `if [[ -n "$CONFIG_FILE" ]]`, so an
+    # unset one skipped it and the entry hit anyway, while the header said
+    # freshness meant newer than the config.
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_refuses_an_entry_written_in_an_older_format() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'answer'
+    local entry; entry="$(_nut_cache_path probe "$CCROOT/src.sh")"
+    # The store is shared by every nutshell on the machine. An entry from a
+    # version that meant something else by its stamp is a miss, not a lie.
+    { printf 'f1:whatever|0 0|0 0|0 0\n'; printf 'stale answer'; } > "$entry"
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
     _cc_end
 }

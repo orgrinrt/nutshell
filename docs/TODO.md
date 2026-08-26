@@ -166,3 +166,48 @@ these are reproducible claims rather than repo evidence.
 - [x] Restructured from core/ to lib/
 - [x] Checks in examples/checks/, tests in tests/
 - [x] README with usage patterns and examples
+
+## Where the linting goes, and what the attributes are
+
+op, verbatim:
+
+> I also notice the current nut.toml has duplicated patterns for detecting
+> allowing bypassing the loc stuff. I think we want to write a
+> viola-config-compliant linting engine into the nutshell (optionally sourced),
+> so machines that can just call viola from path can, but those that don't have
+> it, can run the nutshell's own linting engine specifically for bash and
+> nutshell, that only allows or works with bash and nutshell syntax and is
+> perhaps simplified too, but is viola compliant in config shape as well as
+> behaviour (in terms of output from input, not in terms of the same internal
+> steps to get there). Then the lintings and such move on to viola.toml (and if
+> viola doesn't yet support toml, it should, so that's a thing you should add
+> to agenda for someone to pick up later; it already has and supports json
+> format though, pretty sure, so that same schema should translate painlessly
+> into toml). This way the nut.toml is a bit cleaner and doesn't include
+> linting things. Also, I think the #[pub] etc should be some reusable nutshell
+> plugin/extension so depending on some workflow lib could give them, and
+> having [plugins] or [extensions] with default-attributes = enabled or
+> something like that could just make all that boilerplate happen, which all my
+> nutshell libs pretty much use by default anyway
+
+The duplication he spotted is real: `nut.toml:48` and `nut.toml:115` carry the
+same regex for the loc escape hatch, and `trivial_wrapper` is named at both
+`:45` and `:101`. One pattern, two homes, and nothing keeps them in step.
+
+- [ ] **A linting engine in nutshell, optional to source, viola-compliant by
+      config and by behaviour.** Same config in, same findings out; the steps
+      between are its own. It handles bash and nutshell only, and may be
+      simpler for it. A machine with `viola` on PATH calls that instead.
+- [ ] **Lint configuration moves to `viola.toml`.** `nut.toml` keeps what it is
+      for and stops carrying two copies of one pattern.
+- [ ] **Attributes become a plugin.** `#[pub]`, `#[allow(...)]` and the rest are
+      a reusable extension rather than something every library restates.
+      `[plugins]` or `[extensions]` with something like
+      `default-attributes = enabled` turns the boilerplate on, since every
+      nutshell library here wants it anyway.
+
+### For whoever picks up viola
+
+- [ ] **viola should read TOML.** It has JSON already, so the schema carries
+      over without redesign. Filed here because there is no agenda tool on this
+      machine to file it in; move it when there is.

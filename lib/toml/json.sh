@@ -28,13 +28,18 @@ use super::toml
 # building the whole tree first, so it is refused by name rather than converted
 # into an object with a repeated key.
 #
-# That refusal covers the reopened section and nothing else. This is a one-pass
-# reader, not a validator: a key repeated inside one section comes out as a
-# repeated key, an integer with a leading zero comes out as written, and an
-# array holding a comma inside a quoted element or another array is split on
-# the wrong comma. A file that has been through `toml_get` without complaint is
-# the input this is for.
-# Usage: toml_to_json "file.toml" -> prints JSON, fails on a reopened section
+# A quoted key or section name is refused the same way. Nothing else in this
+# library supports one: `toml_keys` leaves it out, `toml_section_pairs` hands it
+# back with its quotes still on, and `toml_get` cannot address it. Converting it
+# anyway produced valid JSON naming a key that is not the key, and a quoted
+# section holding a dot came out as two nested objects for a section with one
+# level. Wrong and quiet is worse than refused.
+#
+# Beyond those two, this is a one-pass reader and not a validator: a key
+# repeated inside one section comes out repeated, an integer with a leading zero
+# comes out as written, and an array holding a comma inside a quoted element or
+# another array is split on the wrong comma.
+# Usage: toml_to_json "file.toml" -> prints JSON, fails on a key it cannot name
 toml_to_json() {
     local file="${1:-}"
     [[ ! -f "$file" ]] && return 1
@@ -52,6 +57,11 @@ toml_to_json() {
         # Section header [section] or [section.subsection]
         if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
             local new_section="${BASH_REMATCH[1]}"
+            if [[ "$new_section" == \"* || "$new_section" == \'* ]]; then
+                printf 'toml_to_json: %s: [%s] is a quoted section name, which nothing here can address\n' \
+                    "$file" "$new_section" >&2
+                return 1
+            fi
             local -a parts=()
             IFS='.' read -ra parts <<< "$new_section"
 
@@ -98,6 +108,12 @@ toml_to_json() {
             local key val
             key="$(str_trim "${BASH_REMATCH[1]}")"
             val="$(str_trim "${BASH_REMATCH[2]}")"
+
+            if [[ "$key" == \"* || "$key" == \'* ]]; then
+                printf 'toml_to_json: %s: %s is a quoted key, which nothing here can address\n' \
+                    "$file" "$key" >&2
+                return 1
+            fi
 
             [[ $need_comma -eq 1 ]] && json+=","
             need_comma=1

@@ -184,30 +184,62 @@ it_keeps_a_hash_that_is_part_of_a_value() {
 }
 
 #[test]
-it_writes_a_key_that_needs_escaping_as_json() {
-    # A key is a string and goes through the string writer. Raw, a quoted key
-    # or one holding a quote made the whole document something no parser reads.
+it_refuses_a_quoted_key() {
+    # Nothing here can address one: `toml_keys` leaves it out and `toml_get`
+    # cannot reach it. Converting it anyway produced valid JSON naming a key
+    # that is not the key, which is a worse failure than refusing.
     local d; d="$(_tj)"
     printf '[a]\n"my key" = 1\n' > "$d/t.toml"
-    local got; got="$(toml_to_json "$d/t.toml")"
+    local out rc=0
+    out="$(toml_to_json "$d/t.toml" 2>&1)" || rc=$?
     rm -rf "$d"
-    assert_ok _tj_valid "$got"
+    assert_ne "$rc" "0"
+    assert_contains "$out" "my key"
+    assert_contains "$out" "quoted key"
 }
 
 #[test]
-it_writes_a_key_holding_a_quote_as_json() {
+it_refuses_a_key_holding_a_quote() {
     local d; d="$(_tj)"
     printf '[a]\n"a\\"b" = 1\n' > "$d/t.toml"
-    local got; got="$(toml_to_json "$d/t.toml")"
+    local rc=0
+    toml_to_json "$d/t.toml" >/dev/null 2>&1 || rc=$?
     rm -rf "$d"
-    assert_ok _tj_valid "$got"
+    assert_ne "$rc" "0"
 }
 
 #[test]
-it_writes_a_section_name_that_needs_escaping_as_json() {
+it_refuses_a_quoted_section_name() {
+    # `["a.b"]` is one section whose name has a dot in it. Split on the dot it
+    # came out as two nested objects for a document with one level.
     local d; d="$(_tj)"
-    printf '["a\\"b"]\nx = 1\n' > "$d/t.toml"
+    printf '["a.b"]\nx = 1\n' > "$d/t.toml"
+    local out rc=0
+    out="$(toml_to_json "$d/t.toml" 2>&1)" || rc=$?
+    rm -rf "$d"
+    assert_ne "$rc" "0"
+    assert_contains "$out" "quoted section"
+}
+
+#[test]
+it_still_converts_an_ordinary_key_beside_the_refusal() {
+    # The control: refusing the ones it cannot name must not refuse the rest.
+    local d; d="$(_tj)"
+    printf '[a]\nplain = 1\nother = "two"\n' > "$d/t.toml"
     local got; got="$(toml_to_json "$d/t.toml")"
     rm -rf "$d"
+    assert_eq "$got" '{"a":{"plain":1,"other":"two"}}'
+}
+
+#[test]
+it_writes_a_value_that_needs_escaping_as_the_value_it_is() {
+    # Asserted as the document rather than as "it parses". Checking only that
+    # the output parses discriminates broken from unbroken and nothing finer,
+    # which is the axis a key-escaping change moves along.
+    local d; d="$(_tj)"
+    printf '[a]\nv = "say \\"hi\\""\n' > "$d/t.toml"
+    local got; got="$(toml_to_json "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" '{"a":{"v":"say \"hi\""}}'
     assert_ok _tj_valid "$got"
 }

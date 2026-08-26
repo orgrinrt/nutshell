@@ -77,32 +77,90 @@ it_writes_the_resolved_commit_to_the_lockfile() {
 }
 
 #[test]
-it_holds_a_checkout_at_the_locked_commit() {
-    # The point of the file. `ref = "main"` moves, so without this two checkouts
-    # of one project can be running different code and neither can say so.
+it_follows_the_branch_rather_than_the_lock() {
+    # A branch pin means that branch's head. A lockfile entry naming an older
+    # commit is a note about the past, not a pin: holding the checkout there
+    # would make `ref = "main"` a pin on whatever main happened to be the first
+    # time anybody asked, which is how a consumer ended up on its dependency's
+    # first commit while months of work went past it.
     _isolate
-    local fix work first dir
+    local fix work first second dir
     fix="$(_extern_fixture)"; work="${fix%% *}"
     first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    second="${fix##* }"
     cd "${work}/project" || return 1
 
     extern_lock_write fixture "$first"
     dir="$(extern_path fixture)"
 
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$second"
+    assert_contains "$(cat "${dir}/lib/greet.sh")" "goodbye"
+}
+
+#[test]
+it_rewrites_the_lock_when_the_branch_has_moved() {
+    # The lockfile's other job. On a branch it records what the head resolved
+    # to and is rewritten every time that moves, so it reports rather than pins.
+    _isolate
+    local fix work first second
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    second="${fix##* }"
+    cd "${work}/project" || return 1
+
+    extern_lock_write fixture "$first"
+    extern_path fixture >/dev/null
+    assert_eq "$(extern_locked fixture)" "$second"
+}
+
+#[test]
+it_holds_a_checkout_at_a_pinned_commit() {
+    # The lockfile's first job, on the pin that has one. A revision names one
+    # commit forever, and two checkouts of a project pinned to it are running
+    # the same code.
+    _isolate
+    local fix work first dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    cd "${work}/project" || return 1
+    sed -i.bak "s|^ref = .*|ref = \"${first}\"|" nut.toml && rm -f nut.toml.bak
+
+    dir="$(extern_path fixture)"
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$first"
+    assert_contains "$(cat "${dir}/lib/greet.sh")" "hello"
+}
+
+#[test]
+it_holds_a_checkout_at_a_pinned_tag() {
+    # A tag is the other fixed kind, and the one somebody writes when they mean
+    # a release rather than a revision.
+    _isolate
+    local fix work first dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    # Annotated, which is what a release tag usually is, and the shape whose
+    # `^{}` peeling the resolution has to follow: the tag object's own sha is
+    # not a commit and nothing can be checked out at it.
+    git -C "${work}/dep" tag -a v1 -m 'v1' "$first"
+    cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "v1"|' nut.toml && rm -f nut.toml.bak
+
+    dir="$(extern_path fixture)"
     assert_eq "$(git -C "$dir" rev-parse HEAD)" "$first"
     assert_contains "$(cat "${dir}/lib/greet.sh")" "hello"
 }
 
 #[test]
 it_refuses_a_commit_the_remote_does_not_have() {
-    # Silently taking the tip instead would defeat the lock at the one moment
-    # it matters.
+    # Silently taking the tip instead would defeat the pin at the one moment it
+    # matters.
     _isolate
     local fix work
     fix="$(_extern_fixture)"; work="${fix%% *}"
     cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "0000000000000000000000000000000000000000"|' nut.toml
+    rm -f nut.toml.bak
 
-    extern_lock_write fixture "0000000000000000000000000000000000000000"
     assert_fails extern_path fixture
 }
 
@@ -141,13 +199,18 @@ it_gives_two_projects_locked_apart_their_own_checkouts() {
     mkdir -p "${work}/other"
     cp "${work}/project/nut.toml" "${work}/other/nut.toml"
 
+    # Pinned apart by their manifests, since that is what a pin is now: a lock
+    # entry on a branch is rewritten to the head and cannot hold two projects
+    # apart.
+    sed -i.bak "s|^ref = .*|ref = \"${first}\"|"  "${work}/project/nut.toml"
+    sed -i.bak "s|^ref = .*|ref = \"${second}\"|" "${work}/other/nut.toml"
+    rm -f "${work}/project/nut.toml.bak" "${work}/other/nut.toml.bak"
+
     local dir_a dir_b
     cd "${work}/project" || return 1
-    extern_lock_write fixture "$first"
     dir_a="$(extern_path fixture)"
 
     cd "${work}/other" || return 1
-    extern_lock_write fixture "$second"
     dir_b="$(extern_path fixture)"
 
     assert_ne "$dir_a" "$dir_b" "a checkout per commit, not per ref"

@@ -5,8 +5,10 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Sourced by a tool before nutshell exists, so it is plain bash and depends on
-# nothing.
+# Sourced by a tool before nutshell exists, so it is plain bash and uses no
+# nutshell module. It does call `git`, `date`, `uname` and the ordinary file
+# tools; fetching an interpreter is what it is for. What it must not have is a
+# dependency on the thing it is looking for.
 #
 # Versions coexist. A tool asks for the one it needs and gets that one, and a
 # machine carrying four of them is the ordinary state rather than a mess to

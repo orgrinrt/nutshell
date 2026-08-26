@@ -498,3 +498,55 @@ it_refuses_to_store_a_fetch_whose_version_is_not_the_name_asked_for() {
     assert_fails test -e "$NUTSHELL_TOOLCHAINS/0.4.0-rc1"
     _tc_end
 }
+
+# --- the store root is spelled twice, and only this holds the two together ----
+
+#[test]
+it_derives_the_same_store_root_as_the_xdg_module_does() {
+    # `find-nutshell` runs before nutshell exists and cannot `use xdg`, so the
+    # platform branch is written out in both places. Its own comment says the
+    # two are "held together by a test rather than by anybody remembering",
+    # and no such test existed: `grep -rn xdg_data_home tests/` returned
+    # nothing, and the nearest one restated find-nutshell's own literals back
+    # to it without ever calling the module.
+    #
+    # This calls both and compares, so changing one and not the other fails
+    # here rather than on somebody's machine.
+    local keep_store="${NUTSHELL_STORE:-}" keep_tc="${NUTSHELL_TOOLCHAINS:-}"
+    unset NUTSHELL_STORE NUTSHELL_TOOLCHAINS
+
+    use xdg
+    xdg_set_app_name nutshell
+    local from_module; from_module="$(xdg_app_data)"
+    local from_resolver; from_resolver="$(nutshell_store_root)"
+
+    assert_ne "$from_module" ""
+    assert_eq "$from_resolver" "$from_module"
+
+    [[ -n "$keep_store" ]] && export NUTSHELL_STORE="$keep_store"
+    [[ -n "$keep_tc" ]] && export NUTSHELL_TOOLCHAINS="$keep_tc"
+    return 0
+}
+
+#[test]
+it_follows_the_data_home_override_the_same_way_the_module_does() {
+    # The branch that actually differs between platforms, exercised rather
+    # than assumed: with the variable set, both must follow it.
+    local keep_store="${NUTSHELL_STORE:-}" keep_tc="${NUTSHELL_TOOLCHAINS:-}"
+    unset NUTSHELL_STORE NUTSHELL_TOOLCHAINS
+
+    use xdg
+    local probe="/tmp/nut-xdg-probe"
+    local from_module from_resolver
+    from_module="$(XDG_DATA_HOME="$probe" bash -c '
+        . "'"$PWD"'/init" >/dev/null 2>&1
+        use xdg; xdg_set_app_name nutshell; xdg_app_data')"
+    from_resolver="$(XDG_DATA_HOME="$probe" nutshell_store_root)"
+
+    assert_contains "$from_resolver" "$probe"
+    assert_eq "$from_resolver" "$from_module"
+
+    [[ -n "$keep_store" ]] && export NUTSHELL_STORE="$keep_store"
+    [[ -n "$keep_tc" ]] && export NUTSHELL_TOOLCHAINS="$keep_tc"
+    return 0
+}

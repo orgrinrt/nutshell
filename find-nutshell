@@ -8,17 +8,24 @@
 # Sourced by a tool before nutshell exists, so it is plain bash and depends on
 # nothing.
 #
-# The order matters and the reason is the whole point: an installed nutshell is
-# shared by everything on the machine, and a copy inside one project is a
-# second version that drifts from it in silence. Every other package manager
-# settled this the same way. cargo keeps one shared registry and resolves the
-# toolchain separately; pnpm keeps one content-addressed store and links into
-# it; yarn 2 has no per-project tree at all. A per-project physical copy is the
-# thing that goes stale, and it went stale here twice in one day.
+# Versions coexist. A tool asks for the one it needs and gets that one, and a
+# machine carrying four of them is the ordinary state rather than a mess to
+# clean up. This is rustup's arrangement and renki's: a store of toolchains
+# keyed by version, one resolution step in front of it, and a fetch when the
+# asked-for one is not there yet.
 #
-# So: what the caller named, then what is installed, then what is vendored. The
-# vendored copy is the fallback for a machine with nothing installed, which is
-# the machine this tool is usually rescuing.
+# The order: what the caller named, then what is installed if it satisfies,
+# then the store, then a fetch into the store, then whatever is vendored. Only
+# the last of those is a compromise, and it is there for the machine with no
+# network that this tool is usually rescuing.
+#
+# Preferring an installed interpreter over the store is deliberate. One shared
+# nutshell that everything uses is the good state; the store exists for the
+# tools that cannot use it, not to replace it. Every other package manager
+# settled the sharing question the same way: cargo keeps one registry and
+# resolves the toolchain separately, pnpm keeps one content-addressed store and
+# links into it, yarn 2 has no per-project tree at all. A per-project physical
+# copy is the thing that goes stale, and it went stale here twice in one day.
 #
 # Usage:
 #   . "${HERE}/find-nutshell"
@@ -96,14 +103,29 @@ nutshell_find() {
                 NUTSHELL_INIT="$cand"; NUTSHELL_FROM="installed"
                 return 0
             fi
-            # Said out loud. Silently falling through to the vendored copy
-            # would hide exactly the version skew this is here to surface.
-            printf 'nutshell: the installed one at %s is %s and this needs %s; using the vendored copy\n' \
+            # Said out loud. Falling through in silence would hide exactly
+            # the version skew this is here to surface.
+            printf 'nutshell: the installed one at %s is %s and this needs %s\n' \
                 "$cand" "$(_nutshell_version_of "$cand")" "$want" >&2
         fi
     fi
 
-    # 3. What is vendored, for a machine with nothing installed.
+    # 3. The store. Several versions live here at once and the newest one that
+    #    satisfies the caller is taken, which is what makes two tools wanting
+    #    two different nutshells a non-event.
+    if cand="$(_nutshell_in_store "$want")"; then
+        NUTSHELL_INIT="$cand"; NUTSHELL_FROM="toolchain"
+        return 0
+    fi
+
+    # 4. Not there yet, so fetch it. A version that exists and is simply not on
+    #    this machine is not a failure, it is a download.
+    if [[ -n "$want" ]] && cand="$(_nutshell_fetch "$want")"; then
+        NUTSHELL_INIT="$cand"; NUTSHELL_FROM="fetched"
+        return 0
+    fi
+
+    # 5. What is vendored, for a machine with no network and nothing installed.
     if [[ -n "$root" ]] && cand="$(_nutshell_root_of "${root}/lib/nutshell/init")"; then
         NUTSHELL_INIT="$cand"; NUTSHELL_FROM="vendored"
         return 0
@@ -112,6 +134,128 @@ nutshell_find() {
     printf 'nutshell: no interpreter found. Install one, set NUTSHELL_HOME, or run:\n' >&2
     printf '  git submodule update --init\n' >&2
     return 1
+}
+
+# Where toolchains live. One directory per version, each a checkout.
+#
+# Beside the externs, under one store root, because the interpreter is a
+# dependency like any other and giving it its own arrangement is what let it
+# drift out of step in the first place. `NUTSHELL_TOOLCHAINS` names this
+# directory; `NUTSHELL_STORE` names the root both it and the externs sit under.
+nutshell_store() {
+    if [[ -n "${NUTSHELL_TOOLCHAINS:-}" ]]; then
+        printf '%s' "${NUTSHELL_TOOLCHAINS%/}"
+        return 0
+    fi
+    if [[ -n "${NUTSHELL_STORE:-}" ]]; then
+        printf '%s/toolchains' "${NUTSHELL_STORE%/}"
+        return 0
+    fi
+    printf '%s/nutshell/toolchains' \
+        "${XDG_DATA_HOME:-${HOME:-.}/.local/share}"
+}
+
+#[pub]
+# Every version in the store, newest first, one per line.
+#
+# A directory is named by the version it holds, and one whose contents report
+# something else is skipped rather than trusted. The name is what the resolver
+# looks things up by, so a directory that lies about itself would be handed
+# out for a request it does not satisfy.
+# Usage: nutshell_toolchains -> prints versions
+nutshell_toolchains() {
+    local store d v name
+    store="$(nutshell_store)"
+    [[ -d "$store" ]] || return 0
+    for d in "$store"/*/; do
+        [[ -f "${d}init" ]] || continue
+        name="${d%/}"; name="${name##*/}"
+        v="$(_nutshell_version_of "${d}init")" || continue
+        [[ "$v" == "$name" ]] || continue
+        printf '%s\n' "$v"
+    done | _nutshell_sort_versions
+}
+
+# Newest first. Sorting fields rather than strings, because 0.10.0 is newer
+# than 0.9.0 and every string comparison says otherwise.
+_nutshell_sort_versions() {
+    local v a b c rest
+    while IFS= read -r v; do
+        [[ -n "$v" ]] || continue
+        IFS=. read -r a b c rest <<< "$v"
+        printf '%05d.%05d.%05d\t%s\n' \
+            "$(_nutshell_num "${a:-}")" \
+            "$(_nutshell_num "${b:-}")" \
+            "$(_nutshell_num "${c:-}")" \
+            "$v"
+    done | sort -r | cut -f2-
+}
+
+# One version field as a number. Anything from the first non-digit onward is
+# dropped, so a `0.4.0-rc1` sorts beside `0.4.0` instead of aborting the whole
+# listing on an arithmetic error.
+_nutshell_num() {
+    local n="${1:-}"
+    n="${n%%[!0-9]*}"
+    printf '%d' "$(( 10#${n:-0} ))"
+}
+
+# The newest toolchain satisfying the caller, or nothing.
+_nutshell_in_store() {
+    local want="${1:-}" store v cand
+    store="$(nutshell_store)"
+    [[ -d "$store" ]] || return 1
+    while IFS= read -r v; do
+        [[ -n "$v" ]] || continue
+        cand="$(_nutshell_root_of "${store}/${v}/init")" || continue
+        _nutshell_satisfies "$cand" "$want" && { printf '%s' "$cand"; return 0; }
+    done < <(nutshell_toolchains)
+    return 1
+}
+
+# Put a version in the store and print its root.
+#
+# Shallow, at the tag, from wherever the caller says nutshell lives. A failure
+# here is ordinary: no git, no network, or a version nobody has tagged yet. It
+# says which and falls through to whatever else the machine has.
+_nutshell_fetch() {
+    local want="$1" store dir remote
+    store="$(nutshell_store)"
+    dir="${store}/${want}"
+    remote="${NUTSHELL_REMOTE:-https://github.com/orgrinrt/nutshell.git}"
+
+    command -v git >/dev/null 2>&1 || {
+        printf 'nutshell: %s is not on this machine and there is no git to fetch it with\n' \
+            "$want" >&2
+        return 1
+    }
+
+    mkdir -p "$store" 2>/dev/null || return 1
+    # Into a scratch directory and moved into place, so an interrupted clone
+    # never leaves a half a toolchain behind for the next run to find and
+    # believe.
+    local tmp="${dir}.fetching.$$"
+    rm -rf "$tmp"
+    printf 'nutshell: fetching %s\n' "$want" >&2
+    if ! git clone --quiet --depth 1 --branch "$want" "$remote" "$tmp" 2>/dev/null; then
+        rm -rf "$tmp"
+        printf 'nutshell: could not fetch %s from %s\n' "$want" "$remote" >&2
+        return 1
+    fi
+
+    # What arrived has to be the version that was asked for. A tag that moved,
+    # or a branch name that happens to look like a version, would otherwise be
+    # stored under a name that lies about its contents.
+    local got; got="$(_nutshell_version_of "${tmp}/init")"
+    if [[ "$got" != "$want" ]]; then
+        rm -rf "$tmp"
+        printf 'nutshell: %s in %s reports itself as %s\n' "$want" "$remote" "${got:-nothing}" >&2
+        return 1
+    fi
+
+    rm -rf "$dir"
+    mv "$tmp" "$dir" || { rm -rf "$tmp"; return 1; }
+    printf '%s' "${dir}/init"
 }
 
 # The version an interpreter reports, without loading it. Reading the file

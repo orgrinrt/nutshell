@@ -420,3 +420,31 @@ it, which is the whole of the defect.
 - give a caller the real user's home, name and id even while the one step runs,
   so nothing computes a path from `$HOME` at the wrong moment
 - say plainly when it cannot elevate, rather than falling back to trying anyway
+
+## The store, and versions coexisting
+
+> As for the versions of nutshell. We should have it similar as rustup or
+> pretty much any similar. Several versions can and will coexist on one machine
+> and instead of failing, we download the correct one and store it as a
+> "toolchain". Same as renki does. Unless this is how it works already. If so,
+> I don't understand how the versions can give so much trouble?
+
+> Really seems to me we should keep the libs anything depends on centrally too
+> like pnpm or yarn2. Nutshell itself just as one of them.
+
+**The intent: one central store, versions coexist, a missing one is a download
+rather than a failure, and the interpreter is an entry in that store like
+anything else.** The rustup and renki comparisons are the shape being asked
+for, not a requirement to copy either.
+
+It was not how it worked. Externs were already central and content-addressed;
+the interpreter was the exception, resolved by picking from what the machine
+happened to have and never fetching. That is the whole of the version trouble:
+`0.4.0` exists only on `dev`, nothing has tagged it, so no amount of resolving
+could find it and the fallback to the vendored copy fired every run.
+
+Settled by this work: a toolchain store keyed by version, a fetch when the
+asked-for version is not there, and both externs and toolchains under one store
+root. The externs moved from the cache directory to the data directory in the
+same change, because a cache is something a cleaner may delete at any moment
+and this is where every project's dependencies actually live.

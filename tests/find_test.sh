@@ -22,7 +22,15 @@ _fake_nutshell() {
     chmod +x "$d/bin/nutshell"
 }
 
-_reset() { NUTSHELL_INIT=""; NUTSHELL_FROM=""; unset NUTSHELL_HOME; }
+# Every test gets an empty store and a remote that cannot answer, so nothing
+# here reaches the network and nothing depends on what this machine happens to
+# have downloaded already. The tests that are about the store fill it in.
+_reset() {
+    NUTSHELL_INIT=""; NUTSHELL_FROM=""; unset NUTSHELL_HOME
+    [[ -n "${NUTSHELL_TOOLCHAINS:-}" ]] && rm -rf "$NUTSHELL_TOOLCHAINS"
+    export NUTSHELL_TOOLCHAINS="$(mktemp -d)/store"
+    export NUTSHELL_REMOTE="/nonexistent/nutshell.git"
+}
 
 #[test]
 it_prefers_what_the_caller_named() {

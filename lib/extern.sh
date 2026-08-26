@@ -76,9 +76,22 @@ _extern_manifest() {
     return 1
 }
 
+# Where fetched dependencies live: one central, content-addressed store shared
+# by every project on the machine, the same arrangement pnpm and yarn 2 settled
+# on. Two projects on the same commit of the same dependency have one copy of
+# it between them, and a project tree carries no dependency of its own.
+#
+# Under data rather than cache, deliberately. A cache is something a cleaner is
+# entitled to delete at any moment; this is where the dependencies of every
+# project on the machine actually live, and losing it offline breaks all of
+# them at once. `NUTSHELL_STORE` overrides it.
 _extern_cache_root() {
+    if [[ -n "${NUTSHELL_STORE:-}" ]]; then
+        printf '%s/externs' "${NUTSHELL_STORE%/}"
+        return 0
+    fi
     xdg_set_app_name nutshell
-    printf '%s/externs' "$(xdg_app_cache)"
+    printf '%s/externs' "$(xdg_app_data)"
 }
 
 # -----------------------------------------------------------------------------

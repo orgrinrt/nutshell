@@ -310,3 +310,64 @@ written twice. The second is the interesting half and the risky one, since a
 generator that produces shell from rust attributes is a project of its own.
 
 Nothing here is scheduled.
+
+## Do not vendor the interpreter
+
+op:
+
+> Hmm. I don't think we should vendor in nutshell in the libs, honestly. Or at
+> least if there is a global nutshell interp / bin instance in path, or
+> otherwise reachable, it should be used as opposed to the vendored one, which
+> avoids random version differences between libs
+
+and, on the guard-every-call shape that comes out of it:
+
+> This problem seems like we shouldn't even have it...
+>
+> How do things like yarn 2, pnpm, cargo, deno, solve this very problem?
+
+### What those four actually do
+
+None of them keeps a per-project physical copy of anything, and none of them
+degrades when a version is wrong.
+
+**cargo** separates the toolchain from the libraries. The toolchain is resolved
+by rustup from `rust-toolchain.toml`; the libraries live in one shared
+`~/.cargo/registry` and are selected by a lockfile. A crate states the minimum
+compiler it needs with `rust-version`, and an older one is a refusal naming the
+version, never a build that half works.
+
+**pnpm** keeps one content-addressed store and makes `node_modules` a tree of
+links into it, so a version exists once on the machine however many projects
+want it. It is strict about declarations: a package may import what it declared
+and nothing else.
+
+**yarn 2** goes further and has no `node_modules` at all. One map from every
+import to a zip in the shared cache, and an undeclared import is an error.
+
+**deno** has one global cache keyed by URL with a lockfile of hashes, and the
+runtime is a single binary the project names.
+
+The two properties they share, and the two we do not have:
+
+1. **One copy per version on the machine, shared, never a copy per project.**
+   nutshell already does this for externs: `~/.cache/nutshell/externs/<key>` is
+   content-addressed by url and commit. The submodule is the exception, and it
+   is the thing that goes stale.
+2. **A wrong version is a refusal, not a degradation.** `declare -F thing ||
+   skip` at every call site is what a project writes when it does not know what
+   version it has. With a declared minimum and honest resolution the guard is
+   dead code.
+
+### The intent
+
+**The interpreter is resolved like any other dependency.** A library declares
+which nutshell it needs and a launcher on PATH finds or fetches it, the way
+rustup does for cargo and the way renki already does for its engine. A global
+one that satisfies the declaration is used in preference to anything vendored.
+
+**A dependency declares a minimum, and too old is an error at startup**, naming
+the dependency and the pin, rather than a missing function at line 426 of
+something the reader was in the middle of.
+
+Both are the same fix from two directions, and both make the guards go away.

@@ -254,18 +254,25 @@ _find_config_file() {
 }
 
 # Walk up from a directory to the first repository marker above it.
+#
+# `<levels>` bounds how far up may answer. Unbounded is right for the
+# interpreter finding itself and wrong for finding the project being checked,
+# because there is usually some repository somewhere above any directory.
 _walk_to_marker() {
-    local dir="${1:-}"
+    local dir="${1:-}" left="${2:-}"
     [[ -d "$dir" ]] || return 1
     dir="$(cd "$dir" && pwd)" || return 1
+    [[ "$left" =~ ^[0-9]+$ ]] || left=""
 
     while [[ -n "$dir" && "$dir" != "/" ]]; do
+        if [[ -n "$left" ]] && (( left < 0 )); then return 1; fi
         if [[ -d "$dir/.git" ]] || [[ -f "$dir/nut.toml" ]] \
            || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/package.json" ]]; then
             printf '%s' "$dir"
             return 0
         fi
         dir="$(dirname "$dir")"
+        [[ -n "$left" ]] && left=$(( left - 1 ))
     done
     return 1
 }
@@ -294,7 +301,15 @@ _find_repo_root() {
 
     # Where the check was run from. `./check` at a project root, or anywhere
     # inside it, both mean that project.
-    root="$(_walk_to_marker "$PWD")" && { printf '%s' "$root"; return 0; }
+    #
+    # Bounded, because the walk does not stop at the first thing that is not a
+    # project: run from a scratch directory under a `$HOME` that is itself a
+    # dotfiles repository, an unbounded walk grades the dotfiles repository.
+    # `NUTSHELL_CHECK_DEPTH` is the number of levels above the invocation that
+    # may answer, and four is deep enough for `crates/foo/src/bar` and shallow
+    # enough that a stray ancestor cannot.
+    root="$(_walk_to_marker "$PWD" "${NUTSHELL_CHECK_DEPTH:-4}")" \
+        && { printf '%s' "$root"; return 0; }
 
     # Nothing above the invocation directory says it is a repository, so there
     # is nothing to check but the interpreter itself.

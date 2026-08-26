@@ -257,3 +257,15 @@ it_drops_a_revision_nothing_has_touched_for_a_day() {
     assert_ok test -f "$(_br_base)/$(_br_head)/init"
     _br_end
 }
+
+#[test]
+it_says_a_slashed_ref_is_a_name_problem_and_not_a_network_one() {
+    _br_setup; _br_remote dev 0.4.0
+    # `feat/toolchains` is a legal branch name and is not a directory name in
+    # the store. The limit is real; reporting it as "could not reach" sends the
+    # reader to check their connection.
+    local said; said="$(nutshell_find "" "feat/toolchains" 2>&1 >/dev/null)"
+    assert_contains "$said" "cannot name a toolchain directory"
+    assert_fails grep -q "could not reach" <<<"$said"
+    _br_end
+}

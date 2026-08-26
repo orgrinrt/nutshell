@@ -93,3 +93,38 @@ it_refuses_to_walk_from_a_directory_that_is_not_there() {
     assert_fails _walk_to_marker "$_CR_TMP/no-such-directory"
     assert_fails _walk_to_marker ""
 }
+
+#[test]
+it_does_not_walk_past_a_few_levels_to_find_some_ancestor() {
+    # There is usually a repository somewhere above any directory. A `$HOME`
+    # that is a dotfiles checkout, or a workspace clone holding member clones,
+    # both make an unbounded walk grade something nobody asked about.
+    local top="$_CR_TMP/deep"
+    mkdir -p "$top/.git" "$top/a/b/c/d/e/f"
+    local fake="$_CR_TMP/deepnut/lib"; mkdir -p "$fake" "$_CR_TMP/deepnut/.git"
+    local got; got="$(cd "$top/a/b/c/d/e/f" && _CHECK_RUNNER_DIR="$fake" NUTSHELL_CONFIG="" _find_repo_root)"
+    assert_ne "$got" "$(cd "$top" && pwd)"
+    assert_eq "$got" "$(cd "$_CR_TMP/deepnut" && pwd)"
+}
+
+#[test]
+it_still_reaches_a_project_root_from_a_source_directory_inside_it() {
+    # The depth has to clear the ordinary case it exists beside:
+    # `crates/foo/src/bar` is four levels down and must still answer.
+    local top="$_CR_TMP/proj"
+    mkdir -p "$top/crates/foo/src/bar"
+    printf '[meta]\nname = "proj"\n' > "$top/nut.toml"
+    local fake="$_CR_TMP/projnut/lib"; mkdir -p "$fake" "$_CR_TMP/projnut/.git"
+    local got; got="$(cd "$top/crates/foo/src/bar" && _CHECK_RUNNER_DIR="$fake" NUTSHELL_CONFIG="" _find_repo_root)"
+    assert_eq "$got" "$(cd "$top" && pwd)"
+}
+
+#[test]
+it_lets_the_depth_be_named_when_a_tree_is_deeper_than_that() {
+    local top="$_CR_TMP/verydeep"
+    mkdir -p "$top/a/b/c/d/e/f"
+    printf '[meta]\nname = "verydeep"\n' > "$top/nut.toml"
+    local fake="$_CR_TMP/vdnut/lib"; mkdir -p "$fake" "$_CR_TMP/vdnut/.git"
+    local got; got="$(cd "$top/a/b/c/d/e/f" && _CHECK_RUNNER_DIR="$fake" NUTSHELL_CONFIG="" NUTSHELL_CHECK_DEPTH=9 _find_repo_root)"
+    assert_eq "$got" "$(cd "$top" && pwd)"
+}

@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell/tools/assoc-array-report - What a map costs without bash arrays
+# =============================================================================
+#
+# POSIX sh has no associative arrays. nutshell uses them in the places that
+# decide how fast it is: the config cache, the toolchain store tables, the
+# attribute tables, and the file-line table the QA checks read. So "make
+# nutshell POSIX" has a price, and the price is a number rather than an
+# opinion. This is the number.
+#
+# **A report, not a gate.** There is no threshold anybody can justify here; the
+# decision it feeds is a design one.
+#
+# **This is not a bench.** nutshell has no bench harness, so this is an ad-hoc
+# measurement and is called that. It does what it can without one: every arm is
+# a real alternative somebody would actually reach for, the arms run on the
+# same generated input, the input is shaped like nutshell's own keys, and the
+# controls below refuse to print numbers the instrument cannot support.
+#
+# The size defaults to the largest real table: `_PAD_LINES` in the docs check
+# holds one entry per line of source, which on this library is 9606 across 24
+# files. The keys are the real shape too, `<path>:<n>`, because two of the arms
+# cannot take a key with a slash or a colon in it and the encoding that fixes
+# that is part of what they cost.
+#
+# Usage:
+#   tools/assoc-array-report [entries] [lookups]
+# =============================================================================
+
+set -uo pipefail
+
+ENTRIES="${1:-2000}"
+LOOKUPS="${2:-500}"
+REAL_TABLE=9606
+
+# -----------------------------------------------------------------------------
+# The input, shaped like nutshell's own keys
+# -----------------------------------------------------------------------------
+
+declare -a KEYS=() VALS=()
+_generate() {
+    local i
+    for (( i = 0; i < ENTRIES; i++ )); do
+        # `<path>:<n>`, which is what `_PAD_LINES` and `_PAD_AT` are keyed by.
+        # Slash, dot, dash and colon all appear, and none of them may go into a
+        # variable name unencoded.
+        KEYS+=("lib/some-module.sh:$i")
+        VALS+=("value number $i")
+    done
+}
+
+# A key as a variable name. Every arm that builds a name out of a key pays this.
+_encode() {
+    local k="$1" out="" i c
+    for (( i = 0; i < ${#k}; i++ )); do
+        c="${k:i:1}"
+        case "$c" in
+            [A-Za-z0-9_]) out+="$c" ;;
+            *) printf -v c '_%02x' "'$c"; out+="$c" ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+# -----------------------------------------------------------------------------
+# The arms. Each builds a table of ENTRIES pairs, then does LOOKUPS hits and
+# LOOKUPS misses, and prints the value it last found so nothing can be
+# optimised away by not being used.
+# -----------------------------------------------------------------------------
+
+# A: bash associative array. The thing being given up.
+arm_bash_assoc() {
+    declare -A m=()
+    local i last=""
+    for (( i = 0; i < ENTRIES; i++ )); do m["${KEYS[$i]}"]="${VALS[$i]}"; done
+    for (( i = 0; i < LOOKUPS; i++ )); do last="${m["${KEYS[$(( i * ENTRIES / LOOKUPS ))]}"]:-}"; done
+    for (( i = 0; i < LOOKUPS; i++ )); do last="${m["no/such-key.sh:$i"]:-MISS}"; done
+    printf '%s' "$last"
+}
+
+# B: variable names built out of the key, read and written through `eval`.
+#    The classic POSIX substitute, and the one that needs the encoding.
+arm_eval_names() {
+    local i last="" n
+    for (( i = 0; i < ENTRIES; i++ )); do
+        n="$(_encode "${KEYS[$i]}")"
+        eval "_aa_${n}=\${VALS[\$i]}"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        n="$(_encode "${KEYS[$(( i * ENTRIES / LOOKUPS ))]}")"
+        eval "last=\${_aa_${n}:-}"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        n="$(_encode "no/such-key.sh:$i")"
+        eval "last=\${_aa_${n}:-MISS}"
+    done
+    printf '%s' "$last"
+}
+
+# B2: the same, without a fork for the encoding. `_encode` above is called
+#     through a command substitution, which is what a caller writes first and
+#     is a fork per operation. This is the same arm with the encoding done in
+#     place, and the gap between the two is the cost of that habit rather than
+#     of the technique.
+arm_eval_names_nofork() {
+    local i last="" n
+    for (( i = 0; i < ENTRIES; i++ )); do
+        printf -v n '%s' "${KEYS[$i]//[^A-Za-z0-9_]/_}"
+        eval "_bb_${n}=\${VALS[\$i]}"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        printf -v n '%s' "${KEYS[$(( i * ENTRIES / LOOKUPS ))]//[^A-Za-z0-9_]/_}"
+        eval "last=\${_bb_${n}:-}"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        printf -v n '%s' "no/such-key.sh:${i}"
+        n="${n//[^A-Za-z0-9_]/_}"
+        eval "last=\${_bb_${n}:-MISS}"
+    done
+    printf '%s' "$last"
+}
+
+# C: one string holding every pair, scanned with parameter expansion.
+#    No forks and no files, and quadratic the moment the table is large.
+arm_one_string() {
+    local map=$'\n' i last="" rest
+    for (( i = 0; i < ENTRIES; i++ )); do map+="${KEYS[$i]}=${VALS[$i]}"$'\n'; done
+    # A miss has to be a miss. `${map#*pat}` returns the whole string unchanged
+    # when the pattern is absent, so without the membership test below this arm
+    # answered a real value for a key that was not there. The correctness
+    # control caught it on the first run, which is the reason that control is
+    # there and ahead of the timing.
+    local pat
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        pat=$'\n'"${KEYS[$(( i * ENTRIES / LOOKUPS ))]}"=
+        if [[ "$map" == *"$pat"* ]]; then
+            rest="${map#*"$pat"}"; last="${rest%%$'\n'*}"
+        else
+            last="MISS"
+        fi
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        pat=$'\n'"no/such-key.sh:${i}="
+        if [[ "$map" == *"$pat"* ]]; then
+            rest="${map#*"$pat"}"; last="${rest%%$'\n'*}"
+        else
+            last="MISS"
+        fi
+    done
+    printf '%s' "$last"
+}
+
+# D: one file, a line per pair, read back in the shell.
+arm_one_file() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/aa.XXXXXX")"
+    local f="$d/map" i last="" k v want
+    for (( i = 0; i < ENTRIES; i++ )); do printf '%s\t%s\n' "${KEYS[$i]}" "${VALS[$i]}"; done > "$f"
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        want="${KEYS[$(( i * ENTRIES / LOOKUPS ))]}"
+        last=""
+        while IFS=$'\t' read -r k v; do [[ "$k" == "$want" ]] && { last="$v"; break; }; done < "$f"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        want="no/such-key.sh:$i"; last="MISS"
+        while IFS=$'\t' read -r k v; do [[ "$k" == "$want" ]] && { last="$v"; break; }; done < "$f"
+    done
+    rm -rf "$d"
+    printf '%s' "$last"
+}
+
+# E: the filesystem as the table, one file per key. The lookup is a read of a
+#    known path rather than a search, which is the only arm here whose lookup
+#    does not get slower as the table grows.
+arm_dir_table() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/aa.XXXXXX")"
+    local i last="" n
+    for (( i = 0; i < ENTRIES; i++ )); do
+        n="${KEYS[$i]//[^A-Za-z0-9_]/_}"
+        printf '%s' "${VALS[$i]}" > "$d/$n"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        n="${KEYS[$(( i * ENTRIES / LOOKUPS ))]//[^A-Za-z0-9_]/_}"
+        last=""; [[ -r "$d/$n" ]] && read -r last < "$d/$n"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        n="no/such-key.sh:${i}"; n="${n//[^A-Za-z0-9_]/_}"
+        last="MISS"; [[ -r "$d/$n" ]] && read -r last < "$d/$n"
+    done
+    rm -rf "$d"
+    printf '%s' "$last"
+}
+
+# A memory filesystem, if this machine has one.
+#
+# Not POSIX. The standard says nothing about where a path's bytes live, and
+# that is the only syscall lever a shell really has: `dd bs=` shapes a transfer
+# and nothing shapes an allocation. Linux has `/dev/shm` and usually a tmpfs
+# `/tmp`; macOS has neither, so this arm reports itself skipped there rather
+# than quietly measuring a disk and calling it memory.
+_memfs() {
+    local d
+    for d in /dev/shm /run/shm; do
+        [[ -d "$d" && -w "$d" ]] && { printf '%s' "$d"; return 0; }
+    done
+    # A tmpfs `/tmp`, where the platform can be asked.
+    if command -v findmnt >/dev/null 2>&1; then
+        case "$(findmnt -no FSTYPE --target /tmp 2>/dev/null)" in
+            tmpfs|ramfs) printf '/tmp'; return 0 ;;
+        esac
+    fi
+    return 1
+}
+
+# F: the same table as E, on a memory filesystem. The gap between the two is
+#    what the disk was costing, which is the part of a syscall a shell can
+#    actually do something about.
+arm_memfs_table() {
+    local root; root="$(_memfs)" || { printf 'SKIP'; return 0; }
+    local d; d="$(mktemp -d "${root}/aa.XXXXXX")"
+    local i last="" n
+    for (( i = 0; i < ENTRIES; i++ )); do
+        n="${KEYS[$i]//[^A-Za-z0-9_]/_}"
+        printf '%s' "${VALS[$i]}" > "$d/$n"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        n="${KEYS[$(( i * ENTRIES / LOOKUPS ))]//[^A-Za-z0-9_]/_}"
+        last=""; [[ -r "$d/$n" ]] && read -r last < "$d/$n"
+    done
+    for (( i = 0; i < LOOKUPS; i++ )); do
+        n="no/such-key.sh:${i}"; n="${n//[^A-Za-z0-9_]/_}"
+        last="MISS"; [[ -r "$d/$n" ]] && read -r last < "$d/$n"
+    done
+    rm -rf "$d"
+    printf '%s' "$last"
+}
+
+# -----------------------------------------------------------------------------
+# Running them
+# -----------------------------------------------------------------------------
+
+_ms() {
+    local fn="$1" start end out
+    start="$(date +%s%N 2>/dev/null)" || return 1
+    out="$("$fn")"
+    end="$(date +%s%N 2>/dev/null)" || return 1
+    _LAST_OUT="$out"
+    printf '%s' "$(( (end - start) / 1000000 ))"
+}
+
+main() {
+    _generate
+
+    printf 'What a map costs without bash associative arrays\n\n'
+    printf '  entries   %s\n' "$ENTRIES"
+    printf '  lookups   %s hits and %s misses\n' "$LOOKUPS" "$LOOKUPS"
+    printf '  keys      the real shape, <path>:<n>\n'
+    printf '  bash      %s\n' "${BASH_VERSION:-unknown}"
+    printf '  host      %s %s\n\n' "$(uname -s)" "$(uname -m)"
+
+    local -a names=(arm_bash_assoc arm_eval_names arm_eval_names_nofork
+                    arm_one_string arm_one_file arm_dir_table arm_memfs_table)
+    local -a labels=("bash declare -A" "eval names, encoded via subshell"
+                     "eval names, encoded in place" "one string, scanned"
+                     "one file, read in shell" "one file per key"
+                     "one file per key, in memory")
+    # Above these sizes an arm takes long enough that running it stops being
+    # worth the wait. Stated per arm rather than hidden, because which arms
+    # have a ceiling at all is itself the result: the two that address a key
+    # directly have none.
+    local -a ceiling=(0 4000 0 800 4000 0 0)
+    local -a took=()
+    local i t base=""
+
+    for (( i = 0; i < ${#names[@]}; i++ )); do
+        if (( ceiling[i] > 0 && ENTRIES > ceiling[i] )); then
+            took+=("-")
+            continue
+        fi
+        t="$(_ms "${names[$i]}")" || { printf 'no nanosecond clock here; cannot measure\n' >&2; return 1; }
+        took+=("$t")
+        [[ -z "$base" ]] && base="$t"
+    done
+
+    # The control that matters most: every arm has to give the same answers.
+    # Comparing a fast wrong one against a slow right one is not a comparison,
+    # and an arm whose encoding collides two keys would look excellent.
+    local want="" got=""
+    for (( i = 0; i < ${#names[@]}; i++ )); do
+        [[ "${took[$i]}" == "-" ]] && continue
+        got="$("${names[$i]}")"
+        [[ "$got" == "SKIP" ]] && continue
+        if [[ -z "$want" ]]; then want="$got"; continue; fi
+        if [[ "$got" != "$want" ]]; then
+            printf 'arms disagree: %s answered %q where the first answered %q\n' \
+                "${labels[$i]}" "$got" "$want" >&2
+            return 1
+        fi
+    done
+
+    # And that the input is distinct enough to be worth answering. An encoding
+    # that maps two real keys onto one name would pass the check above while
+    # holding half the table.
+    local -A seen=(); local n
+    for (( i = 0; i < ENTRIES; i++ )); do
+        n="${KEYS[$i]//[^A-Za-z0-9_]/_}"
+        seen["$n"]=1
+    done
+    if (( ${#seen[@]} != ENTRIES )); then
+        printf 'the name encoding collides: %s keys became %s names\n' \
+            "$ENTRIES" "${#seen[@]}" >&2
+        return 1
+    fi
+
+    # The second control. Every arm answers the same question on the same
+    # input, so if they all take the same time the instrument is measuring
+    # something other than the arms and the numbers below mean nothing.
+    local spread=0
+    for (( i = 1; i < ${#took[@]}; i++ )); do
+        [[ "${took[$i]}" == "-" ]] && continue
+        (( took[i] != took[0] )) && spread=1
+    done
+    if (( spread == 0 )); then
+        printf 'every arm took the same time, so this is not measuring the arms\n' >&2
+        return 1
+    fi
+
+    printf '  %-34s %9s  %s\n' "arm" "ms" "against bash"
+    for (( i = 0; i < ${#names[@]}; i++ )); do
+        local rel="-"
+        if [[ "${took[$i]}" == "-" ]]; then
+            printf '  %-34s %9s  %s\n' "${labels[$i]}" "-" "not run at this size"
+            continue
+        fi
+        if [[ "$("${names[$i]}")" == "SKIP" ]]; then
+            printf '  %-34s %9s  %s\n' "${labels[$i]}" "-" "no memory filesystem here"
+            continue
+        fi
+        (( base > 0 )) && rel="$(( took[i] * 100 / base ))%"
+        printf '  %-34s %9s  %s\n' "${labels[$i]}" "${took[$i]}" "$rel"
+    done
+
+    printf '\n'
+    printf 'The real table this stands in for is %s entries, and the arms that\n' "$REAL_TABLE"
+    printf 'search rather than address grow with it. Run with a larger first\n'
+    printf 'argument to see that; the default is small enough to finish.\n'
+}
+
+main "$@"

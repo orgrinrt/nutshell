@@ -374,6 +374,57 @@ it_takes_over_a_lock_whose_holder_died() {
 }
 
 #[test]
+it_records_the_pid_of_the_process_that_actually_holds_the_lock() {
+    # The guard runs inside a command substitution: `init` calls
+    # `extern_resolve` in `$( )`, which reaches `extern_path` and then here.
+    # `$$` in a subshell is the *parent's* pid, so the lock recorded a process
+    # that outlives the one holding it. A subshell dying mid-clone then left a
+    # lock naming a pid `kill -0` says is alive, the takeover never fired, and
+    # the next run sat out the whole ten minute clock instead.
+    #
+    # So the property is that the pid in the lock belongs to whoever wrote it.
+    _isolate
+    local fix work dir lock
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    dir="$(_extern_cache_root)/pretend-pid"
+    lock="${dir}.lock"
+    # The store root need not exist yet, and the guard makes it. A missing
+    # parent used to fail `mkdir "$lock"` the same way contention does, so this
+    # waited eleven minutes for a lock nobody held.
+    assert_fails test -d "$lock"
+
+    # Held long enough to read the lock while it exists, from a subshell, which
+    # is how every real caller reaches this.
+    local seen
+    seen="$( _EXTERN_LOCK_WAIT_SECONDS=3 _extern_guard "$dir" bash -c 'cat "$0/pid"' "$lock" )"
+
+    assert_ne "$seen" "" "the guard writes a pid into the lock"
+    assert_ne "$seen" "$$" "and it is not the pid of the shell that will outlive it"
+}
+
+#[test]
+it_still_waits_for_a_lock_whose_holder_is_alive() {
+    # The control for the one above. A live holder is a lock that must not be
+    # taken over, however impatient the next process is, or two clones race
+    # into one directory.
+    _isolate
+    local fix work dir lock
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    dir="$(_extern_cache_root)/pretend-live"
+    lock="${dir}.lock"
+    fs_mkdir "$lock"
+    printf '%s' "$$" > "${lock}/pid"
+
+    local rc=0
+    _EXTERN_LOCK_WAIT_SECONDS=2 _extern_guard "$dir" true || rc=$?
+    assert_ne "$rc" "0" "a live holder is waited for, then reported"
+}
+
+#[test]
 it_resolves_a_namespaced_module_to_a_file() {
     # What a namespaced `use` turns into. Kept separate from loading so the
     # resolution can be asked about without sourcing anything.
@@ -893,4 +944,31 @@ it_makes_no_scratch_directory_outside_its_own_root() {
     stray="$(grep -nE 'mktemp -d[)" ]|fs_temp_dir[ )"]' "${BASH_SOURCE[0]}" \
         | grep -v '_EX_TMP' | grep -v 'self-cleaned' | grep -vE '^[0-9]+: *#' || true)"
     assert_empty "$stray"
+}
+
+#[test]
+it_does_not_wait_out_the_clock_for_a_parent_that_is_merely_absent() {
+    # `mkdir "$lock"` is the lock, and it failed for two different reasons that
+    # looked identical: somebody holds it, or the directory above it is not
+    # there yet. The second waited eleven minutes for a lock nobody held, which
+    # is the whole default wait, on a store that had simply never been used.
+    _isolate
+    local fix work dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+
+    # Deliberately several levels below anything that exists.
+    dir="$(_extern_cache_root)/never/been/here/pretend"
+    assert_fails test -d "$(dirname "$dir")"
+
+    local start end rc=0
+    start="$(date +%s)"
+    _EXTERN_LOCK_WAIT_SECONDS=30 _extern_guard "$dir" git init --quiet "$dir" || rc=$?
+    end="$(date +%s)"
+
+    assert_eq "$rc" "0"
+    # Promptly, rather than after any part of the wait. The wait is set to 30
+    # here and is 660 in production, so the old behaviour blows this by a wide
+    # margin either way.
+    assert_ok test "$(( end - start ))" -lt 5
 }

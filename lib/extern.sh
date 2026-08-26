@@ -319,6 +319,12 @@ _extern_guard() {
     local dir="$1"; shift
     local lock="${dir}.lock" waited=0
 
+    # The parent, first. `mkdir "$lock"` is the lock, so it must not have a
+    # second reason to fail: a missing parent directory failed it exactly the
+    # way contention does, and the loop below then waited out the full eleven
+    # minutes for a lock nobody was holding.
+    mkdir -p "${lock%/*}" 2>/dev/null || true
+
     while ! mkdir "$lock" 2>/dev/null; do
         # Ready means ready, so a waiter never returns a half-written tree.
         _extern_is_repo "$dir" && return 0
@@ -351,7 +357,15 @@ _extern_guard() {
         fi
     done
 
-    printf '%s' "$$" > "${lock}/pid" 2>/dev/null
+    # `$BASHPID`, not `$$`.
+    #
+    # This runs inside a command substitution: `init` calls `extern_resolve`
+    # in `$( )`, which calls `extern_path`, which calls this. `$$` in a
+    # subshell is the *parent's* pid, so the lock recorded a process that
+    # outlives the one holding it. A subshell that died mid-clone left a lock
+    # naming a pid that `kill -0` still says is alive, and the takeover branch
+    # below never fired: the next process sat out the full wait instead.
+    printf '%s' "$BASHPID" > "${lock}/pid" 2>/dev/null
 
     local rc=0
     if ! _extern_is_repo "$dir"; then

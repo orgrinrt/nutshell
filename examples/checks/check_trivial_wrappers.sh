@@ -58,15 +58,39 @@ load_config() {
 # FUNCTION ANALYSIS
 # =============================================================================
 
+# Which functions in a file carry an exempting annotation.
+#
+# Built once per file, in the shell that runs the loop. `analyze_function` is
+# called through a command substitution, which is a subshell: anything it works
+# out is thrown away when it returns, so asking per function meant walking the
+# whole file per function, twice, and that was most of this check's time.
+declare -gA _TW_EXEMPT=()
+declare -gA _TW_EXEMPT_DONE=()
+
+tw_load_exemptions() {
+    local file="$1"
+    [[ -n "${_TW_EXEMPT_DONE[$file]:-}" ]] && return 0
+    _TW_EXEMPT_DONE[$file]=1
+    local marker name fn
+    for marker in "$(cfg_get_or "annotations.public_api" "#[pub]")" \
+                  "$(cfg_get_or "annotations.allow_trivial_wrapper_ergonomics" "DISABLED_ANNOTATION")"; do
+        [[ -n "$marker" ]] || continue
+        name="$(attr_name_of "$marker")" || continue
+        name="${name%%$'\t'*}"
+        [[ -n "$name" ]] || continue
+        while IFS= read -r fn; do
+            [[ -n "$fn" ]] && _TW_EXEMPT["${file}:${fn}"]=1
+        done < <(attr_find "$file" "$name" 2>/dev/null)
+    done
+    return 0
+}
+
 # Check if a function has an exempting annotation
-# Uses annotation patterns from config
 # Returns 0 if exempt, 1 if not
 has_exempt_annotation() {
-    local file="$1"
-    local func_name="$2"
-    
-    # Use the framework's has_trivial_wrapper_exemption which reads from config
-    has_trivial_wrapper_exemption "$file" "$func_name"
+    local file="$1" func_name="$2"
+    [[ -n "${_TW_EXEMPT_DONE[$file]:-}" ]] || return 1
+    [[ -n "${_TW_EXEMPT["${file}:${func_name}"]:-}" ]]
 }
 
 # Count usages of a function in a specific file (excluding the definition)
@@ -285,6 +309,9 @@ test_trivial_wrappers() {
         local file_has_issues=0
         local file_issues=""
         
+        # In this shell, before anything reads it from a subshell.
+        tw_load_exemptions "$file"
+
         # Get all functions in this file
         local functions
         functions=$(extract_functions "$file")

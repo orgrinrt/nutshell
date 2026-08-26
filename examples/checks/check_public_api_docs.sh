@@ -63,71 +63,118 @@ load_config() {
 # DOCUMENTATION CHECKING FUNCTIONS
 # =============================================================================
 
+# The file, once, as an array of lines.
+#
+# The scan below walks backwards from a definition and used to run `sed -n Np`
+# for each line it looked at, plus an `echo | grep` to decide what the line
+# was. That is three processes per line of every docblock in the library, and
+# it is why this check took most of a minute. Bash can hold the file and match
+# a line itself, which also means this needs no `sed` and no `grep` and works
+# on a machine that has neither.
+declare -gA _PAD_LINES=()
+declare -gA _PAD_LOADED=()
+declare -gA _PAD_AT=()
+declare -g  PAD_DOCBLOCK=""
+
+_pad_load() {
+    local file="$1"
+    [[ -n "${_PAD_LOADED[$file]:-}" ]] && return 0
+    local -a lines=()
+    # `mapfile` is a bash builtin and needs nothing installed, but it arrived
+    # in bash 4 and this reads a file a checker has to read. The loop below is
+    # the same thing on any bash, and no external tool is involved either way.
+    if [[ "$(type -t mapfile)" == "builtin" ]]; then
+        mapfile -t lines < "$file" 2>/dev/null || return 1
+    else
+        local __l
+        while IFS= read -r __l || [[ -n "$__l" ]]; do lines+=("$__l"); done < "$file" \
+            || return 1
+    fi
+    local i line
+    for (( i = 0; i < ${#lines[@]}; i++ )); do
+        line="${lines[$i]}"
+        _PAD_LINES["${file}:$((i + 1))"]="$line"
+        # Where each function is defined, recorded on the one pass rather than
+        # searched for per lookup. Searching was 440 functions times 376 lines
+        # of regex per file, which is the same shape as the greps it replaced.
+        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\( ]]; then
+            local n="${BASH_REMATCH[2]}"
+            [[ -n "${_PAD_AT["${file}:${n}"]:-}" ]] || _PAD_AT["${file}:${n}"]=$((i + 1))
+        fi
+    done
+    _PAD_LOADED[$file]="${#lines[@]}"
+    return 0
+}
+
+# One line of a loaded file, by number.
+_pad_line() { printf '%s' "${_PAD_LINES["${1}:${2}"]:-}"; }
+
+# Where a function is defined in a loaded file, or nothing.
+_pad_defined_at() {
+    local at="${_PAD_AT["${1}:${2}"]:-}"
+    [[ -n "$at" ]] || return 1
+    printf '%s' "$at"
+}
+
 # Extract the docblock before a function definition
 # Returns: the comment lines before the function (if any)
 get_function_docblock() {
     local file="$1"
     local func_name="$2"
-    
-    # Find the line number of the function definition
+
+    PAD_DOCBLOCK=""
+    _pad_load "$file" || return 1
+
     local func_line
-    func_line=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    
-    if [[ -z "$func_line" ]]; then
-        # Try alternate syntax
-        func_line=$(grep -n "^[[:space:]]*function[[:space:]]\+${func_name}[[:space:]]*(" "$file" 2>/dev/null | head -1 | cut -d: -f1)
-    fi
-    
-    [[ -z "$func_line" ]] && return 1
+    func_line="${_PAD_AT["${file}:${func_name}"]:-}"
+    [[ -n "$func_line" ]] || return 1
     [[ "$func_line" -lt 2 ]] && return 1
-    
+
     # Look backwards from the function definition to find comment block
-    local start_line=$((func_line - 1))
-    local docblock=""
-    local current_line=$start_line
-    
+    local docblock="" current_line=$(( func_line - 1 )) line prev
+
     while [[ $current_line -gt 0 ]]; do
-        local line
-        line=$(sed -n "${current_line}p" "$file" 2>/dev/null)
-        
-        # If line is a comment, add to docblock
-        if echo "$line" | grep -qE '^[[:space:]]*#'; then
+        line="${_PAD_LINES["${file}:${current_line}"]}"
+
+        if [[ "$line" =~ ^[[:space:]]*# ]]; then
             docblock="${line}"$'\n'"${docblock}"
-            current_line=$((current_line - 1))
-        # If line is blank, might be part of docblock, continue
+            current_line=$(( current_line - 1 ))
         elif [[ -z "${line// /}" ]]; then
-            # Check if previous line is also blank or non-comment
-            local prev_line
-            prev_line=$(sed -n "$((current_line - 1))p" "$file" 2>/dev/null)
-            if echo "$prev_line" | grep -qE '^[[:space:]]*#'; then
-                current_line=$((current_line - 1))
+            # A blank line is part of the block only when a comment is above it.
+            prev="${_PAD_LINES["${file}:$(( current_line - 1 ))"]:-}"
+            if [[ "$prev" =~ ^[[:space:]]*# ]]; then
+                current_line=$(( current_line - 1 ))
             else
                 break
             fi
         else
-            # Non-comment, non-blank line - stop
             break
         fi
     done
-    
-    echo "$docblock"
+
+    PAD_DOCBLOCK="$docblock"
+    printf '%s\n' "$docblock"
 }
 
 # Check if docblock contains an element
 docblock_has_element() {
-    local docblock="$1"
-    local element="$2"
-    
-    # Use grep -F for literal string matching (handles special chars like ->)
-    # Use -- to prevent element from being interpreted as options
-    echo "$docblock" | grep -qiF -- "$element"
+    local docblock="$1" element="$2"
+    # Literal and case-insensitive, the way `grep -qiF` was, without the two
+    # processes. `->` and the other markers carry characters a pattern would
+    # read as its own, so the needle is lowered and compared as text.
+    local hay="${docblock,,}" needle="${element,,}"
+    [[ "$hay" == *"$needle"* ]]
 }
 
 # Count comment lines in docblock
 count_doc_lines() {
-    local docblock="$1"
-    
-    echo "$docblock" | grep -cE '^[[:space:]]*#' || echo "0"
+    local docblock="$1" line n=0
+    # Counted here rather than through `echo | grep -c`, which is two processes
+    # per public function for a string this shell is already holding.
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && n=$(( n + 1 ))
+    done <<< "$docblock"
+    printf '%s' "$n"
 }
 
 # Find all functions marked with public API annotation
@@ -144,9 +191,13 @@ find_public_api_functions() {
     name="$(attr_name_of "$PUBLIC_API_ANNOTATION")" || return
     name="${name%%$'\t'*}"
 
+    _pad_load "$file" || return
     while IFS= read -r func_name; do
         [[ -z "$func_name" ]] && continue
-        func_line=$(grep -n "^[[:space:]]*${func_name}[[:space:]]*()[[:space:]]*{" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+        # Out of the loaded file rather than a `grep | head | cut`, which is
+        # three processes per public function and answers a question the file
+        # already in memory can answer.
+        func_line="$(_pad_defined_at "$file" "$func_name")" || func_line=0
         echo "${func_name}|${func_line:-0}|${rel_path}"
     done < <(attr_find "$file" "$name")
 }
@@ -189,6 +240,12 @@ test_public_api_docs() {
         
         # Find all public API functions in this file
         local public_functions
+        # Loaded here, in this shell, before anything reads it through a
+        # command substitution. A substitution is a subshell: it inherits what
+        # is already loaded and throws away anything it loads itself, so the
+        # cache below was being rebuilt once per function rather than once per
+        # file. That was most of this check's time.
+        _pad_load "$file" || true
         public_functions=$(find_public_api_functions "$file")
         
         while IFS='|' read -r func_name func_line func_file; do
@@ -197,7 +254,8 @@ test_public_api_docs() {
             
             # Get the docblock for this function
             local docblock
-            docblock=$(get_function_docblock "$file" "$func_name")
+            get_function_docblock "$file" "$func_name"
+            docblock="$PAD_DOCBLOCK"
             
             local has_error=0
             local has_warn=0

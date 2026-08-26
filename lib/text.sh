@@ -158,12 +158,14 @@ text_lines() {
 # Find lines matching pattern
 # Usage: text_grep "pattern" "file" -> prints matching lines
 text_grep() {
+    nut_lazy_guard text_grep || return 1
+    local _NUT_LAZY_text_grep=1
     # First call: decide which implementation to use
     if deps_has "grep"; then
-        use super::text::impl::grep_match
+        nut_reload super::text::impl::grep_match
         _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
-        use super::text::impl::perl_match
+        nut_reload super::text::impl::perl_match
         _TEXT_MATCH_IMPL="perl"
     else
         # No tool available; define a failing function
@@ -182,12 +184,14 @@ text_grep() {
 # Check if file contains pattern
 # Usage: text_contains "pattern" "file" -> returns 0 (true) or 1 (false)
 text_contains() {
+    nut_lazy_guard text_contains || return 1
+    local _NUT_LAZY_text_contains=1
     # First call: decide which implementation to use
     if deps_has "grep"; then
-        use super::text::impl::grep_match
+        nut_reload super::text::impl::grep_match
         _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
-        use super::text::impl::perl_match
+        nut_reload super::text::impl::perl_match
         _TEXT_MATCH_IMPL="perl"
     else
         text_contains() {
@@ -204,12 +208,14 @@ text_contains() {
 # Count occurrences of pattern in file
 # Usage: text_count_matches "pattern" "file" -> "5"
 text_count_matches() {
+    nut_lazy_guard text_count_matches || return 1
+    local _NUT_LAZY_text_count_matches=1
     # First call: decide which implementation to use
     if deps_has "grep"; then
-        use super::text::impl::grep_match
+        nut_reload super::text::impl::grep_match
         _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
-        use super::text::impl::perl_match
+        nut_reload super::text::impl::perl_match
         _TEXT_MATCH_IMPL="perl"
     else
         text_count_matches() {
@@ -236,22 +242,24 @@ text_count_matches() {
 #   3. perl
 #   4. awk (slowest, uses temp file)
 text_replace() {
+    nut_lazy_guard text_replace || return 1
+    local _NUT_LAZY_text_replace=1
     # First call: decide which implementation to use based on available tools
     local impl=""
     
     # Prefer combo when both grep and sed are available
     # The combo checks if pattern exists before invoking sed (optimization)
     if deps_has_all "grep" "sed"; then
-        use super::text::impl::combo::grep_sed
+        nut_reload super::text::impl::combo::grep_sed
         _TEXT_REPLACE_IMPL="grep_sed"
     elif deps_has "sed"; then
-        use super::text::impl::sed_replace
+        nut_reload super::text::impl::sed_replace
         _TEXT_REPLACE_IMPL="sed"
     elif deps_has "perl"; then
-        use super::text::impl::perl_replace
+        nut_reload super::text::impl::perl_replace
         _TEXT_REPLACE_IMPL="perl"
     elif deps_has "awk"; then
-        use super::text::impl::awk_replace
+        nut_reload super::text::impl::awk_replace
         _TEXT_REPLACE_IMPL="awk"
     else
         # No tool available
@@ -278,8 +286,10 @@ text_replace() {
 # More efficient than sed alone when only a subset of lines need changes.
 # Falls back to sed-only if grep is not available.
 text_filtered_replace() {
+    nut_lazy_guard text_filtered_replace || return 1
+    local _NUT_LAZY_text_filtered_replace=1
     if deps_has_all "grep" "sed"; then
-        use super::text::impl::combo::grep_sed
+        nut_reload super::text::impl::combo::grep_sed
     else
         # Fallback: just do a regular replace (filter is ignored)
         # This is less efficient but still works
@@ -302,8 +312,10 @@ text_filtered_replace() {
 # 
 # Useful for extracting and reformatting specific lines without modifying the file.
 text_extract_transform() {
+    nut_lazy_guard text_extract_transform || return 1
+    local _NUT_LAZY_text_extract_transform=1
     if deps_has_all "grep" "sed"; then
-        use super::text::impl::combo::grep_sed
+        nut_reload super::text::impl::combo::grep_sed
     else
         # Fallback using separate grep and sed calls
         text_extract_transform() {
@@ -335,8 +347,10 @@ text_extract_transform() {
 # 
 # Useful for scoped counting, e.g., count TODOs only in comment lines.
 text_count_in_matches() {
+    nut_lazy_guard text_count_in_matches || return 1
+    local _NUT_LAZY_text_count_in_matches=1
     if deps_has_all "grep" "sed"; then
-        use super::text::impl::combo::grep_sed
+        nut_reload super::text::impl::combo::grep_sed
     else
         # Fallback
         text_count_in_matches() {

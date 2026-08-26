@@ -250,6 +250,8 @@ fs_basename_no_ext() {
 # Get file size in bytes
 # Usage: fs_size "/path/to/file" -> "12345"
 fs_size() {
+    nut_lazy_guard fs_size || return 1
+    local _NUT_LAZY_fs_size=1
     # First call: decide which implementation to use
     local impl=""
     
@@ -280,7 +282,7 @@ fs_size() {
         # the module is, loads it once however many callers arrive, and the
         # declaration covers it; a hand-rolled `source` has none of that, and
         # fails at the moment it is reached rather than before the run.
-        use "super::fs::impl::${impl}"
+        nut_reload "super::fs::impl::${impl}"
     else
         # No tool available
         fs_size() {
@@ -297,6 +299,8 @@ fs_size() {
 # Get file modification time (epoch seconds)
 # Usage: fs_mtime "/path/to/file" -> "1234567890"
 fs_mtime() {
+    nut_lazy_guard fs_mtime || return 1
+    local _NUT_LAZY_fs_mtime=1
     # First call: decide which implementation to use
     local impl=""
     
@@ -325,7 +329,7 @@ fs_mtime() {
         # the module is, loads it once however many callers arrive, and the
         # declaration covers it; a hand-rolled `source` has none of that, and
         # fails at the moment it is reached rather than before the run.
-        use "super::fs::impl::${impl}"
+        nut_reload "super::fs::impl::${impl}"
     else
         fs_mtime() {
             echo "[ERROR] fs_mtime: no stat tool available" >&2

@@ -10,6 +10,7 @@
 use extern test
 
 DECLARE="${BASH_SOURCE[0]%/*}/../bin/nut-declare"
+ROOT_DIR="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
 
 # A library with a declaration, laid out the way a real one is.
 _lib() {
@@ -250,4 +251,43 @@ it_loads_an_implementation_through_the_resolver() {
     done > /tmp/_nut_direct_sources.$$
     bad="$(cat /tmp/_nut_direct_sources.$$)"; rm -f /tmp/_nut_direct_sources.$$
     assert_empty "$bad"
+}
+
+# --- the ways around the declaration ------------------------------------------------
+#
+# A declaration a caller can step around is not a declaration. These are the
+# routes that existed: a bare `use` went straight to lib/<name>.sh, so spelling
+# a path reached a file the library had marked internal, in one call, without
+# the declaration being consulted at all.
+
+#[test]
+it_refuses_a_bare_use_that_spells_a_path() {
+    local out
+    out="$(bash -c "cd '$ROOT_DIR'; . ./init; use json/impl/jq" 2>&1 || true)"
+    assert_ok grep -q "separates modules with '/'" <<<"$out"
+    assert_ok grep -q 'json::impl::jq' <<<"$out"
+}
+
+#[test]
+it_does_not_load_an_internal_module_by_spelling_its_path() {
+    local out
+    out="$(bash -c "cd '$ROOT_DIR'; . ./init; use json/impl/jq >/dev/null 2>&1; declare -F _json_jq_get >/dev/null && printf REACHED || printf refused" 2>&1)"
+    assert_ok grep -q 'refused' <<<"$out"
+}
+
+#[test]
+it_still_loads_a_plain_module_by_name() {
+    local out
+    out="$(bash -c "cd '$ROOT_DIR'; . ./init; use json && printf OK" 2>&1)"
+    assert_ok grep -q 'OK' <<<"$out"
+}
+
+#[test]
+it_loads_its_own_nested_module_by_name() {
+    # nutshell's own tree is named the way anybody else's is. Treating every
+    # `::` as a dependency made its own nested modules unreachable except from
+    # inside the unit.
+    local out
+    out="$(bash -c "cd '$ROOT_DIR'; . ./init; use text::impl::grep_match && printf OK" 2>&1)"
+    assert_ok grep -q 'OK' <<<"$out"
 }

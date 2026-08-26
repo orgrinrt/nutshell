@@ -160,10 +160,10 @@ text_lines() {
 text_grep() {
     # First call: decide which implementation to use
     if deps_has "grep"; then
-        source "${_TEXT_IMPL_DIR}/grep_match.sh"
+        use super::text::impl::grep_match
         _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
-        source "${_TEXT_IMPL_DIR}/perl_match.sh"
+        use super::text::impl::perl_match
         _TEXT_MATCH_IMPL="perl"
     else
         # No tool available; define a failing function
@@ -184,10 +184,10 @@ text_grep() {
 text_contains() {
     # First call: decide which implementation to use
     if deps_has "grep"; then
-        source "${_TEXT_IMPL_DIR}/grep_match.sh"
+        use super::text::impl::grep_match
         _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
-        source "${_TEXT_IMPL_DIR}/perl_match.sh"
+        use super::text::impl::perl_match
         _TEXT_MATCH_IMPL="perl"
     else
         text_contains() {
@@ -206,10 +206,10 @@ text_contains() {
 text_count_matches() {
     # First call: decide which implementation to use
     if deps_has "grep"; then
-        source "${_TEXT_IMPL_DIR}/grep_match.sh"
+        use super::text::impl::grep_match
         _TEXT_MATCH_IMPL="grep"
     elif deps_has "perl"; then
-        source "${_TEXT_IMPL_DIR}/perl_match.sh"
+        use super::text::impl::perl_match
         _TEXT_MATCH_IMPL="perl"
     else
         text_count_matches() {
@@ -242,16 +242,16 @@ text_replace() {
     # Prefer combo when both grep and sed are available
     # The combo checks if pattern exists before invoking sed (optimization)
     if deps_has_all "grep" "sed"; then
-        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+        use super::text::impl::combo::grep_sed
         _TEXT_REPLACE_IMPL="grep_sed"
     elif deps_has "sed"; then
-        source "${_TEXT_IMPL_DIR}/sed_replace.sh"
+        use super::text::impl::sed_replace
         _TEXT_REPLACE_IMPL="sed"
     elif deps_has "perl"; then
-        source "${_TEXT_IMPL_DIR}/perl_replace.sh"
+        use super::text::impl::perl_replace
         _TEXT_REPLACE_IMPL="perl"
     elif deps_has "awk"; then
-        source "${_TEXT_IMPL_DIR}/awk_replace.sh"
+        use super::text::impl::awk_replace
         _TEXT_REPLACE_IMPL="awk"
     else
         # No tool available
@@ -279,7 +279,7 @@ text_replace() {
 # Falls back to sed-only if grep is not available.
 text_filtered_replace() {
     if deps_has_all "grep" "sed"; then
-        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+        use super::text::impl::combo::grep_sed
     else
         # Fallback: just do a regular replace (filter is ignored)
         # This is less efficient but still works
@@ -303,7 +303,7 @@ text_filtered_replace() {
 # Useful for extracting and reformatting specific lines without modifying the file.
 text_extract_transform() {
     if deps_has_all "grep" "sed"; then
-        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+        use super::text::impl::combo::grep_sed
     else
         # Fallback using separate grep and sed calls
         text_extract_transform() {
@@ -336,7 +336,7 @@ text_extract_transform() {
 # Useful for scoped counting, e.g., count TODOs only in comment lines.
 text_count_in_matches() {
     if deps_has_all "grep" "sed"; then
-        source "${_TEXT_COMBO_DIR}/grep_sed.sh"
+        use super::text::impl::combo::grep_sed
     else
         # Fallback
         text_count_in_matches() {

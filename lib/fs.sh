@@ -256,27 +256,31 @@ fs_size() {
     if deps_has "stat"; then
         local variant="${_TOOL_VARIANT[stat]:-unknown}"
         case "$variant" in
-            gnu)     impl="stat_gnu.sh" ;;
-            bsd)     impl="stat_bsd.sh" ;;
+            gnu)     impl="stat_gnu" ;;
+            bsd)     impl="stat_bsd" ;;
             *)
                 # Unknown variant; try perl if available
                 if deps_has "perl"; then
-                    impl="perl_stat.sh"
+                    impl="perl_stat"
                 else
                     # Guess based on OS
                     case "$(uname -s)" in
-                        Darwin*) impl="stat_bsd.sh" ;;
-                        *)       impl="stat_gnu.sh" ;;
+                        Darwin*) impl="stat_bsd" ;;
+                        *)       impl="stat_gnu" ;;
                     esac
                 fi
                 ;;
         esac
     elif deps_has "perl"; then
-        impl="perl_stat.sh"
+        impl="perl_stat"
     fi
     
     if [[ -n "$impl" ]]; then
-        source "${_FS_IMPL_DIR}/${impl}"
+        # Named, not sourced by an assembled path. The resolver knows where
+        # the module is, loads it once however many callers arrive, and the
+        # declaration covers it; a hand-rolled `source` has none of that, and
+        # fails at the moment it is reached rather than before the run.
+        use "super::fs::impl::${impl}"
     else
         # No tool available
         fs_size() {
@@ -299,25 +303,29 @@ fs_mtime() {
     if deps_has "stat"; then
         local variant="${_TOOL_VARIANT[stat]:-unknown}"
         case "$variant" in
-            gnu)     impl="stat_gnu.sh" ;;
-            bsd)     impl="stat_bsd.sh" ;;
+            gnu)     impl="stat_gnu" ;;
+            bsd)     impl="stat_bsd" ;;
             *)
                 if deps_has "perl"; then
-                    impl="perl_stat.sh"
+                    impl="perl_stat"
                 else
                     case "$(uname -s)" in
-                        Darwin*) impl="stat_bsd.sh" ;;
-                        *)       impl="stat_gnu.sh" ;;
+                        Darwin*) impl="stat_bsd" ;;
+                        *)       impl="stat_gnu" ;;
                     esac
                 fi
                 ;;
         esac
     elif deps_has "perl"; then
-        impl="perl_stat.sh"
+        impl="perl_stat"
     fi
     
     if [[ -n "$impl" ]]; then
-        source "${_FS_IMPL_DIR}/${impl}"
+        # Named, not sourced by an assembled path. The resolver knows where
+        # the module is, loads it once however many callers arrive, and the
+        # declaration covers it; a hand-rolled `source` has none of that, and
+        # fails at the moment it is reached rather than before the run.
+        use "super::fs::impl::${impl}"
     else
         fs_mtime() {
             echo "[ERROR] fs_mtime: no stat tool available" >&2

@@ -29,6 +29,7 @@ string                   lib/string.sh
 test                     lib/test.sh
 text                     lib/text.sh
 text::impl::awk_replace  lib/text/impl/awk_replace.sh internal
+text::impl::combo::grep_sed lib/text/impl/combo/grep_sed.sh internal
 text::impl::grep_match   lib/text/impl/grep_match.sh  internal
 text::impl::perl_match   lib/text/impl/perl_match.sh  internal
 text::impl::perl_replace lib/text/impl/perl_replace.sh internal

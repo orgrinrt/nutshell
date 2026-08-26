@@ -48,8 +48,12 @@ ROOT="${ROOT%/}"
 # gets the name that would have won.
 _scan() {
     local f rel name
-    for f in "$ROOT"/lib/*.sh "$ROOT"/lib/*/*.sh "$ROOT"/lib/*/*/*.sh \
-             "$ROOT"/libs/*.sh "$ROOT"/libs/*/*.sh "$ROOT"/libs/*/*/*.sh; do
+    # find, not a list of globs at fixed depths. A glob per level means a
+    # module one level deeper than anyone wrote a glob for is invisible, and
+    # invisible to the check as well, because both read the same list. That is
+    # how text::impl::combo::grep_sed came to be undeclared while --check
+    # reported the library complete.
+    while IFS= read -r f; do
         [[ -f "$f" ]] || continue
         rel="${f#$ROOT/}"
         # nutshell's own vendored copy is not part of the library declaring it.
@@ -66,7 +70,8 @@ _scan() {
         else
             printf '%s\t%s\t\n' "$name" "$rel"
         fi
-    done | sort -u
+    done < <(find "$ROOT/lib" "$ROOT/libs" -type f -name '*.sh' 2>/dev/null | sort) \
+        | sort -u
 }
 
 _render() {

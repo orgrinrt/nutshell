@@ -198,3 +198,56 @@ it_checks_every_library_in_this_workspace() {
     # the check is a thing that only passes on fixtures.
     assert_ok "$DECLARE" --check "${BASH_SOURCE[0]%/*}/.."
 }
+
+#[test]
+it_finds_a_module_however_deep_it_sits() {
+    # The scan used a glob per level, so a module one level deeper than anyone
+    # had written a glob for was invisible. Invisible to --check too, since
+    # both read the same list: the library reported complete while
+    # text::impl::combo::grep_sed was undeclared and would have failed at the
+    # moment it was reached.
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/lib/text/impl/combo"
+    : > "$d/lib/text/impl/combo/grep_sed.sh"
+    local out; out="$("$DECLARE" --print "$d")"
+    assert_ok grep -q 'text::impl::combo::grep_sed' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_finds_one_deeper_still() {
+    # Not "one more level than the bug had": no level at all.
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/lib/a/b/c/d/e"
+    : > "$d/lib/a/b/c/d/e/deep.sh"
+    assert_ok grep -q 'a::b::c::d::e::deep' <<<"$("$DECLARE" --print "$d")"
+    rm -rf "$d"
+}
+
+#[test]
+it_reports_a_deep_file_as_undeclared() {
+    # The check has to see as far as the scan, or it certifies a tree it did
+    # not look at.
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/lib/a/b/c"
+    : > "$d/lib/a/b/c/deep.sh"
+    printf 'nothing lib/nothing.sh\n' > "$d/lib.nut"
+    : > "$d/lib/nothing.sh"
+    out="$("$DECLARE" --check "$d" 2>&1 || true)"
+    assert_ok grep -q 'a::b::c::deep' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_loads_an_implementation_through_the_resolver() {
+    # A hand-rolled `source` goes around the resolver: loaded again for every
+    # caller, not covered by the declaration, and failing when reached rather
+    # than before the run.
+    local bad=""
+    grep -rn 'source "\${_[A-Z_]*_DIR}' "${BASH_SOURCE[0]%/*}/../lib"/*.sh 2>/dev/null \
+        | grep -v '/nutshell/' | while IFS= read -r line; do
+        printf '%s\n' "$line"
+    done > /tmp/_nut_direct_sources.$$
+    bad="$(cat /tmp/_nut_direct_sources.$$)"; rm -f /tmp/_nut_direct_sources.$$
+    assert_empty "$bad"
+}

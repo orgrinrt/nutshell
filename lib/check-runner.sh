@@ -253,21 +253,53 @@ _find_config_file() {
     return 1
 }
 
-# Find repo root by looking for common markers
-_find_repo_root() {
-    local dir="$_CHECK_RUNNER_DIR"
-    
-    while [[ "$dir" != "/" ]]; do
-        # Check for repo markers
-        if [[ -d "$dir/.git" ]] || [[ -f "$dir/nut.toml" ]] || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/package.json" ]]; then
-            echo "$dir"
+# Walk up from a directory to the first repository marker above it.
+_walk_to_marker() {
+    local dir="${1:-}"
+    [[ -d "$dir" ]] || return 1
+    dir="$(cd "$dir" && pwd)" || return 1
+
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        if [[ -d "$dir/.git" ]] || [[ -f "$dir/nut.toml" ]] \
+           || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/package.json" ]]; then
+            printf '%s' "$dir"
             return 0
         fi
         dir="$(dirname "$dir")"
     done
-    
-    # Fall back to nutshell root if nothing else found
-    echo "$NUTSHELL_ROOT"
+    return 1
+}
+
+# The repository being checked.
+#
+# From where the check was invoked, not from where this file happens to sit.
+# Walking up from this file finds whichever nutshell is running the check, so
+# every consumer was having nutshell's own source graded against the
+# consumer's thresholds. It looked like a passing gate and no consumer's code
+# had ever been read. `paths.exclude` could not help: the walk started inside
+# the directory the consumer was excluding.
+#
+# It is not only a vendoring problem. A consumer resolving nutshell out of the
+# store gets the same answer, because a store checkout carries a `.git` too.
+_find_repo_root() {
+    local root
+
+    # What the caller named. A config file states which repository it is the
+    # config for, and its directory is that repository.
+    if [[ -n "${NUTSHELL_CONFIG:-}" ]] && [[ -f "$NUTSHELL_CONFIG" ]]; then
+        root="$(cd "$(dirname "$NUTSHELL_CONFIG")" && pwd)" && {
+            printf '%s' "$root"; return 0
+        }
+    fi
+
+    # Where the check was run from. `./check` at a project root, or anywhere
+    # inside it, both mean that project.
+    root="$(_walk_to_marker "$PWD")" && { printf '%s' "$root"; return 0; }
+
+    # Nothing above the invocation directory says it is a repository, so there
+    # is nothing to check but the interpreter itself.
+    root="$(_walk_to_marker "$_CHECK_RUNNER_DIR")" && { printf '%s' "$root"; return 0; }
+    printf '%s' "$NUTSHELL_ROOT"
 }
 
 # =============================================================================

@@ -57,7 +57,15 @@ use toml xdg fs log validate
 # manifest is the right answer for it.
 _extern_manifest() {
     local start dir
-    for start in "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
+    # The file that wrote the `use`, first. NUTSHELL_SCRIPT_DIR is unset on
+    # purpose (a process that sources init would inherit an ancestor's), which
+    # left only PWD: so a tool installed on PATH and run from anywhere else
+    # could not find its own nut.toml, and every `use dep::x` in it failed.
+    #
+    # _NUT_ASKING_FROM is set per call by `use`, from BASH_SOURCE, so it says
+    # which unit is asking rather than which process was started. Same
+    # anchoring `super::` uses, for the same reason.
+    for start in "${_NUT_ASKING_FROM:-}" "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
         [[ -z "$start" ]] && continue
         dir="$start"
         while [[ "$dir" != "/" && -n "$dir" ]]; do

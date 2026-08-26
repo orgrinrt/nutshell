@@ -553,3 +553,29 @@ it_does_not_record_a_module_that_failed_to_load() {
     # was never sourced.
     assert_eq "$out" "not recorded"
 }
+
+#[test]
+it_finds_a_units_manifest_when_run_from_somewhere_else() {
+    # A tool installed on PATH and run from any other directory could not
+    # resolve a single dependency: the manifest search had only PWD, which is a
+    # fact about where the shell was started rather than about which unit is
+    # asking.
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/unit/lib" "$d/dep/libs"
+    printf '[meta]\nname="unit"\n\n[deps.dep]\ngit = "x"\n' > "$d/unit/nut.toml"
+    printf 'MARKER=reached\n' > "$d/dep/libs/thing.sh"
+    printf 'thing libs/thing.sh\n' > "$d/dep/lib.nut"
+    printf 'use extern\nextern_path() { printf "%%s" "%s/dep"; }\nuse dep::thing\n' "$d" \
+        > "$d/unit/lib/main.sh"
+
+    # Run from a directory that is not the unit and has no manifest above it.
+    # The init path is captured before the cd: `$PWD` inside would be the
+    # directory just moved to, which is the mistake this test is about.
+    local nut; nut="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    out="$(cd "$d" && bash -c "
+        . '$nut/init' 2>/dev/null
+        . '$d/unit/lib/main.sh'
+        printf '%s' \"\${MARKER:-unset}\"" 2>&1)"
+    assert_ok grep -q 'reached' <<<"$out"
+    rm -rf "$d"
+}

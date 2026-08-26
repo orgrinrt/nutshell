@@ -732,3 +732,39 @@ it_takes_a_commit_that_carries_a_file_the_old_one_did_not() {
     rm -rf "$origin" "$mirror"
     assert_contains "$has" "later.sh"
 }
+
+#[test]
+it_lets_the_lockfile_win_over_a_tag_that_disagrees() {
+    # Written down because it surprises: a tag names one commit and the lock
+    # names another, and the lock is what the checkout goes to. That is right
+    # when an upstream tag has moved under a project that already resolved it,
+    # and it means a hand-edited lock silently redirects a tag pin.
+    _isolate
+    local fix work first second dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    second="${fix##* }"
+    git -C "${work}/dep" tag -a v1 -m 'v1' "$first"
+    cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "v1"|' nut.toml && rm -f nut.toml.bak
+
+    extern_lock_write fixture "$second"
+    dir="$(extern_path fixture)"
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$second"
+}
+
+#[test]
+it_resolves_the_tag_again_when_the_lock_entry_is_gone() {
+    # The way back, and the reason the behaviour above is safe: deleting the
+    # entry is how you ask for the ref to decide.
+    _isolate
+    local fix work first dir
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    first="$(printf '%s' "$fix" | cut -d' ' -f2)"
+    git -C "${work}/dep" tag -a v1 -m 'v1' "$first"
+    cd "${work}/project" || return 1
+    sed -i.bak 's|^ref = .*|ref = "v1"|' nut.toml && rm -f nut.toml.bak
+
+    dir="$(extern_path fixture)"
+    assert_eq "$(git -C "$dir" rev-parse HEAD)" "$first"
+}

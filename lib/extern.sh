@@ -486,6 +486,12 @@ _extern_remember_resolution() {
 # last answer is used and said out loud: a revision that was the head an hour
 # ago is very probably still in the cache, and running from it beats refusing
 # to run on a machine somebody is in the middle of fixing.
+# Where a fixed ref and the lockfile disagree, the lockfile wins and the
+# checkout goes to the commit it names. That is what a lockfile is for and it is
+# right when an upstream tag has moved under a project that already resolved it.
+# It also means a hand-edited or damaged lock silently redirects a tag pin:
+# nothing checks that the locked commit is reachable from the ref, and deleting
+# the entry is how you ask for the ref to be resolved again.
 # Usage: extern_resolve_ref <url> <ref> -> prints "moving <sha>" or "fixed <sha>"
 extern_resolve_ref() {
     local url="$1" ref="$2" out kind sha f

@@ -9,27 +9,51 @@ macOS ships 3.2 at `/bin/bash`, so install a current bash there first.
 
 ## Installation
 
-Add nutshell to your project:
+One nutshell on the machine, shared by everything that uses it. That is the
+good state, and the two lines below are the whole of it:
 
 ```bash
-# Option A: Git submodule (recommended)
-git submodule add https://github.com/orgrinrt/nutshell.git scripts/lib/nutshell
-
-# Option B: Download a source archive (releases ship no built artifacts).
-# 0.3.0 is the latest tag; check the releases page for newer ones.
-mkdir -p scripts/lib/nutshell
-curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.3.0.tar.gz \
-    | tar -xz --strip-components=1 -C scripts/lib/nutshell
+git clone https://github.com/orgrinrt/nutshell.git
+./nutshell/install
 ```
 
-That's it. No global install required. Nutshell lives in your project.
+`install` links the interpreter onto PATH, so a script can say
+`#!/usr/bin/env nutshell` and a project can find it without carrying a copy.
 
-Optionally, link the interpreter onto PATH so standalone scripts can use the
-`#!/usr/bin/env nutshell` shebang:
+### When a project needs a version the machine does not have
+
+Copy `find-nutshell` into the project and let it resolve. It is one file, it
+depends on nothing, and it is what has to be on disk before anything else can
+be found:
 
 ```bash
-./scripts/lib/nutshell/install
+# in the project
+curl -LO https://raw.githubusercontent.com/orgrinrt/nutshell/main/find-nutshell
 ```
+
+```bash
+#!/usr/bin/env bash
+HERE="${BASH_SOURCE[0]%/*}"
+. "$HERE/find-nutshell"
+nutshell_find "$HERE" dev || exit 1    # a version, or a branch
+. "$NUTSHELL_INIT"
+```
+
+It takes what the caller named, then what is installed if that satisfies, then
+the store, then fetches into the store. A pin naming a branch means that
+branch's head, asked at most once an hour.
+
+### Do not carry a copy in the tree
+
+A nutshell inside a project is a second version that drifts from the machine's
+in silence, and there is no moment where that becomes visible: it simply
+resolves modules that existed when it was added and none since, and the error
+names a missing function rather than a stale copy. It happened twice in one day
+in the projects this was written for, and both of them dropped theirs.
+
+A vendored copy at `<project>/lib/nutshell` is still the last thing
+`nutshell_find` tries, and it is there for one case: a machine with no network
+that is being rescued. Not as a way to install.
 
 ### The store
 
@@ -209,14 +233,19 @@ log_info "Building..."
 
 ## Integrating with Task Runners
 
-Nutshell scripts work with any task runner. The scripts bootstrap themselves:
+Nutshell scripts work with any task runner. The scripts bootstrap themselves,
+so the runner does not have to know where nutshell is.
+
+`nutshell-check` below is the project's own one-line wrapper: it resolves
+nutshell the same way the tool does and hands over. `check` in this repository
+is that wrapper.
 
 **deno.json:**
 ```json
 {
   "tasks": {
     "build": "./scripts/build.sh",
-    "check": "./scripts/lib/nutshell/check"
+    "check": "nutshell-check"
   }
 }
 ```
@@ -226,7 +255,7 @@ Nutshell scripts work with any task runner. The scripts bootstrap themselves:
 {
   "scripts": {
     "build": "./scripts/build.sh",
-    "check": "./scripts/lib/nutshell/check"
+    "check": "nutshell-check"
   }
 }
 ```
@@ -237,7 +266,7 @@ build:
 	./scripts/build.sh
 
 check:
-	./scripts/lib/nutshell/check
+	nutshell-check
 ```
 
 Anyone can run `deno task build` or `npm run check` without knowing nutshell exists.
@@ -274,6 +303,12 @@ use os log json http
 | `test` | Test harness (`assert_eq`, `test_run`, `test_summary`) |
 | `attr` | Attributes on definitions (`attr_has`, `attr_arg`, `attr_find`) |
 | `cli` | Subcommand dispatch with did-you-mean (`cli_command`, `cli_run`) |
+| `srcfile` | A source file read once (`nut_load_file`, `nut_defined_at`, `nut_body_of`) |
+| `checkcache` | A check's answer kept until it can change (`nut_cache_hit`, `nut_cache_read`) |
+| `priv` | Elevating for one step and stepping back (`priv_run`, `priv_as_user`) |
+| `extern` | Declared dependencies out of the store (`extern_path`, `extern_declared`) |
+| `modgraph` | What a module declares against what it calls |
+| `git` | Repository questions (`git_root`, `git_branch`, `git_is_clean`) |
 | `git` | Reading a repository (`git_trunk`, `git_changed_files`, `git_trailers`) |
 | `modgraph` | The module graph and its violations (`modgraph_build`, `modgraph_audit`) |
 | `extern` | Libraries from elsewhere (`extern_path`, `extern_resolve`) |

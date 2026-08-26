@@ -196,7 +196,13 @@ extern_path() {
 
     commit="$(extern_locked "$name")" || commit=""
     if [[ -z "$commit" ]]; then
-        commit="$(git -C "$mirror" rev-parse HEAD 2>/dev/null)" || return 1
+        # No lock entry means "take the newest commit on the ref", which is what
+        # `nut.lock` tells a reader deleting it will do. A mirror cloned once
+        # and never fetched again cannot do that: `rev-parse HEAD` answers with
+        # whatever the ref pointed at the first time anybody asked, which in one
+        # case was the dependency's first commit, months of work later.
+        _extern_refresh "$mirror" "$ref"
+        commit="$(_extern_ref_commit "$mirror" "$ref")" || return 1
         extern_lock_write "$name" "$commit"
     fi
 
@@ -371,6 +377,32 @@ _extern_mirror() {
 
     _extern_guard "$dir" _extern_fetch "$name" "$url" "$ref" "$dir" || return 1
     printf '%s' "$dir"
+}
+
+# Bring a mirror up to date with its ref. Best effort: a machine with no
+# network still has whatever it cloned, and a stale answer beats no answer for
+# a tool whose whole point is working on a machine that is broken.
+_extern_refresh() {
+    local mirror="$1" ref="$2"
+    [[ -n "$ref" ]] || return 0
+    # `--depth 1` because the mirror is only ever read at one commit, and the
+    # clone that made it was shallow too.
+    git -C "$mirror" fetch --quiet --depth 1 origin "$ref" 2>/dev/null || return 0
+    return 0
+}
+
+# What a ref points at in a mirror. FETCH_HEAD first, since that is what the
+# refresh just wrote; then the remote branch; then HEAD, which is the answer
+# for a mirror that was cloned at a sha.
+_extern_ref_commit() {
+    local mirror="$1" ref="$2" c
+    for c in FETCH_HEAD "origin/${ref}" "$ref" HEAD; do
+        [[ -n "$ref" || "$c" == "HEAD" ]] || continue
+        if git -C "$mirror" rev-parse --verify --quiet "${c}^{commit}" >/dev/null 2>&1; then
+            git -C "$mirror" rev-parse "${c}^{commit}" 2>/dev/null && return 0
+        fi
+    done
+    return 1
 }
 
 # _extern_fetch <name> <url> <ref> <dir>

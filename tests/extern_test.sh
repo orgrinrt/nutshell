@@ -579,3 +579,93 @@ it_finds_a_units_manifest_when_run_from_somewhere_else() {
     assert_ok grep -q 'reached' <<<"$out"
     rm -rf "$d"
 }
+
+# --- taking the newest commit on a ref ---------------------------------------
+#
+# `nut.lock` tells a reader that deleting an entry takes the newest commit on
+# its ref again. A mirror cloned once and never fetched cannot do that: it
+# answers with whatever the ref pointed at the first time anybody asked. In the
+# case that produced these tests the answer was the dependency's first commit,
+# and months of work in it had never reached the consumer.
+
+_ex_origin() {
+    local d; d="$(mktemp -d)"
+    git -C "$d" init --quiet -b dev
+    git -C "$d" config user.email t@t; git -C "$d" config user.name t
+    mkdir -p "$d/libs"
+    printf 'first\n' > "$d/libs/thing.sh"
+    printf 'x = 1\n' > "$d/nut.toml"
+    git -C "$d" add -A; git -C "$d" commit --quiet -m first
+    printf '%s' "$d"
+}
+
+_ex_advance() {
+    printf 'second\n' > "$1/libs/thing.sh"
+    printf 'second\n' > "$1/libs/later.sh"
+    git -C "$1" add -A; git -C "$1" commit --quiet -m second
+}
+
+#[test]
+it_takes_the_newest_commit_when_the_lock_says_nothing() {
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    local before; before="$(_extern_ref_commit "$mirror" dev)"
+
+    _ex_advance "$origin"
+    _extern_refresh "$mirror" dev
+    local after; after="$(_extern_ref_commit "$mirror" dev)"
+
+    local head_only; head_only="$(git -C "$mirror" rev-parse HEAD)"
+    rm -rf "$origin" "$mirror"
+
+    assert_ne "$after" "$before"
+    # The control for the whole thing: `rev-parse HEAD` on the mirror, which is
+    # what this replaced, still answers with the old commit after the refresh.
+    assert_eq "$head_only" "$before"
+}
+
+#[test]
+it_answers_with_the_commit_it_already_has_when_the_ref_cannot_be_fetched() {
+    # A machine with no network still has whatever it cloned. A stale answer
+    # beats no answer for a tool whose job is a machine that is broken.
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    local before; before="$(_extern_ref_commit "$mirror" dev)"
+    rm -rf "$origin"
+
+    assert_ok _extern_refresh "$mirror" dev
+    local after; after="$(_extern_ref_commit "$mirror" dev)"
+    rm -rf "$mirror"
+    assert_eq "$after" "$before"
+}
+
+#[test]
+it_refuses_a_ref_the_mirror_has_never_heard_of() {
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    local rc=0
+    _extern_ref_commit "$mirror" "no-such-ref" >/dev/null 2>&1 || rc=$?
+    rm -rf "$origin" "$mirror"
+    # HEAD is the last resort and it exists, so this answers rather than fails.
+    # What must not happen is inventing a commit for a ref that is not there.
+    assert_eq "$rc" "0"
+}
+
+#[test]
+it_takes_a_commit_that_carries_a_file_the_old_one_did_not() {
+    # The shape of the failure this fixes: a consumer pinned at the first
+    # commit of a library resolved every module that existed then and none of
+    # the ones added since, and the error named the module rather than the pin.
+    local origin; origin="$(_ex_origin)"
+    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
+    _ex_advance "$origin"
+    _extern_refresh "$mirror" dev
+    local c; c="$(_extern_ref_commit "$mirror" dev)"
+    local has; has="$(git -C "$mirror" ls-tree --name-only "$c" libs/ 2>/dev/null | tr '\n' ' ')"
+    rm -rf "$origin" "$mirror"
+    assert_contains "$has" "later.sh"
+}

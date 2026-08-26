@@ -73,27 +73,52 @@ _tc_remote() {
 # --- where the store is ------------------------------------------------------
 
 #[test]
-it_takes_the_store_location_from_the_environment() {
+it_takes_the_toolchain_directory_from_the_environment() {
     _tc_setup
-    assert_eq "$(nutshell_store)" "$TCROOT/store"
+    assert_eq "$(nutshell_toolchain_dir)" "$TCROOT/store"
+    _tc_end
+}
+
+#[test]
+it_puts_the_toolchains_under_the_store_root() {
+    _tc_setup
+    unset NUTSHELL_TOOLCHAINS
+    assert_eq "$(NUTSHELL_STORE="$TCROOT/s" nutshell_toolchain_dir)" \
+        "$TCROOT/s/toolchains"
+    assert_eq "$(NUTSHELL_STORE="$TCROOT/s" nutshell_store_root)" "$TCROOT/s"
     _tc_end
 }
 
 #[test]
 it_falls_back_to_the_data_directory() {
     _tc_setup
-    unset NUTSHELL_TOOLCHAINS
-    XDG_DATA_HOME="$TCROOT/data"
-    assert_eq "$(XDG_DATA_HOME="$TCROOT/data" nutshell_store)" \
+    unset NUTSHELL_TOOLCHAINS NUTSHELL_STORE
+    assert_eq "$(XDG_DATA_HOME="$TCROOT/data" nutshell_toolchain_dir)" \
         "$TCROOT/data/nutshell/toolchains"
+    _tc_end
+}
+
+#[test]
+it_puts_the_store_where_the_platform_puts_application_data() {
+    _tc_setup
+    unset NUTSHELL_TOOLCHAINS NUTSHELL_STORE XDG_DATA_HOME
+    local root; root="$(HOME="$TCROOT/h" nutshell_store_root)"
+    case "$(uname -s)" in
+        Darwin) assert_eq "$root" "$TCROOT/h/Library/Application Support/nutshell" ;;
+        *)      assert_eq "$root" "$TCROOT/h/.local/share/nutshell" ;;
+    esac
     _tc_end
 }
 
 #[test]
 it_drops_a_trailing_slash_so_the_paths_under_it_are_not_doubled() {
     _tc_setup
-    assert_eq "$(NUTSHELL_TOOLCHAINS="$TCROOT/store/" nutshell_store)" \
+    assert_eq "$(NUTSHELL_TOOLCHAINS="$TCROOT/store/" nutshell_toolchain_dir)" \
         "$TCROOT/store"
+    unset NUTSHELL_TOOLCHAINS
+    assert_eq "$(NUTSHELL_STORE="$TCROOT/s/" nutshell_store_root)" "$TCROOT/s"
+    assert_eq "$(NUTSHELL_STORE="$TCROOT/s/" nutshell_toolchain_dir)" \
+        "$TCROOT/s/toolchains"
     _tc_end
 }
 

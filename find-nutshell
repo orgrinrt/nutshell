@@ -136,23 +136,43 @@ nutshell_find() {
     return 1
 }
 
+#[pub]
+# The root both the toolchains and the externs sit under.
+#
+# The platform branch is spelled out here rather than taken from `lib/xdg.sh`,
+# which is the module that owns it. This file runs before nutshell exists and
+# cannot use a module, so the duplication is deliberate and the two are held
+# together by a test rather than by anybody remembering. Change one and the
+# suite says which other one to change.
+# Usage: nutshell_store_root -> a path
+nutshell_store_root() {
+    if [[ -n "${NUTSHELL_STORE:-}" ]]; then
+        printf '%s' "${NUTSHELL_STORE%/}"
+        return 0
+    fi
+    if [[ -n "${XDG_DATA_HOME:-}" ]]; then
+        printf '%s/nutshell' "${XDG_DATA_HOME%/}"
+        return 0
+    fi
+    case "$(uname -s 2>/dev/null)" in
+        Darwin) printf '%s/Library/Application Support/nutshell' "${HOME:-.}" ;;
+        *)      printf '%s/.local/share/nutshell' "${HOME:-.}" ;;
+    esac
+}
+
+#[pub]
 # Where toolchains live. One directory per version, each a checkout.
 #
-# Beside the externs, under one store root, because the interpreter is a
+# Beside the externs, under the one root, because the interpreter is a
 # dependency like any other and giving it its own arrangement is what let it
-# drift out of step in the first place. `NUTSHELL_TOOLCHAINS` names this
-# directory; `NUTSHELL_STORE` names the root both it and the externs sit under.
-nutshell_store() {
+# drift out of step in the first place.
+# Usage: nutshell_toolchain_dir -> a path
+nutshell_toolchain_dir() {
     if [[ -n "${NUTSHELL_TOOLCHAINS:-}" ]]; then
         printf '%s' "${NUTSHELL_TOOLCHAINS%/}"
         return 0
     fi
-    if [[ -n "${NUTSHELL_STORE:-}" ]]; then
-        printf '%s/toolchains' "${NUTSHELL_STORE%/}"
-        return 0
-    fi
-    printf '%s/nutshell/toolchains' \
-        "${XDG_DATA_HOME:-${HOME:-.}/.local/share}"
+    printf '%s/toolchains' "$(nutshell_store_root)"
 }
 
 #[pub]
@@ -165,7 +185,7 @@ nutshell_store() {
 # Usage: nutshell_toolchains -> prints versions
 nutshell_toolchains() {
     local store d v name
-    store="$(nutshell_store)"
+    store="$(nutshell_toolchain_dir)"
     [[ -d "$store" ]] || return 0
     for d in "$store"/*/; do
         [[ -f "${d}init" ]] || continue
@@ -203,7 +223,7 @@ _nutshell_num() {
 # The newest toolchain satisfying the caller, or nothing.
 _nutshell_in_store() {
     local want="${1:-}" store v cand
-    store="$(nutshell_store)"
+    store="$(nutshell_toolchain_dir)"
     [[ -d "$store" ]] || return 1
     while IFS= read -r v; do
         [[ -n "$v" ]] || continue
@@ -220,7 +240,7 @@ _nutshell_in_store() {
 # says which and falls through to whatever else the machine has.
 _nutshell_fetch() {
     local want="$1" store dir remote
-    store="$(nutshell_store)"
+    store="$(nutshell_toolchain_dir)"
     dir="${store}/${want}"
     remote="${NUTSHELL_REMOTE:-https://github.com/orgrinrt/nutshell.git}"
 

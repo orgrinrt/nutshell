@@ -804,3 +804,48 @@ it_puts_the_store_under_the_data_directory_when_nothing_overrides_it() {
     assert_contains "$root" "externs"
     _isolate
 }
+
+# --- one root, spelled twice -------------------------------------------------
+#
+# `find-nutshell` runs before nutshell exists and cannot use `lib/xdg.sh`, so
+# the platform branch is written out in both places. Nothing but this test
+# holds them together, and without it they were already apart: the toolchains
+# went to `~/.local/share` on macOS while the externs went to
+# `~/Library/Application Support`, and the README said they shared a root.
+
+#[test]
+it_puts_the_externs_and_the_toolchains_under_one_root() {
+    unset NUTSHELL_STORE NUTSHELL_TOOLCHAINS
+    # shellcheck source=/dev/null
+    . "${BASH_SOURCE[0]%/*}/../find-nutshell"
+    local externs toolchains
+    externs="$(_extern_cache_root)"
+    toolchains="$(nutshell_toolchain_dir)"
+    assert_eq "${externs%/externs}" "${toolchains%/toolchains}"
+    assert_eq "${externs%/externs}" "$(nutshell_store_root)"
+    _isolate
+}
+
+#[test]
+it_keeps_them_together_when_the_root_is_named() {
+    export NUTSHELL_STORE="/tmp/one-root-probe"
+    # shellcheck source=/dev/null
+    . "${BASH_SOURCE[0]%/*}/../find-nutshell"
+    assert_eq "$(_extern_cache_root)" "/tmp/one-root-probe/externs"
+    assert_eq "$(nutshell_toolchain_dir)" "/tmp/one-root-probe/toolchains"
+    _isolate
+}
+
+#[test]
+it_keeps_them_together_when_xdg_names_the_data_directory() {
+    unset NUTSHELL_STORE NUTSHELL_TOOLCHAINS
+    export XDG_DATA_HOME="/tmp/xdg-one-root"
+    # shellcheck source=/dev/null
+    . "${BASH_SOURCE[0]%/*}/../find-nutshell"
+    # The branch both sides take when the variable is set, which is the one
+    # place they already agreed. The two above are where they did not.
+    assert_eq "$(_extern_cache_root)" "/tmp/xdg-one-root/nutshell/externs"
+    assert_eq "$(nutshell_toolchain_dir)" "/tmp/xdg-one-root/nutshell/toolchains"
+    unset XDG_DATA_HOME
+    _isolate
+}

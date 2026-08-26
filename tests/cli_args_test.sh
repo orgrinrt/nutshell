@@ -66,3 +66,34 @@ it_still_runs_an_ordinary_script_path() {
 it_still_says_so_when_a_script_path_is_wrong() {
     assert_contains "$(nut /no/such/script.sh)" "script not found"
 }
+
+#[test]
+it_runs_the_script_in_the_working_directory_not_the_one_on_path() {
+    # `source name` searches PATH before the working directory, and a lot of
+    # short script names collide with something in /bin.
+    local d; d="$(mktemp -d)"
+    printf 'echo mine\n' > "$d/test"
+    local out; out="$(cd "$d" && "$NUT_BIN" test 2>&1)"
+    rm -rf "$d"
+    assert_eq "$out" "mine"
+}
+
+#[test]
+it_runs_a_script_named_by_a_relative_path() {
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/sub"
+    printf 'echo nested\n' > "$d/sub/s.sh"
+    local out; out="$(cd "$d" && "$NUT_BIN" sub/s.sh 2>&1)"
+    rm -rf "$d"
+    assert_eq "$out" "nested"
+}
+
+#[test]
+it_says_so_when_the_script_is_not_there() {
+    local d; d="$(mktemp -d)"
+    local out; out="$(cd "$d" && "$NUT_BIN" nosuchscript 2>&1)"
+    local code=$?
+    rm -rf "$d"
+    assert_contains "$out" "not found"
+    assert_ne "$code" "0"
+}

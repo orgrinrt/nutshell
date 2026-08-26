@@ -208,7 +208,9 @@ use os log json http
 | `text` | Text processing (`text_grep`, `text_replace`, `text_count_matches`) |
 | `json` | JSON parsing (`json_get`, `json_set`, `json_valid`, `json_pretty`) |
 | `http` | HTTP requests (`http_get`, `http_post`, `http_download`) |
-| `toml` | TOML parsing (`toml_get`, `toml_get_or`, `toml_is_true`) |
+| `toml` | TOML reading (`toml_get`, `toml_get_or`, `toml_is_true`, `toml_array`) |
+| `toml::write` | Changing a TOML file in place (`toml_set`, `toml_unset`) |
+| `toml::json` | TOML as JSON (`toml_to_json`) |
 | `prompt` | User prompts (`prompt_confirm`, `prompt_input`, `prompt_select`) |
 | `color` | Terminal colors (`color_red`, `color_green`, `color_bold`) |
 | `validate` | Validation (`is_set`, `is_integer`, `require_command`) |
@@ -323,7 +325,7 @@ Three namespaces, and they answer three different questions:
 | Written | Resolves to |
 |---|---|
 | `use log` | nutshell's own module |
-| `use shebang::diagnostics/findings` | a module in a library declared in `nut.toml` |
+| `use shebang::diagnostics::findings` | a module in a library declared in `nut.toml` |
 | `use super::mine` | `lib/mine.sh` in **this** unit, found from its `nut.toml` |
 
 `super::` is anchored on the manifest rather than on the running script, so a
@@ -387,7 +389,7 @@ ref = "main"
 and a module inside it is reached by namespacing the `use`:
 
 ```bash
-use shebang::diagnostics/findings
+use shebang::diagnostics::findings
 ```
 
 Declared in the manifest because a script that fetches its own dependencies

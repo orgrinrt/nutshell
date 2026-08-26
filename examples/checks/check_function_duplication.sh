@@ -196,6 +196,23 @@ compare_full_names() {
         count = NR
     }
     
+    # The part after the module prefix, which is where two functions in one
+    # family actually differ.
+    function tail_of(name,    t) {
+        t = name
+        if (substr(t, 1, 1) == "_") t = substr(t, 2)
+        if (index(t, "_") > 0) t = substr(t, index(t, "_") + 1)
+        return t
+    }
+
+    # Do two names share the word the module is called?
+    function same_prefix(a, b,    pa, pb) {
+        pa = (substr(a, 1, 1) == "_") ? substr(a, 2) : a
+        pb = (substr(b, 1, 1) == "_") ? substr(b, 2) : b
+        if (index(pa, "_") == 0 || index(pb, "_") == 0) return 0
+        return substr(pa, 1, index(pa, "_")) == substr(pb, 1, index(pb, "_"))
+    }
+
     END {
         # Compare each pair (only once, i < j)
         for (i = 1; i < count; i++) {
@@ -208,9 +225,23 @@ compare_full_names() {
                 
                 score = similarity(names[i], names[j])
                 
-                if (score >= threshold) {
-                    printf "MATCH|%.3f|%s|%s|%s|%s\n", score, names[i], names[j], files[i], files[j]
+                if (score < threshold) continue
+
+                # A module split across files keeps its prefix in every name,
+                # and a long shared prefix carries the score on its own:
+                # `toml_get` and `toml_set` come out at 0.875 while naming two
+                # opposite operations. So a match that survives only because of
+                # the prefix is an artefact of the naming convention, not a
+                # copy. What the two names do has to look alike as well.
+                if (same_prefix(names[i], names[j])) {
+                    t1 = tail_of(names[i]); t2 = tail_of(names[j])
+                    if (length(t1) > 0 && length(t2) > 0) {
+                        if (!can_meet_threshold(t1, t2, threshold)) continue
+                        if (similarity(t1, t2) < threshold) continue
+                    }
                 }
+
+                printf "MATCH|%.3f|%s|%s|%s|%s\n", score, names[i], names[j], files[i], files[j]
             }
         }
     }
@@ -481,5 +512,9 @@ main() {
 # script, which is what makes `use` available from its first line. So `$0` is
 # the interpreter and `BASH_SOURCE[0]` is this file, and `main` was never
 # called. Six of the eight built-in checks exited 0 having done nothing, and
-# `./check` read that as a pass and printed one.
-main "$@"
+# `./check` read that as a pass and printed one.#
+# `NUT_CHECK_LOAD_ONLY` is the one way in for a test that wants the comparison
+# without a scan of the whole repository. It is an explicit opt-out rather than
+# a guess about how the file was loaded, which is the distinction the paragraph
+# above is about.
+[[ -n "${NUT_CHECK_LOAD_ONLY:-}" ]] || main "$@"

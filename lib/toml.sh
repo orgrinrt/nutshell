@@ -89,7 +89,17 @@ _toml_clean_line() {
     for (( i = 0; i < ${#line}; i++ )); do
         char="${line:i:1}"
         if [[ "$in_quotes" -eq 1 ]]; then
-            [[ "$char" == "$quote" ]] && in_quotes=0
+            # An escaped quote inside a basic string does not close it. Read as
+            # a terminator, the rest of the value falls outside the string and
+            # a `#` in it truncates the line. TOML gives a literal string no
+            # escapes at all, so the backslash only counts inside `"`.
+            if [[ "$char" == "\\" && "$quote" == '"' && $(( i + 1 )) -lt ${#line} ]]; then
+                out+="$char"
+                i=$(( i + 1 ))
+                char="${line:i:1}"
+            elif [[ "$char" == "$quote" ]]; then
+                in_quotes=0
+            fi
         elif [[ "$char" == '"' || "$char" == "'" ]]; then
             in_quotes=1
             quote="$char"
@@ -102,6 +112,57 @@ _toml_clean_line() {
     str_trim "$out"
 }
 
+# Decode the escapes a TOML basic string is allowed to carry.
+#
+# Only a basic string has them: a literal string is taken as typed, which is
+# the whole difference between the two forms. Without this a value written
+# with an escaped quote or a backslash reads back with the backslashes still
+# in it, so a path or a piece of prose does not survive a write and a read.
+_toml_unescape() {
+    local s="$1"
+    # Nothing to do, and this is on the path of every value in every file.
+    if [[ "$s" != *\\* ]]; then
+        printf '%s' "$s"
+        return 0
+    fi
+
+    local out="" i char next
+    for (( i = 0; i < ${#s}; i++ )); do
+        char="${s:i:1}"
+        if [[ "$char" != "\\" || $(( i + 1 )) -ge ${#s} ]]; then
+            out+="$char"
+            continue
+        fi
+        next="${s:i+1:1}"
+        i=$(( i + 1 ))
+        case "$next" in
+            n)  out+=$'\n' ;;
+            t)  out+=$'\t' ;;
+            r)  out+=$'\r' ;;
+            b)  out+=$'\b' ;;
+            f)  out+=$'\f' ;;
+            '"') out+='"' ;;
+            "\\") out+="\\" ;;
+            u|U)
+                # \uXXXX and \UXXXXXXXX. printf knows the escape; anything
+                # that is not the right number of hex digits is not one, and
+                # is kept as typed rather than silently eaten.
+                local n=4; [[ "$next" == "U" ]] && n=8
+                local hex="${s:i+1:n}"
+                if [[ "${#hex}" -eq "$n" && "$hex" =~ ^[0-9A-Fa-f]+$ ]]; then
+                    # shellcheck disable=SC2059
+                    out+="$(printf "\\$next$hex")"
+                    i=$(( i + n ))
+                else
+                    out+="\\$next"
+                fi
+                ;;
+            *)  out+="\\$next" ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
 # Extract value, handling quotes
 _toml_extract_value() {
     local raw="$1"
@@ -109,7 +170,8 @@ _toml_extract_value() {
     
     # Double-quoted string
     if [[ "$raw" =~ ^\"(.*)\"$ ]]; then
-        echo "${BASH_REMATCH[1]}"
+        _toml_unescape "${BASH_REMATCH[1]}"
+        printf '\n'
         return 0
     fi
     
@@ -556,165 +618,6 @@ toml_is_true() {
     value="$(toml_get "$file" "$key")" || return 1
     
     is_truthy "$value"
-}
-
-#[pub]
-# Convert a TOML file to JSON
-# Usage: toml_to_json "file.toml" -> prints JSON
-toml_to_json() {
-    local file="${1:-}"
-    [[ ! -f "$file" ]] && return 1
-    
-    local json="{"
-    local need_comma=0
-    local current_section=""
-    local section_stack=()
-    local line clean_line
-    
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        _toml_clean_into clean_line "$line"
-        [[ -z "$clean_line" ]] && continue
-        
-        # Section header [section] or [section.subsection]
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
-            local new_section="${BASH_REMATCH[1]}"
-            
-            # Close previous section(s) if any
-            while [[ ${#section_stack[@]} -gt 0 ]]; do
-                json+="}"
-                unset 'section_stack[-1]'
-            done
-            
-            # Start new section(s)
-            IFS='.' read -ra parts <<< "$new_section"
-            for part in "${parts[@]}"; do
-                [[ $need_comma -eq 1 ]] && json+=","
-                need_comma=0
-                json+="\"${part}\":{"
-                section_stack+=("$part")
-            done
-            
-            current_section="$new_section"
-            continue
-        fi
-        
-        # Key = value
-        if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
-            local key val
-            key="$(str_trim "${BASH_REMATCH[1]}")"
-            val="$(str_trim "${BASH_REMATCH[2]}")"
-            
-            [[ $need_comma -eq 1 ]] && json+=","
-            need_comma=1
-            
-            json+="\"${key}\":"
-            json+="$(_toml_value_to_json "$val")"
-        fi
-    done < "$file"
-    
-    # Close any open sections
-    while [[ ${#section_stack[@]} -gt 0 ]]; do
-        json+="}"
-        unset 'section_stack[-1]'
-    done
-    
-    json+="}"
-    echo "$json"
-}
-
-# Internal: Convert a TOML value to JSON
-_toml_value_to_json() {
-    local val="$1"
-    
-    # Boolean
-    if [[ "$val" == "true" ]]; then
-        echo "true"
-        return
-    fi
-    if [[ "$val" == "false" ]]; then
-        echo "false"
-        return
-    fi
-    
-    # Integer
-    if [[ "$val" =~ ^-?[0-9]+$ ]]; then
-        echo "$val"
-        return
-    fi
-    
-    # Float
-    if [[ "$val" =~ ^-?[0-9]+\.[0-9]+$ ]]; then
-        echo "$val"
-        return
-    fi
-    
-    # Array
-    if [[ "$val" =~ ^\[.*\]$ ]]; then
-        local content="${val#[}"
-        content="${content%]}"
-        content="$(str_trim "$content")"
-        
-        local json_arr="["
-        local first=1
-        local in_quotes=0
-        local item=""
-        local i char
-        
-        for ((i=0; i<${#content}; i++)); do
-            char="${content:$i:1}"
-            
-            if [[ "$char" == '"' ]]; then
-                ((in_quotes = 1 - in_quotes))
-                item+="$char"
-            elif [[ "$char" == ',' && $in_quotes -eq 0 ]]; then
-                item="$(str_trim "$item")"
-                if [[ -n "$item" ]]; then
-                    [[ $first -eq 0 ]] && json_arr+=","
-                    first=0
-                    json_arr+="$(_toml_value_to_json "$item")"
-                fi
-                item=""
-            else
-                item+="$char"
-            fi
-        done
-        
-        # Last item
-        item="$(str_trim "$item")"
-        if [[ -n "$item" ]]; then
-            [[ $first -eq 0 ]] && json_arr+=","
-            json_arr+="$(_toml_value_to_json "$item")"
-        fi
-        
-        json_arr+="]"
-        echo "$json_arr"
-        return
-    fi
-    
-    # Double-quoted string
-    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
-        # Already quoted, just pass through (escape inner quotes if needed)
-        local inner="${BASH_REMATCH[1]}"
-        # Escape backslashes and quotes for JSON
-        inner="${inner//\\/\\\\}"
-        inner="${inner//\"/\\\"}"
-        echo "\"${inner}\""
-        return
-    fi
-    
-    # Single-quoted string (literal in TOML)
-    if [[ "$val" =~ ^\'(.*)\'$ ]]; then
-        local inner="${BASH_REMATCH[1]}"
-        inner="${inner//\\/\\\\}"
-        inner="${inner//\"/\\\"}"
-        echo "\"${inner}\""
-        return
-    fi
-    
-    # Unquoted - treat as string
-    val="${val//\\/\\\\}"
-    val="${val//\"/\\\"}"
-    echo "\"${val}\""
 }
 
 #[pub]

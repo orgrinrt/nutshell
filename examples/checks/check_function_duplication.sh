@@ -512,7 +512,8 @@ main() {
 # script, which is what makes `use` available from its first line. So `$0` is
 # the interpreter and `BASH_SOURCE[0]` is this file, and `main` was never
 # called. Six of the eight built-in checks exited 0 having done nothing, and
-# `./check` read that as a pass and printed one.#
+# `./check` read that as a pass and printed one.
+#
 # `NUT_CHECK_LOAD_ONLY` is the one way in for a test that wants the comparison
 # without a scan of the whole repository. It is an explicit opt-out rather than
 # a guess about how the file was loaded, which is the distinction the paragraph

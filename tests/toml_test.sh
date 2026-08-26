@@ -464,3 +464,61 @@ it_does_not_end_a_basic_string_at_an_escaped_quote() {
     assert_eq "$v" 'he said "no" #1'
     assert_eq "$w" "5"
 }
+
+#[test]
+it_keeps_a_hash_after_a_single_escaped_quote_on_the_hot_path() {
+    # `_toml_clean_into` is the copy every value read goes through, and the
+    # escaped-quote fix landed only in `_toml_clean_line`. The two cases the
+    # suite had both carried an even number of escaped quotes before the `#`,
+    # where the broken counting cancels out and gets the right answer by luck.
+    # One is the shape that breaks.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "a \\" b # c"\nafter = 5\n' > "$d/t.toml"
+    local v after
+    v="$(toml_get "$d/t.toml" a.v)"
+    after="$(toml_get "$d/t.toml" a.after)"
+    rm -rf "$d"
+    assert_eq "$v" 'a " b # c'
+    assert_eq "$after" "5"
+}
+
+#[test]
+it_cleans_a_line_the_same_way_through_both_cleaners() {
+    # Two implementations of one rule is two places for it to be wrong, and
+    # only one of them was fixed. Whatever they answer, they answer together.
+    local -a cases=(
+        'v = "a \" b # c"'
+        'v = "a \" b \" c # d"'
+        'v = "plain # hash"'
+        "v = 'literal # hash'"
+        'v = 1  # a real comment'
+        'v = "trailing backslash \\\\"'
+    )
+    local c into wrong=""
+    for c in "${cases[@]}"; do
+        _toml_clean_into into "$c"
+        [[ "$into" == "$(_toml_clean_line "$c")" ]] || wrong="${wrong} [${c}]"
+    done
+    assert_empty "$wrong"
+}
+
+#[test]
+it_has_a_detector_that_notices_the_two_cleaners_disagreeing() {
+    # The control for the comparison above: it has to be able to see a
+    # difference, or its silence means nothing.
+    local into
+    _toml_clean_into into 'v = 1  # comment'
+    assert_ne "$into" "$(_toml_clean_line 'v = 2  # comment')"
+    assert_eq "$into" "$(_toml_clean_line 'v = 1  # comment')"
+}
+
+#[test]
+it_reads_a_section_pair_with_an_escaped_quote_in_it() {
+    # `toml_section_pairs` goes through the hot-path cleaner too.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = "say \\" now"\nn = 2\n' > "$d/t.toml"
+    local pairs; pairs="$(toml_section_pairs "$d/t.toml" a)"
+    rm -rf "$d"
+    assert_contains "$pairs" 'say " now'
+    assert_contains "$pairs" "n=2"
+}

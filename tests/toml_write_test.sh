@@ -55,6 +55,7 @@ it_keeps_the_leading_comment_and_the_blank_lines() {
     # asserts that somebody counted the fixture correctly.
     local d; d="$(_tw_dir)"; _tw_sample "$d/t.toml"
     local before; before="$(grep -c '^$' "$d/t.toml")"
+    local before_lines; before_lines="$(wc -l < "$d/t.toml" | tr -d ' ')"
     toml_set "$d/t.toml" "ui.theme" "light"
     local after; after="$(grep -c '^$' "$d/t.toml")"
     local body; body="$(cat "$d/t.toml")"
@@ -63,7 +64,7 @@ it_keeps_the_leading_comment_and_the_blank_lines() {
     assert_contains "$body" "# The user's preferences."
     assert_contains "$body" "# a pause the writer must not close up"
     assert_eq "$after" "$before"
-    assert_eq "$lines" "12"
+    assert_eq "$lines" "$before_lines"
 }
 
 #[test]
@@ -108,7 +109,11 @@ it_appends_a_new_key_inside_its_own_section() {
     line_net="$(grep -n '^\[net\]' "$d/t.toml" | cut -d: -f1)"
     rm -rf "$d"
     assert_eq "$got" "compact"
-    (( line_ui < line_new && line_new < line_net ))
+    # Asserted, not stated. The harness counts assertions and ignores the exit
+    # status by design, so a bare `(( ))` here was a no-op and the ordering the
+    # test is named for went unchecked.
+    assert_ok test "$line_ui" -lt "$line_new"
+    assert_ok test "$line_new" -lt "$line_net"
 }
 
 #[test]
@@ -343,4 +348,149 @@ it_refuses_to_remove_from_a_file_that_is_not_there() {
     local d; d="$(_tw_dir)"
     assert_fails toml_unset "$d/nope.toml" "a.b"
     rm -rf "$d"
+}
+
+# --- root is a place, not the absence of one ---------------------------------
+#
+# Reading "no section" as "no section is open" made a root key match anywhere:
+# `toml_unset f name` deleted `name` from every section in the file, and
+# `toml_set f name x` rewrote the first sectioned key that happened to share
+# the leaf.
+
+#[test]
+it_removes_a_root_key_without_touching_the_same_name_in_a_section() {
+    local d; d="$(mktemp -d)"
+    printf 'name = "root"\n[a]\nname = "x"\n[b]\nname = "y"\n' > "$d/t.toml"
+    toml_unset "$d/t.toml" name
+    local root a b
+    root="$(toml_get "$d/t.toml" name 2>/dev/null || true)"
+    a="$(toml_get "$d/t.toml" a.name)"
+    b="$(toml_get "$d/t.toml" b.name)"
+    rm -rf "$d"
+    assert_empty "$root"
+    assert_eq "$a" "x"
+    assert_eq "$b" "y"
+}
+
+#[test]
+it_removes_a_sectioned_key_without_touching_the_root_one() {
+    # The other direction of the same law.
+    local d; d="$(mktemp -d)"
+    printf 'name = "root"\n[a]\nname = "x"\n[b]\nname = "y"\n' > "$d/t.toml"
+    toml_unset "$d/t.toml" a.name
+    local root a b
+    root="$(toml_get "$d/t.toml" name)"
+    a="$(toml_get "$d/t.toml" a.name 2>/dev/null || true)"
+    b="$(toml_get "$d/t.toml" b.name)"
+    rm -rf "$d"
+    assert_eq "$root" "root"
+    assert_empty "$a"
+    assert_eq "$b" "y"
+}
+
+#[test]
+it_writes_a_root_key_above_the_first_section() {
+    # Appending it at the end of the file puts it inside whatever section ends
+    # there, so the write and the read disagree about the same key.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nname = "x"\n' > "$d/t.toml"
+    toml_set "$d/t.toml" name root
+    local root a first
+    root="$(toml_get "$d/t.toml" name)"
+    a="$(toml_get "$d/t.toml" a.name)"
+    first="$(head -1 "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$root" "root"
+    assert_eq "$a" "x"
+    assert_eq "$first" 'name = "root"'
+}
+
+#[test]
+it_appends_a_root_key_after_the_root_content_it_already_has() {
+    local d; d="$(mktemp -d)"
+    printf '# top\ntitle = "t"\n\n[a]\nx = 1\n' > "$d/t.toml"
+    toml_set "$d/t.toml" other v
+    local got line_new line_a body
+    got="$(toml_get "$d/t.toml" other)"
+    line_new="$(grep -n '^other' "$d/t.toml" | cut -d: -f1)"
+    line_a="$(grep -n '^\[a\]' "$d/t.toml" | cut -d: -f1)"
+    body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" "v"
+    assert_ok test "$line_new" -lt "$line_a"
+    assert_contains "$body" "# top"
+}
+
+#[test]
+it_replaces_a_root_key_rather_than_the_sectioned_one_below_it() {
+    local d; d="$(mktemp -d)"
+    printf 'title = "t"\n[a]\ntitle = "inner"\n' > "$d/t.toml"
+    toml_set "$d/t.toml" title new
+    local root inner
+    root="$(toml_get "$d/t.toml" title)"
+    inner="$(toml_get "$d/t.toml" a.title)"
+    rm -rf "$d"
+    assert_eq "$root" "new"
+    assert_eq "$inner" "inner"
+}
+
+# --- a section with nothing in it --------------------------------------------
+
+#[test]
+it_appends_into_a_section_that_is_empty() {
+    # The section ends at its own header, and the header arm used to skip the
+    # append, so the key landed at the end of the file inside the next section.
+    local d; d="$(mktemp -d)"
+    printf '[a]\n\n[b]\nx = 1\n' > "$d/t.toml"
+    toml_set "$d/t.toml" a.k v
+    local got wrong
+    got="$(toml_get "$d/t.toml" a.k)"
+    wrong="$(toml_get "$d/t.toml" b.k 2>/dev/null || true)"
+    rm -rf "$d"
+    assert_eq "$got" "v"
+    assert_empty "$wrong"
+}
+
+#[test]
+it_appends_into_an_empty_section_at_the_end_of_the_file() {
+    local d; d="$(mktemp -d)"
+    printf '[a]\nx = 1\n[b]\n' > "$d/t.toml"
+    toml_set "$d/t.toml" b.k v
+    local got
+    got="$(toml_get "$d/t.toml" b.k)"
+    rm -rf "$d"
+    assert_eq "$got" "v"
+}
+
+# --- a value the reader can decode -------------------------------------------
+
+#[test]
+it_encodes_a_newline_rather_than_writing_one_into_the_file() {
+    # An unescaped newline does not corrupt the value, it corrupts the file:
+    # every key after it is on the wrong side of an unterminated string.
+    local d; d="$(mktemp -d)"
+    printf '[s]\nafter = 1\n' > "$d/t.toml"
+    toml_set "$d/t.toml" "s.k" "$(printf 'a\nb')"
+    local got after lines
+    got="$(toml_get "$d/t.toml" s.k)"
+    after="$(toml_get "$d/t.toml" s.after)"
+    lines="$(grep -c '^k = ' "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" "$(printf 'a\nb')"
+    assert_eq "$after" "1"
+    assert_eq "$lines" "1"
+}
+
+#[test]
+it_encodes_every_escape_the_reader_decodes() {
+    # The pair has to be symmetric or the round trip is not one.
+    local d; d="$(mktemp -d)"
+    local want; want="$(printf 'a\tb\rc\nd')"
+    toml_set "$d/t.toml" "s.k" "$want"
+    local got line
+    got="$(toml_get "$d/t.toml" s.k)"
+    line="$(grep -c '^k = ' "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" "$want"
+    assert_eq "$line" "1"
 }

@@ -182,3 +182,32 @@ it_keeps_a_hash_that_is_part_of_a_value() {
     rm -rf "$d"
     assert_eq "$got" '{"a":{"v":"#[pub]"}}'
 }
+
+#[test]
+it_writes_a_key_that_needs_escaping_as_json() {
+    # A key is a string and goes through the string writer. Raw, a quoted key
+    # or one holding a quote made the whole document something no parser reads.
+    local d; d="$(_tj)"
+    printf '[a]\n"my key" = 1\n' > "$d/t.toml"
+    local got; got="$(toml_to_json "$d/t.toml")"
+    rm -rf "$d"
+    assert_ok _tj_valid "$got"
+}
+
+#[test]
+it_writes_a_key_holding_a_quote_as_json() {
+    local d; d="$(_tj)"
+    printf '[a]\n"a\\"b" = 1\n' > "$d/t.toml"
+    local got; got="$(toml_to_json "$d/t.toml")"
+    rm -rf "$d"
+    assert_ok _tj_valid "$got"
+}
+
+#[test]
+it_writes_a_section_name_that_needs_escaping_as_json() {
+    local d; d="$(_tj)"
+    printf '["a\\"b"]\nx = 1\n' > "$d/t.toml"
+    local got; got="$(toml_to_json "$d/t.toml")"
+    rm -rf "$d"
+    assert_ok _tj_valid "$got"
+}

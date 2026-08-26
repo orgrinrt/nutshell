@@ -325,7 +325,7 @@ Three namespaces, and they answer three different questions:
 | Written | Resolves to |
 |---|---|
 | `use log` | nutshell's own module |
-| `use shebang::diagnostics::findings` | a module in a library declared in `nut.toml` |
+| `use shebang::tui::term` | a module in a library declared in `nut.toml` |
 | `use super::mine` | `lib/mine.sh` in **this** unit, found from its `nut.toml` |
 
 `super::` is anchored on the manifest rather than on the running script, so a
@@ -389,7 +389,7 @@ ref = "main"
 and a module inside it is reached by namespacing the `use`:
 
 ```bash
-use shebang::diagnostics::findings
+use shebang::tui::term
 ```
 
 Declared in the manifest because a script that fetches its own dependencies

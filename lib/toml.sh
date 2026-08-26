@@ -66,7 +66,18 @@ _toml_clean_into() {
     for (( __toml_i = 0; __toml_i < ${#__toml_line}; __toml_i++ )); do
         __toml_c="${__toml_line:__toml_i:1}"
         if [[ $__toml_q -eq 1 ]]; then
-            [[ "$__toml_c" == "$__toml_qc" ]] && __toml_q=0
+            # The same escaped-quote rule as `_toml_clean_line`. It was fixed
+            # there and not here, and this is the copy on the hot path: every
+            # read of a value, every section listing and the JSON conversion go
+            # through it, so the truncation stayed for all of them.
+            if [[ "$__toml_c" == "\\" && "$__toml_qc" == '"' \
+                  && $(( __toml_i + 1 )) -lt ${#__toml_line} ]]; then
+                __toml_acc+="$__toml_c"
+                __toml_i=$(( __toml_i + 1 ))
+                __toml_c="${__toml_line:__toml_i:1}"
+            elif [[ "$__toml_c" == "$__toml_qc" ]]; then
+                __toml_q=0
+            fi
         elif [[ "$__toml_c" == '"' || "$__toml_c" == "'" ]]; then
             __toml_q=1; __toml_qc="$__toml_c"
         elif [[ "$__toml_c" == "#" ]]; then

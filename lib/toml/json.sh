@@ -27,6 +27,13 @@ use super::toml
 # when `[a]` is already behind it, cannot be converted in one pass without
 # building the whole tree first, so it is refused by name rather than converted
 # into an object with a repeated key.
+#
+# That refusal covers the reopened section and nothing else. This is a one-pass
+# reader, not a validator: a key repeated inside one section comes out as a
+# repeated key, an integer with a leading zero comes out as written, and an
+# array holding a comma inside a quoted element or another array is split on
+# the wrong comma. A file that has been through `toml_get` without complaint is
+# the input this is for.
 # Usage: toml_to_json "file.toml" -> prints JSON, fails on a reopened section
 toml_to_json() {
     local file="${1:-}"
@@ -79,7 +86,7 @@ toml_to_json() {
                 done
                 seen+=("$path")
                 [[ $need_comma -eq 1 ]] && json+=","
-                json+="\"${p}\":{"
+                json+="$(_json_string "$p"):{"
                 need_comma=0
                 stack+=("$p")
             done
@@ -95,7 +102,10 @@ toml_to_json() {
             [[ $need_comma -eq 1 ]] && json+=","
             need_comma=1
 
-            json+="\"${key}\":"
+            # Through the string writer, because a key is a string: a quoted
+            # key, or one with a quote in it, went in raw and the document was
+            # not JSON at all.
+            json+="$(_json_string "$key"):"
             json+="$(_toml_value_to_json "$val")"
         fi
     done < "$file"

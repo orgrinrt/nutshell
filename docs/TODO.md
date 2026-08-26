@@ -3,6 +3,28 @@
 ## Release blockers, from the 2026-08-14 dev-to-main readiness review
 
 Four items block a release. `./release` already refuses on the third. Findings are a reviewer's and the
+## The QA gate is fourteen seconds and op wants two
+
+Open, and recorded here because the target otherwise lives only in a state file
+that is current-only and gets overwritten.
+
+op called the gate untenable at 250 seconds and again at 37. It is 14.4 now,
+measured, on 24 files. His bar, verbatim:
+
+> We should be looking at sub 2 seconds for 24 files realistically.
+> tree-sitter based deno project can do it in milliseconds.
+
+What got it from 250 to 14 was removing forks: `lib/attr.sh` was piping every
+line of every file through `sed`, a config key was re-read per passing check
+from inside a subshell where the cache could not survive, the name-similarity
+comparison filled a whole edit-distance matrix when three rows settled it, and
+the eight checks were eight interpreter startups with eight cold caches.
+
+What is left is flat, with no hot spot, so more of the same is not the answer.
+The two candidates are `NUT_CACHE=1` being on by default once it has been
+trusted for a while, which takes a warm run to 9s, and not re-reading the same
+two dozen files in each of eight checks.
+
 two probes behind items 1 and 2 were written read-only, so **commit them alongside the fix**: until then
 these are reproducible claims rather than repo evidence.
 

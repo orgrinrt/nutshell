@@ -36,7 +36,7 @@ curl -LO https://raw.githubusercontent.com/orgrinrt/nutshell/main/find-nutshell
 HERE="${BASH_SOURCE[0]%/*}"
 . "$HERE/find-nutshell"
 nutshell_find "$HERE" dev || exit 1    # a version, or a branch
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 ```
 
 It takes what the caller named, then what is installed if that satisfies, then
@@ -134,12 +134,18 @@ resolver instead and let it find one:
 HERE="${BASH_SOURCE[0]%/*}"
 . "$HERE/find-nutshell"
 nutshell_find "$HERE" dev || exit 1
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 
 use os log
 
 log_info "hello"
 ```
+
+Both source lines end in `|| exit 1`, and that is not decoration. Sourcing
+`init` can fail: on a bash older than 4 it refuses, and a `return` inside a
+sourced file returns *to* the caller rather than stopping it. Without the
+check, a script prints the refusal and then runs its whole body with nothing
+loaded, reporting success.
 
 That second form is what a project carries when it pins a version, and
 `find-nutshell` is the only file it needs beside its own source. There is no
@@ -211,7 +217,7 @@ Each script is independent. Each one has the init line:
 ```bash
 #!/usr/bin/env bash
 # scripts/build.sh
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 
 use os log fs
 
@@ -229,7 +235,7 @@ One script bootstraps, others use the clean shebang:
 ```bash
 #!/usr/bin/env bash
 # scripts/main.sh - The entry point
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 
 # PATH is already set by init, so internal scripts can use nutshell shebang
 "${0%/*}/internal/build.sh" "$@"
@@ -516,7 +522,7 @@ happens.
 ```bash
 #!/usr/bin/env bash
 # scripts/build.sh
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 
 use os log deps fs
 
@@ -543,7 +549,7 @@ log_success "Build complete!"
 ```bash
 #!/usr/bin/env bash
 # scripts/fetch-data.sh
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 
 use log http json
 
@@ -566,7 +572,7 @@ fi
 ```bash
 #!/usr/bin/env bash
 # scripts/install.sh
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 
 use log prompt fs color
 
@@ -594,7 +600,7 @@ log_success "Installation complete!"
 Every script needs this line:
 
 ```bash
-. "$NUTSHELL_INIT"
+. "$NUTSHELL_INIT" || exit 1
 ```
 
 Breaking it down:

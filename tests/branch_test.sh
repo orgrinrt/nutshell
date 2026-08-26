@@ -269,3 +269,47 @@ it_says_a_slashed_ref_is_a_name_problem_and_not_a_network_one() {
     assert_fails grep -q "could not reach" <<<"$said"
     _br_end
 }
+
+#[test]
+it_keeps_a_revision_something_is_still_using() {
+    _br_setup; _br_remote dev 0.4.0
+    NUTSHELL_BRANCH_TTL=0 nutshell_find "" dev
+    local old; old="$(_br_head)"
+
+    # Aged past the prune's cutoff, as a long-running program's revision would
+    # be: modules load lazily through `use`, so a program started three days
+    # ago still holds its revision, and reading files inside a directory does
+    # not move the directory's mtime.
+    touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)" \
+        "$(_br_base)/$old"
+
+    # Something resolves to it again, which is what a running program does.
+    NUTSHELL_BRANCH_TTL=9999 nutshell_find "" dev >/dev/null 2>&1
+
+    # Now somebody else's push moves the head and prunes.
+    _br_move second
+    NUTSHELL_BRANCH_TTL=0 nutshell_find "" dev 2>/dev/null
+
+    # The old revision survives, because it was used within the day even though
+    # it was fetched days ago. Deleting it pulled the floor out from under a
+    # running program and every later `use` in it failed.
+    assert_ok test -f "$(_br_base)/$old/init"
+    _br_end
+}
+
+#[test]
+it_still_drops_a_revision_nothing_has_used() {
+    # The control for the one above. Touch-on-use must not turn the prune off.
+    _br_setup; _br_remote dev 0.4.0
+    NUTSHELL_BRANCH_TTL=0 nutshell_find "" dev
+    local old; old="$(_br_head)"
+    _br_move second
+    NUTSHELL_BRANCH_TTL=0 nutshell_find "" dev 2>/dev/null
+    # Aged after the last resolution, so nothing has used it since.
+    touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)" \
+        "$(_br_base)/$old"
+    _br_move third
+    NUTSHELL_BRANCH_TTL=0 nutshell_find "" dev 2>/dev/null
+    assert_fails test -d "$(_br_base)/$old"
+    _br_end
+}

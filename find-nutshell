@@ -212,12 +212,21 @@ _nutshell_branch_head() {
     printf '%s' "$sha"
 }
 
-# Throw away revisions of this branch that nothing has touched for a day.
+# Throw away revisions of this branch that nothing has used for a day.
 #
-# The checkouts are keyed by revision and never overwritten, so they would
-# otherwise accumulate one directory per push. A day is long enough that
-# nothing can still be sourcing out of one: resolution takes milliseconds and
-# the window it resolves inside is an hour.
+# **Used, not fetched.** Reading files inside a directory does not move its
+# mtime, so age alone measures time since the fetch, and modules load lazily
+# through `use` at call time: a program holds its revision for its whole run.
+# A TUI or a watch loop started three days ago, still running, was `rm -rf`'d
+# out from under itself by any other process that fetched a new head, and every
+# later `use` in it then failed.
+#
+# So resolution touches the directory it hands back, and the age below is time
+# since something last resolved to it. That is a `touch` per resolution, inside
+# the hour-long window, against a delete that breaks a running program.
+#
+# A day is then long enough: it means nothing has *started* using this revision
+# for a day, and a program that started before that has been touching it.
 _nutshell_branch_prune() {
     local base="$1" keep="$2" d name
     for d in "$base"/*/; do
@@ -268,6 +277,8 @@ _nutshell_branch() {
     # Inside the window, what is here is what the pin means.
     if [[ -n "$known" ]] && [[ -f "${base}/${known}/init" ]] \
        && (( now - last < ${NUTSHELL_BRANCH_TTL:-3600} )); then
+        # Touched so the prune can tell time-since-use from time-since-fetch.
+        touch "${base}/${known}" 2>/dev/null
         printf '%s' "${base}/${known}/init"
         return 0
     fi
@@ -287,6 +298,7 @@ _nutshell_branch() {
         if [[ -n "$known" ]] && [[ -f "${base}/${known}/init" ]]; then
             printf 'nutshell: could not reach %s, running %s from %s\n' \
                 "$remote" "$ref" "${known:0:12}" >&2
+            touch "${base}/${known}" 2>/dev/null
             printf '%s' "${base}/${known}/init"
             return 0
         fi
@@ -297,6 +309,7 @@ _nutshell_branch() {
     if [[ -f "${base}/${head}/init" ]]; then
         mkdir -p "$base" 2>/dev/null \
             && { printf '%s\n' "$now" > "$stamp"; printf '%s\n' "$head" > "${base}/.head"; }
+        touch "${base}/${head}" 2>/dev/null
         printf '%s' "${base}/${head}/init"
         return 0
     fi

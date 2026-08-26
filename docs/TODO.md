@@ -560,21 +560,49 @@ falsified claim announces nothing.
 - **`_nutshell_fetch`'s `--branch "$want"` with a version-shaped want.** Right
   by accident, because tags here are bare. It should be resolving a ref.
 
-### What it should be instead
+### What it should be instead: renki's model, read rather than paraphrased
 
-The pin lives in `nut.toml` beside every other dependency, one shape for all of
-them, `git` and `ref`. `ref` is a branch, a tag or a commit. A branch is
-resolved with `git ls-remote`, TTL cached, which `lib/extern.sh` already does
-for externs in `extern_resolve_ref`; the interpreter stops being the exception
-that has its own arrangement.
+`renki/src/manifest.rs` and `renki/src/pin.rs`. Four points, each of which I got
+wrong by designing from the header instead of the code.
 
-The store is keyed by the resolved commit, not by a version string, which is
-also what makes two consumers on one commit share a checkout. `nutshell --version`
-answers from `git describe --tags --always --dirty` in its own checkout.
+**1. Four reference forms, and the config says which by which key it used.**
+`manifest.rs:63-71` is `Reference::{Version, Rev, Tag, Branch}`, and its own doc
+says they are not interchangeable: a version is immutable and maps to both a
+release and a tag, a rev and a tag are immutable and git-only, a branch moves
+and is the only one that has to be re-resolved. `Header::parse` at `:113-121`
+reads four separate keys, ordered most specific first, so a config carrying more
+than one has a defined answer. **There is no shape sniffing.** A tag named `dev`
+and a branch named `dev` are different pins because they came from different
+keys, and asking whether a string looks like a version is the invented system.
+
+**2. Everything resolves to something immutable, and that is the cache key.**
+`pin.rs:84-146` produces `key_rev`: `v:<version>` for a version, the bare sha
+for a rev, `tag:<t>` for a tag, and for a branch **the sha it currently points
+at**. `Resolved::git_ref` at `:72` says it outright: "a branch has already
+become the rev it pointed at". A store keyed by a branch name, or by a version
+string, is keyed by something that moves.
+
+**3. Two caches, two jobs.** The branch-head resolution is cached with a TTL
+(`resolve_branch`, `branch_resolution_path`, `fresh_resolution`); the built
+artifact is cached under the resolved sha. Conflating them is what makes a
+branch pin either never refresh or refetch on every run.
+
+**4. Offline uses the last known revision and names it.** `resolve_branch`
+falls back to `any_resolution` and prints the revision it is running from,
+because a stale head is very probably still built and sitting in the cache, and
+running from it beats refusing to run.
+
+For nutshell that means `nut.toml` carries `git` plus exactly one of `rev`,
+`tag`, `branch`, `version`, the same four keys, for the interpreter and for
+every extern alike. The store is keyed by the resolved commit. `NUTSHELL_VERSION`
+is deleted and `nutshell --version` answers from `git describe --tags --always`
+in its own checkout.
 
 **Interim state, so the next reader is not misled.** `find-nutshell` on
-`feat/toolchains` now takes a branch ref as well as a version, and hulilupteri
-pins `dev` through it, so the working shape is already the right one. What is
-underneath it is still the constant: the version arm, the store's naming rule
-and `nutshell_at_least` are all live. This is a half-migration and it should not
-be described as anything else until the constant is gone.
+`feat/toolchains` takes a branch and hulilupteri pins `dev` through it, so a
+consumer tracking a moving branch works today. Underneath it is still the
+invented system, and every one of the four points above is unimplemented: one
+key rather than four, shape sniffing rather than the key deciding, the store
+keyed by a branch name rather than by the sha it resolved to, and one cache
+doing both jobs. Treat `_nutshell_is_version` and `_nutshell_branch` as scaffolding
+that proved the consumer end, not as the design.

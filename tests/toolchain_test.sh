@@ -344,3 +344,157 @@ it_does_not_fetch_when_the_caller_names_no_version() {
     assert_empty "$(nutshell_toolchains)"
     _tc_end
 }
+
+# --- the store is shared, and nothing in it is deleted while it is in use -----
+#
+# Every project on this machine resolves out of one store and nothing locks it.
+# So the two dangerous moves are removing a directory another process is
+# sourcing out of, and building a store path out of a name a caller supplied.
+
+#[test]
+it_adopts_the_copy_that_got_there_first_instead_of_deleting_it() {
+    _tc_setup
+    _tc_remote 0.4.0
+    # A directory already in place, carrying a mark this test can recognise.
+    # A fetch that deletes and replaces loses the mark; one that adopts what is
+    # there keeps it, and both answers are the same version, which is the whole
+    # reason adopting is allowed.
+    mkdir -p "$NUTSHELL_TOOLCHAINS/0.4.0"
+    printf 'export NUTSHELL_VERSION="0.4.0"\n' > "$NUTSHELL_TOOLCHAINS/0.4.0/init"
+    printf 'in use\n' > "$NUTSHELL_TOOLCHAINS/0.4.0/marker"
+    assert_ok _nutshell_fetch 0.4.0 >/dev/null 2>&1
+    assert_ok test -f "$NUTSHELL_TOOLCHAINS/0.4.0/marker"
+    _tc_end
+}
+
+#[test]
+it_clears_the_scratch_copy_a_lost_race_left_inside_the_target() {
+    _tc_setup
+    local dir="$NUTSHELL_TOOLCHAINS/0.4.0" tmp="$NUTSHELL_TOOLCHAINS/0.4.0.fetching.99"
+    mkdir -p "$dir"
+    printf 'export NUTSHELL_VERSION="0.4.0"\n' > "$dir/init"
+    printf 'in use\n' > "$dir/marker"
+    mkdir -p "$tmp"
+    printf 'export NUTSHELL_VERSION="0.4.0"\n' > "$tmp/init"
+
+    # The state a loser actually reaches. The existence check and the rename
+    # are two steps, so a directory that appeared between them turns the
+    # rename into a move *inside* it, and `<dir>/<scratch>` is what that
+    # leaves. Both the target and the store have to come out of this clean.
+    assert_ok _nutshell_adopt "$tmp" "$dir"
+    assert_ok test -f "$dir/marker"
+    assert_fails test -e "$tmp"
+    assert_fails test -e "$dir/0.4.0.fetching.99"
+    _tc_end
+}
+
+#[test]
+it_renames_the_scratch_copy_into_place_when_nothing_is_there() {
+    _tc_setup
+    local dir="$NUTSHELL_TOOLCHAINS/0.4.0" tmp="$NUTSHELL_TOOLCHAINS/0.4.0.fetching.99"
+    mkdir -p "$tmp"
+    printf 'export NUTSHELL_VERSION="0.4.0"\n' > "$tmp/init"
+    printf 'fetched\n' > "$tmp/marker"
+
+    # The winner's path, and the negative control for the one above: the copy
+    # that arrives first is the one kept, not thrown away.
+    assert_ok _nutshell_adopt "$tmp" "$dir"
+    assert_ok test -f "$dir/marker"
+    assert_fails test -e "$tmp"
+    _tc_end
+}
+
+#[test]
+it_refuses_a_version_name_that_would_escape_the_store() {
+    _tc_setup
+    local outside="$TCROOT/outside"
+    mkdir -p "$outside"
+    printf 'here\n' > "$outside/keep"
+    # The name reaches `rm -rf "${store}/${want}"` in the old shape. It has to
+    # be refused before a path is built out of it, not after.
+    assert_fails _nutshell_fetch "../outside" 2>/dev/null
+    assert_ok test -f "$outside/keep"
+    _tc_end
+}
+
+#[test]
+it_refuses_a_version_name_carrying_a_slash() {
+    _tc_setup
+    assert_fails _nutshell_fetch "0.4.0/../../etc" 2>/dev/null
+    assert_fails _nutshell_fetch "" 2>/dev/null
+    _tc_end
+}
+
+# --- a fetch that cannot succeed is not repeated on every invocation ----------
+#
+# The standing case, not a corner: a tool pinned at a version nobody has tagged
+# resolves to vendored in the end and pays a network round trip on the way
+# there, on every run of every tool on the machine.
+
+#[test]
+it_does_not_retry_a_fetch_that_just_failed() {
+    _tc_setup
+    export NUTSHELL_REMOTE="$TCROOT/no-such-remote.git"
+    local root="$TCROOT/project"
+    mkdir -p "$root/lib/nutshell"
+    printf 'export NUTSHELL_VERSION="0.4.0"\n' > "$root/lib/nutshell/init"
+
+    assert_ok nutshell_find "$root" 0.9.9 2>/dev/null
+    assert_eq "$NUTSHELL_FROM" "vendored"
+    # The second run says nothing, because it does not go looking again.
+    local second; second="$(nutshell_find "$root" 0.9.9 2>&1 >/dev/null)"
+    assert_fails grep -q 'could not fetch' <<<"$second"
+    _tc_end
+}
+
+#[test]
+it_tries_again_once_the_window_is_out() {
+    _tc_setup
+    export NUTSHELL_REMOTE="$TCROOT/no-such-remote.git"
+    NUTSHELL_FETCH_RETRY=0 assert_fails _nutshell_fetch 0.9.9 2>/dev/null
+    # A zero window is no window: the negative cache must not be a way to
+    # never fetch again.
+    assert_fails NUTSHELL_FETCH_RETRY=0 _nutshell_fetch_failed_recently 0.9.9
+    assert_ok _nutshell_fetch_failed_recently 0.9.9
+    _tc_end
+}
+
+#[test]
+it_remembers_nothing_about_a_fetch_that_worked() {
+    _tc_setup
+    _tc_remote 0.4.0
+    assert_ok _nutshell_fetch 0.4.0 >/dev/null 2>&1
+    assert_fails _nutshell_fetch_failed_recently 0.4.0
+    _tc_end
+}
+
+# --- the store is release-only, and says so -----------------------------------
+#
+# `_nutshell_num` trims a version field at the first non-digit, and the comment
+# on it used to say that made `0.4.0-rc1` sort beside `0.4.0`. It cannot arrive
+# to be sorted. These are the two gates that stop it.
+
+#[test]
+it_skips_a_directory_whose_name_is_not_the_version_inside_it() {
+    _tc_setup
+    # The interpreter reports `0.4.0`; the directory claims a prerelease. The
+    # name is what the resolver looks up by, so a directory that disagrees with
+    # itself would be handed out for a request it does not satisfy.
+    _tc_store 0.4.0 "0.4.0-rc1"
+    assert_empty "$(nutshell_toolchains)"
+    _tc_end
+}
+
+#[test]
+it_refuses_to_store_a_fetch_whose_version_is_not_the_name_asked_for() {
+    _tc_setup
+    _tc_remote 0.4.0
+    # A tag spelled as a prerelease, holding an interpreter that reports the
+    # plain version. There is nowhere in the store for it to go.
+    local work="$TCROOT/work-0.4.0"
+    git -C "$work" tag -a "0.4.0-rc1" -m rc
+    git -C "$work" push -q origin "0.4.0-rc1"
+    assert_fails _nutshell_fetch "0.4.0-rc1" 2>/dev/null
+    assert_fails test -e "$NUTSHELL_TOOLCHAINS/0.4.0-rc1"
+    _tc_end
+}

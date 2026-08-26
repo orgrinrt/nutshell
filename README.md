@@ -31,6 +31,36 @@ Optionally, link the interpreter onto PATH so standalone scripts can use the
 ./scripts/lib/nutshell/install
 ```
 
+### The store
+
+Fetched dependencies live in one place shared by every project on the machine,
+keyed by url and commit, so two projects on the same commit of the same library
+have one copy of it between them and neither carries a dependency tree of its
+own.
+
+The interpreter is one of those dependencies rather than a special case.
+Versions sit side by side, a tool asks for the one it needs, and a version that
+is not on the machine yet is fetched at its tag rather than being a failure. A
+machine carrying four of them is the ordinary state.
+
+```
+${NUTSHELL_STORE:-~/.local/share/nutshell}/
+  externs/       one directory per url and commit
+  toolchains/    one directory per version
+```
+
+`NUTSHELL_STORE` moves the root, `NUTSHELL_TOOLCHAINS` just the toolchains, and
+`NUTSHELL_REMOTE` says where a fetch goes. Under the data directory and not the
+cache directory, because a cache is something a cleaner is entitled to delete
+and this is where every project's dependencies actually live.
+
+A tool resolves in this order: `NUTSHELL_HOME` if it is set, then an installed
+interpreter if it satisfies what the tool asked for, then the store, then a
+fetch into the store, then whatever the project has vendored. One shared
+interpreter that everything uses is still the good state; the store is for the
+tools that cannot use it, and the vendored copy is the last resort for a
+machine with no network.
+
 ---
 
 ## Quick Start
@@ -396,8 +426,8 @@ Declared in the manifest because a script that fetches its own dependencies
 decides for the whole project where code comes from, and does it somewhere
 nobody looks. One file answers "what does this project pull in".
 
-Resolution is cached globally by url and ref, so several projects naming the
-same ref share one checkout and the second pays nothing.
+Resolution goes through the store, so several projects naming the same commit
+share one checkout and the second pays nothing.
 
 `nut.lock` records the commit each dependency resolved to, and is written on
 first resolution and obeyed from then on. `ref = "main"` names a branch, and a

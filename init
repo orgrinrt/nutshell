@@ -37,11 +37,14 @@ _nutshell_refuse_old_bash() {
     printf '  first on PATH, or run this under it directly.\n' >&2
 }
 
+# `return` here returns to whoever sourced this and cannot stop them, so the
+# caller has to check. Every example in the readme ends its source line in
+# `|| exit 1` for that reason, and both consumers do the same.
 case "${BASH_VERSION:-}" in
-    "")        _nutshell_refuse_old_bash; return 1 2>/dev/null || exit 1 ;;
-    1.*|2.*|3.*) _nutshell_refuse_old_bash; return 1 2>/dev/null || exit 1 ;;
+    ""|1.*|2.*|3.*)
+        _nutshell_refuse_old_bash
+        return 1 2>/dev/null || exit 1 ;;
 esac
-
 # Prevent multiple inclusion
 [[ -n "${_NUTSHELL_INIT:-}" ]] && return 0
 _NUTSHELL_INIT=1

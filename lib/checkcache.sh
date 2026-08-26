@@ -69,10 +69,18 @@ declare -g  _NUT_CACHE_BASE=""
 
 # `<mtime> <size>` for a set of paths, in one call.
 _nut_cache_stat_into() {
-    local out line path
+    local line mtime size path
     while IFS= read -r line; do
         [[ -n "$line" ]] || continue
-        _NUT_CACHE_STAMP["${line#* * }"]="${line%% * *} ${line#* }"
+        # `<mtime> <size> <path>`, split from the front. Taking the size with
+        # `${v##* }` takes the last field, which is the path, so the size was
+        # stat'd and then thrown away and a content change landing on the same
+        # mtime hit. Two `git checkout`s inside one second do that, and so does
+        # `touch -r`.
+        mtime="${line%% *}"; line="${line#* }"
+        size="${line%% *}";  path="${line#* }"
+        [[ -n "$path" ]] || continue
+        _NUT_CACHE_STAMP["$path"]="${mtime} ${size}"
     done < <(
         if stat -f '%m %z %N' "$@" 2>/dev/null; then :
         else stat -c '%Y %s %n' "$@" 2>/dev/null; fi
@@ -90,7 +98,8 @@ _nut_cache_stamp_of() {
         v="${_NUT_CACHE_STAMP[$p]:-}"
     fi
     [[ -n "$v" ]] || return 1
-    printf '%s' "${v%% *} ${v##* }"
+    # Already `<mtime> <size>`; there is nothing to re-parse out of it.
+    printf '%s' "$v"
 }
 
 # What every entry shares: the interpreter's newest file and the format.
@@ -102,12 +111,18 @@ _nut_cache_base() {
     [[ -n "$_NUT_CACHE_BASE" ]] && { printf '%s' "$_NUT_CACHE_BASE"; return 0; }
     local root="${NUTSHELL_ROOT:-}" newest=""
     if [[ -n "$root" && -d "$root/lib" ]]; then
-        newest="$(find "$root/lib" -type f -newer "$root/lib" -print 2>/dev/null | head -1)"
+        # The newest *file*, not the directory's own mtime. A directory's mtime
+        # moves when an entry is added or removed and not when a file inside it
+        # is edited, so stat'ing `lib` caught `git pull` and a new module and
+        # missed the case this exists for: editing `lib/srcfile.sh` in place
+        # changes what a check reports while touching nothing else.
+        #
+        # One `find` and one batched `stat`, per run rather than per file.
         newest="$(
-            if stat -f '%m' "$root/lib" "$root/init" 2>/dev/null; then :
-            else stat -c '%Y' "$root/lib" "$root/init" 2>/dev/null; fi
+            find "$root/lib" "$root/init" -type f -exec stat -f '%m' {} + 2>/dev/null \
+            || find "$root/lib" "$root/init" -type f -exec stat -c '%Y' {} + 2>/dev/null
         )"
-        newest="${newest//$'\n'/-}"
+        newest="$(printf '%s\n' "$newest" | sort -rn | head -1)"
     fi
     _NUT_CACHE_BASE="f${_NUT_CACHE_FORMAT}:${newest:-none}"
     printf '%s' "$_NUT_CACHE_BASE"

@@ -43,12 +43,35 @@ main() {
         return 1
     fi
 
-    # init is the single home of the version, so the tag cannot disagree
-    # with what the library reports about itself.
-    local version="${NUTSHELL_VERSION}"
-    if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
-        log_error "tag ${version} already exists; bump NUTSHELL_VERSION in init"
+    # The tag is the version, and it is named here rather than read out of the
+    # library.
+    #
+    # `init`'s `NUTSHELL_VERSION` is a constant somebody has to remember to
+    # bump, and `docs/TODO.md` records op's ruling that identity comes from git
+    # and that the constant goes. This script used to take the version from it
+    # and call that "the single home of the version", which would have made the
+    # constant load-bearing for the release process as well as for resolution,
+    # so deleting it later would break this too. It is interim; nothing new
+    # depends on it.
+    local version="${1:-}"
+    if [[ -z "$version" ]]; then
+        log_error "which version? pass it: release <version>"
+        log_error "the newest tag is $(git describe --tags --abbrev=0 2>/dev/null || printf 'none')"
         return 1
+    fi
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+        log_error "${version} is not a version"
+        return 1
+    fi
+    if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+        log_error "tag ${version} already exists"
+        return 1
+    fi
+    # Said rather than enforced: the constant is still what a consumer's
+    # `nutshell_at_least` compares against until the pinning work lands.
+    if [[ "${NUTSHELL_VERSION:-}" != "$version" ]]; then
+        log_warn "init says ${NUTSHELL_VERSION:-nothing} and this tags ${version}"
+        log_warn "until git carries the identity, those want to agree"
     fi
 
     # The gates. A release does not skip what a commit would not.

@@ -182,29 +182,63 @@ it_forgets_when_a_file_changes_without_its_time_moving_forward() {
 }
 
 #[test]
-it_forgets_when_the_file_changes_size_but_not_its_time() {
+it_forgets_when_the_content_changes_and_the_time_does_not() {
     _cc_setup
+    # A reference whose mtime the file is restored to, so the only thing that
+    # moves is the content and its size. Two `git checkout`s inside one second
+    # do this, and so does `touch -r` and any build step that restores times.
+    #
+    # The previous version of this test moved the mtime *backward*, which is
+    # what the test above it already covers, so it passed on a key the size was
+    # not actually in. The size was stat'd and then discarded by a `${v##* }`
+    # that took the path.
+    local ref="$CCROOT/ref"; printf 'r\n' > "$ref"
+    touch -r "$ref" "$CCROOT/src.sh"
     nut_cache_write probe "$CCROOT/src.sh" 'answer'
-    local when; when="$(stat -f '%Sm' -t '%Y%m%d%H%M.%S' "$CCROOT/src.sh" 2>/dev/null                         || stat -c '%y' "$CCROOT/src.sh")"
+    assert_ok nut_cache_hit probe "$CCROOT/src.sh"
+
     printf 'a much longer line than before\n' > "$CCROOT/src.sh"
-    touch -t 200001010000 "$CCROOT/src.sh"
-    # Size alone is enough to know it moved.
+    touch -r "$ref" "$CCROOT/src.sh"
+
+    # Same mtime, different size.
     assert_fails nut_cache_hit probe "$CCROOT/src.sh"
     _cc_end
 }
 
 #[test]
-it_forgets_when_a_module_the_check_uses_changes() {
+it_forgets_when_a_module_the_check_uses_is_edited_in_place() {
     _cc_setup
     # A check is not one file. `check_trivial_wrappers` gets its behaviour from
     # `lib/srcfile.sh`, so editing that changes what it reports while touching
-    # neither the check nor the config. op's ruling is that a check gaining a
-    # step reads everything again.
+    # neither the check nor the config, and op's ruling is that a check gaining
+    # a step reads everything again.
+    #
+    # A real edit, under a scratch interpreter root. The previous version of
+    # this test hand-set `_NUT_CACHE_BASE` and asserted a miss, which restated
+    # the string comparison in `nut_cache_hit` and never entered the function
+    # that computes it. The defect it was named for survived that test: the
+    # computation stat'd the `lib` directory, whose mtime moves when an entry
+    # is added or removed and not when a file inside it is edited.
+    local fake="$CCROOT/fakenut"
+    mkdir -p "$fake/lib"
+    printf 'a module\n' > "$fake/lib/srcfile.sh"
+    printf 'an init\n' > "$fake/init"
+
+    local keep="${NUTSHELL_ROOT:-}"
+    export NUTSHELL_ROOT="$fake"
+    _NUT_CACHE_BASE=""
+
     nut_cache_write probe "$CCROOT/src.sh" 'answer'
     assert_ok nut_cache_hit probe "$CCROOT/src.sh"
-    # The interpreter's own stamp is part of the key, so moving it is a miss.
-    _NUT_CACHE_BASE="f2:something-else"
+
+    sleep 1
+    printf 'a module, with another step\n' > "$fake/lib/srcfile.sh"
+    _NUT_CACHE_BASE=""
+
     assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+
+    export NUTSHELL_ROOT="$keep"
+    _NUT_CACHE_BASE=""
     _cc_end
 }
 

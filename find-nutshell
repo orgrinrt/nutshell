@@ -8,17 +8,29 @@
 # Sourced by a tool before nutshell exists, so it is plain bash and depends on
 # nothing.
 #
-# The order matters and the reason is the whole point: an installed nutshell is
-# shared by everything on the machine, and a copy inside one project is a
-# second version that drifts from it in silence. Every other package manager
-# settled this the same way. cargo keeps one shared registry and resolves the
-# toolchain separately; pnpm keeps one content-addressed store and links into
-# it; yarn 2 has no per-project tree at all. A per-project physical copy is the
-# thing that goes stale, and it went stale here twice in one day.
+# Versions coexist. A tool asks for the one it needs and gets that one, and a
+# machine carrying four of them is the ordinary state rather than a mess to
+# clean up. This is rustup's arrangement and renki's: a store of toolchains
+# keyed by version, one resolution step in front of it, and a fetch when the
+# asked-for one is not there yet.
 #
-# So: what the caller named, then what is installed, then what is vendored. The
-# vendored copy is the fallback for a machine with nothing installed, which is
-# the machine this tool is usually rescuing.
+# The order for a version pin: what the caller named, then what is installed if
+# it satisfies, then the store, then a fetch into the store, then whatever is
+# vendored. Only the last of those is a compromise, and it is there for the
+# machine with no network that this tool is usually rescuing.
+#
+# A branch pin takes a different route and it is stated here because the two
+# get conflated: what the caller named, then the branch's head, then vendored.
+# Neither the installed interpreter nor the version store can answer a branch
+# pin, so neither is consulted. Why, at `nutshell_find`.
+#
+# Preferring an installed interpreter over the store is deliberate. One shared
+# nutshell that everything uses is the good state; the store exists for the
+# tools that cannot use it, not to replace it. Every other package manager
+# settled the sharing question the same way: cargo keeps one registry and
+# resolves the toolchain separately, pnpm keeps one content-addressed store and
+# links into it, yarn 2 has no per-project tree at all. A per-project physical
+# copy is the thing that goes stale, and it went stale here twice in one day.
 #
 # Usage:
 #   . "${HERE}/find-nutshell"
@@ -64,6 +76,49 @@ _nutshell_root_of() {
 nutshell_find() {
     local root="${1:-}" want="${2:-}" cand bin
 
+    # A branch pin is not a floor, it is an identity: `dev` means the head of
+    # dev, today. Nothing already on the machine can be assumed to be that, so
+    # it is resolved against the remote first and only falls through when the
+    # remote cannot be reached. This is the shape op settled on for every other
+    # dependency, and the interpreter is not an exception to it.
+    if [[ -n "$want" ]] && ! _nutshell_is_version "$want"; then
+        # Said before anything is attempted, because the message at the bottom
+        # of this branch reports what could not be reached and nothing was.
+        # `feat/toolchains` is a legal branch name and is not a directory name
+        # here; the limit is real and it should not read as a network failure.
+        if ! _nutshell_safe_name "$want"; then
+            printf 'nutshell: %s cannot name a toolchain directory, so it cannot be pinned\n' \
+                "$want" >&2
+            printf '  a ref here is one path component: no slash, no leading dot, no space\n' >&2
+            return 1
+        fi
+        # What the caller named still wins, before the remote is asked. An
+        # override that is quietly ignored is worse than one that fails, and a
+        # test suite that exports this must not be sent to the network by every
+        # child process it starts.
+        if [[ -n "${NUTSHELL_HOME:-}" ]]; then
+            if cand="$(_nutshell_root_of "${NUTSHELL_HOME}/init")"; then
+                NUTSHELL_INIT="$cand"; NUTSHELL_FROM="NUTSHELL_HOME"
+                return 0
+            fi
+            printf 'nutshell: NUTSHELL_HOME is %s and there is no init in it\n' \
+                "$NUTSHELL_HOME" >&2
+            return 1
+        fi
+        if cand="$(_nutshell_branch "$want")"; then
+            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="branch:${want}"
+            return 0
+        fi
+        if [[ -n "$root" ]] \
+           && cand="$(_nutshell_root_of "${root}/lib/nutshell/init")"; then
+            NUTSHELL_INIT="$cand"; NUTSHELL_FROM="vendored"
+            return 0
+        fi
+        printf 'nutshell: could not reach %s and there is no copy here\n' \
+            "$want" >&2
+        return 1
+    fi
+
     # 1. What the caller named. An override exists so somebody working on
     #    nutshell itself can point a tool at their checkout.
     if [[ -n "${NUTSHELL_HOME:-}" ]]; then
@@ -96,22 +151,405 @@ nutshell_find() {
                 NUTSHELL_INIT="$cand"; NUTSHELL_FROM="installed"
                 return 0
             fi
-            # Said out loud. Silently falling through to the vendored copy
-            # would hide exactly the version skew this is here to surface.
-            printf 'nutshell: the installed one at %s is %s and this needs %s; using the vendored copy\n' \
+            # Said out loud. Falling through in silence would hide exactly
+            # the version skew this is here to surface.
+            printf 'nutshell: the installed one at %s is %s and this needs %s\n' \
                 "$cand" "$(_nutshell_version_of "$cand")" "$want" >&2
         fi
     fi
 
-    # 3. What is vendored, for a machine with nothing installed.
+    # 3. The store. Several versions live here at once and the newest one that
+    #    satisfies the caller is taken, which is what makes two tools wanting
+    #    two different nutshells a non-event.
+    if cand="$(_nutshell_in_store "$want")"; then
+        NUTSHELL_INIT="$cand"; NUTSHELL_FROM="toolchain"
+        return 0
+    fi
+
+    # 4. Not there yet, so fetch it. A version that exists and is simply not on
+    #    this machine is not a failure, it is a download.
+    #
+    #    A fetch that just failed is not retried until the window is out. The
+    #    ordinary standing case is a pin at a version nobody has tagged yet,
+    #    which resolves to vendored in the end; without this it pays a network
+    #    round trip and two lines of stderr on every run of every tool.
+    if [[ -n "$want" ]] && ! _nutshell_fetch_failed_recently "$want" \
+       && cand="$(_nutshell_fetch "$want")"; then
+        NUTSHELL_INIT="$cand"; NUTSHELL_FROM="fetched"
+        return 0
+    fi
+
+    # 5. What is vendored, for a machine with no network and nothing installed.
     if [[ -n "$root" ]] && cand="$(_nutshell_root_of "${root}/lib/nutshell/init")"; then
         NUTSHELL_INIT="$cand"; NUTSHELL_FROM="vendored"
         return 0
     fi
 
-    printf 'nutshell: no interpreter found. Install one, set NUTSHELL_HOME, or run:\n' >&2
-    printf '  git submodule update --init\n' >&2
+    # Named in the order somebody would actually reach for them. The submodule
+    # advice that used to be here assumed every consumer vendored a checkout,
+    # which is the arrangement this file exists to make unnecessary.
+    printf 'nutshell: nothing here satisfies %s. Any of:\n' "${want:-any version}" >&2
+    printf '  NUTSHELL_HOME=/path/to/a/nutshell   point at a checkout\n' >&2
+    printf '  install one on PATH                 shared by everything\n' >&2
+    printf '  tag %s on the remote              so it can be fetched\n' "${want:-the version}" >&2
     return 1
+}
+
+# Does this name a version, or a branch? Versions are digits and dots, so
+# anything else is a ref. `0.4.0` and `dev` are the two shapes a pin takes.
+_nutshell_is_version() {
+    [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+)*$ ]]
+}
+
+# The revision this branch was last resolved to, or nothing.
+_nutshell_branch_head() {
+    local pointer="${1}/.head" sha=""
+    [[ -r "$pointer" ]] || return 1
+    read -r sha < "$pointer" 2>/dev/null
+    [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]] || return 1
+    printf '%s' "$sha"
+}
+
+# Throw away revisions of this branch that nothing has touched for a day.
+#
+# The checkouts are keyed by revision and never overwritten, so they would
+# otherwise accumulate one directory per push. A day is long enough that
+# nothing can still be sourcing out of one: resolution takes milliseconds and
+# the window it resolves inside is an hour.
+_nutshell_branch_prune() {
+    local base="$1" keep="$2" d name
+    for d in "$base"/*/; do
+        [[ -d "$d" ]] || continue
+        name="${d%/}"; name="${name##*/}"
+        [[ "$name" == "$keep" ]] && continue
+        [[ "$name" =~ ^[0-9a-f]{7,40}$ ]] || continue
+        # `find -mtime +0` is a whole day, and it is the one age test that is
+        # in POSIX. A machine without find keeps the directory, which is the
+        # harmless way to be wrong here.
+        [[ -n "$(find "$base" -maxdepth 1 -name "$name" -mtime +0 2>/dev/null)" ]] \
+            && rm -rf "${d%/}"
+    done
+    return 0
+}
+
+# The head of a branch, as a checkout in the store, refreshed when it moves.
+#
+# Kept under `branches/` so it cannot collide with the version directories,
+# whose names are checked against their own contents. A branch checkout has no
+# such invariant: the version inside it changes whenever the branch does, and
+# that is the point of pinning one.
+#
+# Under `branches/<ref>/` the checkouts are keyed by the revision they hold,
+# and `.head` names the one the branch last resolved to. That is what makes the
+# store safe to share: a revision directory is written once and never replaced,
+# so a fetch triggered by somebody else's push cannot delete the tree a running
+# interpreter is sourcing out of. It is also the shape the pin design calls for,
+# where a branch has already become the revision it pointed at before anything
+# is looked up.
+#
+# The remote is asked at most once an hour. A pin that means "the head" and
+# checks on every invocation turns a shell prompt into a network client; one
+# that never checks is not a branch pin at all.
+_nutshell_branch() {
+    local ref="$1" base stamp remote head now last known
+    _nutshell_safe_name "$ref" || return 1
+    base="$(nutshell_toolchain_dir)/branches/${ref}"
+    stamp="${base}/.checked"
+    remote="${NUTSHELL_REMOTE:-https://github.com/orgrinrt/nutshell.git}"
+
+    now="$(date +%s 2>/dev/null)" || now=0
+    last=0
+    [[ -r "$stamp" ]] && read -r last < "$stamp" 2>/dev/null
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    known="$(_nutshell_branch_head "$base")" || known=""
+
+    # Inside the window, what is here is what the pin means.
+    if [[ -n "$known" ]] && [[ -f "${base}/${known}/init" ]] \
+       && (( now - last < ${NUTSHELL_BRANCH_TTL:-3600} )); then
+        printf '%s' "${base}/${known}/init"
+        return 0
+    fi
+
+    command -v git >/dev/null 2>&1 || {
+        [[ -n "$known" ]] && [[ -f "${base}/${known}/init" ]] \
+            && { printf '%s' "${base}/${known}/init"; return 0; }
+        return 1
+    }
+
+    head="$(git ls-remote "$remote" "refs/heads/${ref}" 2>/dev/null)"
+    head="${head%%[[:space:]]*}"
+    if [[ ! "$head" =~ ^[0-9a-f]{7,40}$ ]]; then
+        # Offline, or no such branch. What is already here is better than
+        # nothing, and the revision it is running from is named rather than
+        # pretended about.
+        if [[ -n "$known" ]] && [[ -f "${base}/${known}/init" ]]; then
+            printf 'nutshell: could not reach %s, running %s from %s\n' \
+                "$remote" "$ref" "${known:0:12}" >&2
+            printf '%s' "${base}/${known}/init"
+            return 0
+        fi
+        return 1
+    fi
+
+    # Already fetched, whether or not this process is the one that fetched it.
+    if [[ -f "${base}/${head}/init" ]]; then
+        mkdir -p "$base" 2>/dev/null \
+            && { printf '%s\n' "$now" > "$stamp"; printf '%s\n' "$head" > "${base}/.head"; }
+        printf '%s' "${base}/${head}/init"
+        return 0
+    fi
+
+    mkdir -p "$base" 2>/dev/null || return 1
+    local tmp="${base}/.fetching.$$"
+    rm -rf "$tmp"
+    printf 'nutshell: %s moved, fetching\n' "$ref" >&2
+    if ! git clone --quiet --depth 1 --branch "$ref" "$remote" "$tmp" 2>/dev/null; then
+        rm -rf "$tmp"
+        [[ -n "$known" ]] && [[ -f "${base}/${known}/init" ]] \
+            && { printf '%s' "${base}/${known}/init"; return 0; }
+        return 1
+    fi
+
+    # The clone is named by what it actually holds, not by what the remote said
+    # a moment ago. A branch that moved between the two would otherwise be
+    # stored under a revision it does not contain.
+    local got; got="$(git -C "$tmp" rev-parse HEAD 2>/dev/null)"
+    [[ "$got" =~ ^[0-9a-f]{7,40}$ ]] || got="$head"
+
+    if ! _nutshell_adopt "$tmp" "${base}/${got}"; then
+        [[ -n "$known" ]] && [[ -f "${base}/${known}/init" ]] \
+            && { printf '%s' "${base}/${known}/init"; return 0; }
+        return 1
+    fi
+    printf '%s\n' "$now" > "$stamp"
+    printf '%s\n' "$got" > "${base}/.head"
+    _nutshell_branch_prune "$base" "$got"
+    printf '%s' "${base}/${got}/init"
+}
+
+#[pub]
+# The root both the toolchains and the externs sit under.
+#
+# The platform branch is spelled out here rather than taken from `lib/xdg.sh`,
+# which is the module that owns it. This file runs before nutshell exists and
+# cannot use a module, so the duplication is deliberate and the two are held
+# together by a test rather than by anybody remembering. Change one and the
+# suite says which other one to change.
+# Usage: nutshell_store_root -> a path
+nutshell_store_root() {
+    if [[ -n "${NUTSHELL_STORE:-}" ]]; then
+        printf '%s' "${NUTSHELL_STORE%/}"
+        return 0
+    fi
+    if [[ -n "${XDG_DATA_HOME:-}" ]]; then
+        printf '%s/nutshell' "${XDG_DATA_HOME%/}"
+        return 0
+    fi
+    case "$(uname -s 2>/dev/null)" in
+        Darwin) printf '%s/Library/Application Support/nutshell' "${HOME:-.}" ;;
+        *)      printf '%s/.local/share/nutshell' "${HOME:-.}" ;;
+    esac
+}
+
+#[pub]
+# Where toolchains live. One directory per version, each a checkout.
+#
+# Beside the externs, under the one root, because the interpreter is a
+# dependency like any other and giving it its own arrangement is what let it
+# drift out of step in the first place.
+# Usage: nutshell_toolchain_dir -> a path
+nutshell_toolchain_dir() {
+    if [[ -n "${NUTSHELL_TOOLCHAINS:-}" ]]; then
+        printf '%s' "${NUTSHELL_TOOLCHAINS%/}"
+        return 0
+    fi
+    printf '%s/toolchains' "$(nutshell_store_root)"
+}
+
+#[pub]
+# Every version in the store, newest first, one per line.
+#
+# A directory is named by the version it holds, and one whose contents report
+# something else is skipped rather than trusted. The name is what the resolver
+# looks things up by, so a directory that lies about itself would be handed
+# out for a request it does not satisfy.
+# Usage: nutshell_toolchains -> prints versions
+nutshell_toolchains() {
+    local store d v name
+    store="$(nutshell_toolchain_dir)"
+    [[ -d "$store" ]] || return 0
+    for d in "$store"/*/; do
+        [[ -f "${d}init" ]] || continue
+        name="${d%/}"; name="${name##*/}"
+        v="$(_nutshell_version_of "${d}init")" || continue
+        [[ "$v" == "$name" ]] || continue
+        printf '%s\n' "$v"
+    done | _nutshell_sort_versions
+}
+
+# Newest first. Sorting fields rather than strings, because 0.10.0 is newer
+# than 0.9.0 and every string comparison says otherwise.
+_nutshell_sort_versions() {
+    local v a b c rest
+    while IFS= read -r v; do
+        [[ -n "$v" ]] || continue
+        IFS=. read -r a b c rest <<< "$v"
+        printf '%05d.%05d.%05d\t%s\n' \
+            "$(_nutshell_num "${a:-}")" \
+            "$(_nutshell_num "${b:-}")" \
+            "$(_nutshell_num "${c:-}")" \
+            "$v"
+    done | sort -r | cut -f2-
+}
+
+# One version field as a number. Anything from the first non-digit onward is
+# dropped, so a malformed field cannot abort the whole listing on an arithmetic
+# error.
+#
+# It does not order prereleases and is not trying to. **The store is
+# release-only.** `nutshell_toolchains` skips a directory whose name is not what
+# the interpreter inside it reports, `_nutshell_version_of` reads that report as
+# digits and dots, and `_nutshell_fetch` refuses to store anything whose report
+# disagrees with the name asked for. So `0.4.0-rc1` cannot become a directory
+# here and there is nothing for an ordering to be wrong about. This is a guard
+# against a malformed name, and the tests say so.
+_nutshell_num() {
+    local n="${1:-}"
+    n="${n%%[!0-9]*}"
+    printf '%d' "$(( 10#${n:-0} ))"
+}
+
+# The newest toolchain satisfying the caller, or nothing.
+_nutshell_in_store() {
+    local want="${1:-}" store v cand
+    store="$(nutshell_toolchain_dir)"
+    [[ -d "$store" ]] || return 1
+    while IFS= read -r v; do
+        [[ -n "$v" ]] || continue
+        cand="$(_nutshell_root_of "${store}/${v}/init")" || continue
+        _nutshell_satisfies "$cand" "$want" && { printf '%s' "$cand"; return 0; }
+    done < <(nutshell_toolchains)
+    return 1
+}
+
+# Is a name safe to build a store path out of?
+#
+# Everything under the store is named by something a caller supplied, and the
+# store is then written to and removed from. A ref carrying a slash or a dot
+# pair is not a directory name here, whatever git thinks of it.
+_nutshell_safe_name() {
+    local n="${1:-}"
+    [[ -n "$n" ]] || return 1
+    case "$n" in
+        */*|*..*|.*|*[[:space:]]*) return 1 ;;
+    esac
+    return 0
+}
+
+# Where a failed fetch is remembered, so the next run does not repeat it.
+_nutshell_fail_stamp() {
+    printf '%s/failed/%s' "$(nutshell_toolchain_dir)" "$1"
+}
+
+# Did fetching this fail recently enough that trying again is just noise?
+#
+# The window is the branch one, for the same reason: a pin that cannot be
+# satisfied is the standing state until somebody pushes a tag, and asking the
+# remote about it on every invocation turns a shell prompt into a network
+# client.
+_nutshell_fetch_failed_recently() {
+    local want="${1:-}" stamp now last
+    _nutshell_safe_name "$want" || return 1
+    stamp="$(_nutshell_fail_stamp "$want")"
+    [[ -r "$stamp" ]] || return 1
+    now="$(date +%s 2>/dev/null)" || return 1
+    last=0
+    read -r last < "$stamp" 2>/dev/null
+    [[ "$last" =~ ^[0-9]+$ ]] || return 1
+    (( now - last < ${NUTSHELL_FETCH_RETRY:-3600} ))
+}
+
+# Remember that fetching this failed, so the window above has something to read.
+_nutshell_remember_failure() {
+    local want="${1:-}" stamp now
+    _nutshell_safe_name "$want" || return 0
+    stamp="$(_nutshell_fail_stamp "$want")"
+    mkdir -p "${stamp%/*}" 2>/dev/null || return 0
+    now="$(date +%s 2>/dev/null)" || now=0
+    printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
+}
+
+# Put a version in the store and print its root.
+#
+# Shallow, at the tag, from wherever the caller says nutshell lives. A failure
+# here is ordinary: no git, no network, or a version nobody has tagged yet. It
+# says which, remembers it, and falls through to whatever else the machine has.
+_nutshell_fetch() {
+    local want="$1" store dir remote
+    _nutshell_safe_name "$want" || {
+        printf 'nutshell: %s is not a name a toolchain can be stored under\n' \
+            "$want" >&2
+        return 1
+    }
+    store="$(nutshell_toolchain_dir)"
+    dir="${store}/${want}"
+    remote="${NUTSHELL_REMOTE:-https://github.com/orgrinrt/nutshell.git}"
+
+    command -v git >/dev/null 2>&1 || {
+        printf 'nutshell: %s is not on this machine and there is no git to fetch it with\n' \
+            "$want" >&2
+        _nutshell_remember_failure "$want"
+        return 1
+    }
+
+    mkdir -p "$store" 2>/dev/null || return 1
+    # Into a scratch directory and moved into place, so an interrupted clone
+    # never leaves a half a toolchain behind for the next run to find and
+    # believe.
+    local tmp="${dir}.fetching.$$"
+    rm -rf "$tmp"
+    printf 'nutshell: fetching %s\n' "$want" >&2
+    if ! git clone --quiet --depth 1 --branch "$want" "$remote" "$tmp" 2>/dev/null; then
+        rm -rf "$tmp"
+        printf 'nutshell: could not fetch %s from %s\n' "$want" "$remote" >&2
+        _nutshell_remember_failure "$want"
+        return 1
+    fi
+
+    # What arrived has to be the version that was asked for. A tag that moved,
+    # or a branch name that happens to look like a version, would otherwise be
+    # stored under a name that lies about its contents.
+    local got; got="$(_nutshell_version_of "${tmp}/init")"
+    if [[ "$got" != "$want" ]]; then
+        rm -rf "$tmp"
+        printf 'nutshell: %s in %s reports itself as %s\n' "$want" "$remote" "${got:-nothing}" >&2
+        _nutshell_remember_failure "$want"
+        return 1
+    fi
+
+    _nutshell_adopt "$tmp" "$dir" || return 1
+    printf '%s' "${dir}/init"
+}
+
+# Move a fetched copy into place, or keep the one that beat us to it.
+#
+# Whoever gets there first wins and the loser throws its own copy away. The
+# store is shared by every project on the machine and nothing locks it, so a
+# second process fetching the same thing must not remove the directory a
+# running interpreter is sourcing out of. It does not have to: both copies hold
+# the same commit, so adopting the one already there is the same answer.
+#
+# `mv` onto a name that does not exist is a rename and atomic. Onto a directory
+# that does exist it moves the source *inside* it, which is the whole reason
+# this is a function: the check and the rename are not one step, so a loser can
+# still land its copy at `<dir>/<scratch>` and that gets cleaned up here.
+_nutshell_adopt() {
+    local tmp="$1" dir="$2" leaf="${1##*/}"
+    if [[ ! -e "$dir" ]]; then
+        mv "$tmp" "$dir" 2>/dev/null
+    fi
+    rm -rf "${dir}/${leaf}" "$tmp" 2>/dev/null
+    [[ -f "${dir}/init" ]]
 }
 
 # The version an interpreter reports, without loading it. Reading the file

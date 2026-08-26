@@ -420,3 +420,189 @@ it, which is the whole of the defect.
 - give a caller the real user's home, name and id even while the one step runs,
   so nothing computes a path from `$HOME` at the wrong moment
 - say plainly when it cannot elevate, rather than falling back to trying anyway
+
+## The store, and versions coexisting
+
+> As for the versions of nutshell. We should have it similar as rustup or
+> pretty much any similar. Several versions can and will coexist on one machine
+> and instead of failing, we download the correct one and store it as a
+> "toolchain". Same as renki does. Unless this is how it works already. If so,
+> I don't understand how the versions can give so much trouble?
+
+> Really seems to me we should keep the libs anything depends on centrally too
+> like pnpm or yarn2. Nutshell itself just as one of them.
+
+**The intent: one central store, versions coexist, a missing one is a download
+rather than a failure, and the interpreter is an entry in that store like
+anything else.** The rustup and renki comparisons are the shape being asked
+for, not a requirement to copy either.
+
+It was not how it worked. Externs were already central and content-addressed;
+the interpreter was the exception, resolved by picking from what the machine
+happened to have and never fetching. That is the whole of the version trouble:
+`0.4.0` exists only on `dev`, nothing has tagged it, so no amount of resolving
+could find it and the fallback to the vendored copy fired every run.
+
+Settled by this work: a toolchain store keyed by version, a fetch when the
+asked-for version is not there, and both externs and toolchains under one store
+root. The externs moved from the cache directory to the data directory in the
+same change, because a cache is something a cleaner may delete at any moment
+and this is where every project's dependencies actually live.
+
+## renki-sh, or generating shell from the Rust
+
+> You know I feel more and more stern about us doing renki-sh or make nutshell
+> build a copy of the rust one natively and use that. It's no sense to reinvent
+> the wheel here. Nutshells idea is platform agnostic form that should
+> technically run anywhere with posix compliant or close enough shell and
+> utils. So this is why I have been and still am hesitant to introduce rust
+> into the mix. But if generating the bash-y version isn't likely to work from
+> the rust source, I don't know what to say here. It's just redundancy to
+> reinvent this specific wheel here
+
+**Two intents, and they are both mandates.** One: nutshell stays runnable on a
+POSIX-ish shell with no Rust anywhere in its chain. Two: the pin and lock
+semantics are not to be invented twice and left to drift apart. The vehicles
+offered, a `renki-sh` subdirectory and Rust attribute macros emitting shell, are
+proposals rather than either intent.
+
+### What the overlap actually is
+
+Counting non-comment lines, renki is 1500 of source across ten modules. What
+touches this problem at all:
+
+| module | lines | overlaps |
+| --- | --- | --- |
+| `pin.rs` | 171 | branch to rev via `git ls-remote`, TTL cached |
+| `manifest.rs` | 72 | the pin schema, a TOML shape |
+| `discover.rs` | 132 | walk up for the config file |
+| `cache.rs` | 147 | key to directory, payload is a cargo build |
+
+`tool.rs`, `engine.rs`, `registry.rs` and `selfupdate.rs`, 940 lines between
+them, are about cargo, crates.io, Rust toolchains and keeping a launcher binary
+current. None of it has a nutshell counterpart. Of the four above, `cache.rs`
+produces `cargo install` argument lists and `pin.rs` produces build attempts, so
+the shared part of each is smaller than its line count.
+
+The shared idea is about a hundred lines: branch resolves to its head, a rev or
+tag is held by the lock, resolution is cached with a TTL, the manifest is found
+by walking up. `lib/extern.sh` is 311 lines and already implements it.
+
+### On generating the shell from the Rust
+
+It does not pay, and the reason is not effort. The annotated functions would
+have to avoid generics, traits, iterators, `?`, `Result`, borrows, `PathBuf`,
+`SystemTime` and everything else in `std` with no shell counterpart. What
+remains is not Rust: it is a small language written inside Rust, compiled by a
+backend nobody else maintains, and every future edit to those functions has to
+stay inside a subset the compiler enforces nowhere. That is a compiler backend
+built to avoid a hundred lines of shell.
+
+### What to do instead: share the spec, not the code
+
+The redundancy that costs anything is semantic, not textual. Two
+implementations of one spec is ordinary. Two implementations that quietly
+disagree about what a branch pin means is the failure, and it is invisible until
+somebody's build resolves differently on two machines.
+
+So: the pin semantics get written down once, in renki, as prose plus a
+table-driven fixture set. Inputs to expected resolution, including the awkward
+ones: an annotated tag that has to peel, a branch head that moved since the
+lock, a TTL that has expired with no network, a rev pin the lock holds back, a
+tag that moved under a lock. Renki reads the fixtures in a Rust test; nutshell
+reads the same file in a shell test. Divergence is a red test in whichever one
+drifted, on the day it drifts.
+
+No Rust in nutshell's chain, no codegen backend, and the part with the real
+value, the settled semantics and the edge cases somebody had to think of once,
+is shared as data rather than copied as prose in two languages.
+
+A `renki-sh` subdirectory remains reasonable on top of that if a Rust project
+ever wants the launcher half in shell. It is a second consumer of the same
+fixtures, not a way of avoiding the second implementation.
+
+## The git ref is the version, and the constant in `init` is the parallel system
+
+> okay the problem is that you have invented a parallel disjoint system from the
+> git we target here. you have some env var / const-like for the version, but
+> that is redundant. The git tag *is* the version. If none, then its version is
+> the commit hash
+
+> you should let the nut.toml version pin handle the fetch. No reason to pin a
+> version while we are actively developing. Just pin to dev and it keeps always
+> up-to-date with latest dev, that's what we want
+
+**The intent: identity comes from git and from nowhere else.** A tag is the
+version; with no tag the commit hash is the version. A pin is a git ref, and a
+branch pin means that branch's head, always. Nothing declares a version about
+itself in a file.
+
+### What this falsifies
+
+Named before what it enables, because a closed gap reads as progress while a
+falsified claim announces nothing.
+
+- **`init:29`'s `NUTSHELL_VERSION`.** A constant somebody has to remember to
+  bump, which is why `main` says 0.2.0, `dev` says 0.4.0, and neither is a fact
+  about the code. It goes.
+- **`find-nutshell:_nutshell_version_of`.** Reads that constant out of `init`
+  without sourcing it. The whole function exists to serve the constant.
+- **The store's name-equals-contents invariant.** `nutshell_toolchains` skips a
+  directory whose `init` disagrees with its directory name. With git as the
+  identity there is nothing to disagree: the directory is a checkout and
+  `git -C dir describe --tags --always` says what it is.
+- **`_nutshell_num` and the prerelease ordering.** Already unreachable, as the
+  review found. Under git identity the question is whether a ref resolves, not
+  how a suffix sorts.
+- **`nutshell_at_least`, and `HULI_NEEDS_NUTSHELL` as a floor.** A floor is a
+  statement about the constant. A consumer pins a ref; if it needs a specific
+  tag it names that tag.
+- **`_nutshell_fetch`'s `--branch "$want"` with a version-shaped want.** Right
+  by accident, because tags here are bare. It should be resolving a ref.
+
+### What it should be instead: renki's model, read rather than paraphrased
+
+`renki/src/manifest.rs` and `renki/src/pin.rs`. Four points, each of which I got
+wrong by designing from the header instead of the code.
+
+**1. Four reference forms, and the config says which by which key it used.**
+`manifest.rs:63-71` is `Reference::{Version, Rev, Tag, Branch}`, and its own doc
+says they are not interchangeable: a version is immutable and maps to both a
+release and a tag, a rev and a tag are immutable and git-only, a branch moves
+and is the only one that has to be re-resolved. `Header::parse` at `:113-121`
+reads four separate keys, ordered most specific first, so a config carrying more
+than one has a defined answer. **There is no shape sniffing.** A tag named `dev`
+and a branch named `dev` are different pins because they came from different
+keys, and asking whether a string looks like a version is the invented system.
+
+**2. Everything resolves to something immutable, and that is the cache key.**
+`pin.rs:84-146` produces `key_rev`: `v:<version>` for a version, the bare sha
+for a rev, `tag:<t>` for a tag, and for a branch **the sha it currently points
+at**. `Resolved::git_ref` at `:72` says it outright: "a branch has already
+become the rev it pointed at". A store keyed by a branch name, or by a version
+string, is keyed by something that moves.
+
+**3. Two caches, two jobs.** The branch-head resolution is cached with a TTL
+(`resolve_branch`, `branch_resolution_path`, `fresh_resolution`); the built
+artifact is cached under the resolved sha. Conflating them is what makes a
+branch pin either never refresh or refetch on every run.
+
+**4. Offline uses the last known revision and names it.** `resolve_branch`
+falls back to `any_resolution` and prints the revision it is running from,
+because a stale head is very probably still built and sitting in the cache, and
+running from it beats refusing to run.
+
+For nutshell that means `nut.toml` carries `git` plus exactly one of `rev`,
+`tag`, `branch`, `version`, the same four keys, for the interpreter and for
+every extern alike. The store is keyed by the resolved commit. `NUTSHELL_VERSION`
+is deleted and `nutshell --version` answers from `git describe --tags --always`
+in its own checkout.
+
+**Interim state, so the next reader is not misled.** `find-nutshell` on
+`feat/toolchains` takes a branch and hulilupteri pins `dev` through it, so a
+consumer tracking a moving branch works today. Underneath it is still the
+invented system, and every one of the four points above is unimplemented: one
+key rather than four, shape sniffing rather than the key deciding, the store
+keyed by a branch name rather than by the sha it resolved to, and one cache
+doing both jobs. Treat `_nutshell_is_version` and `_nutshell_branch` as scaffolding
+that proved the consumer end, not as the design.

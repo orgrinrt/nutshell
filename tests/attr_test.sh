@@ -54,3 +54,54 @@ it_tells_two_arguments_of_one_attribute_apart() {
     assert_eq "$(attr_arg "$FIXTURE" wrapper_allowed allow)" "trivial_wrapper"
     assert_eq "$(attr_arg "$FIXTURE" big_but_allowed allow)" "loc = 400"
 }
+
+# --- what this module needs on the machine ------------------------------------
+#
+# Nothing. It reads comments, and it used to do that by piping every line of
+# the file through `sed`, once per line, per lookup. On a library of 36 files
+# and 440 functions that was a quarter of a million processes and it made the
+# QA gate take four minutes.
+#
+# Bash can match a line itself. That is both the fast answer and the portable
+# one: a module this low should not need a userland to answer a question about
+# a comment, and a rescue console may not have one.
+
+#[test]
+it_calls_no_external_tool_at_all() {
+    local src="${BASH_SOURCE[0]%/*}/../lib/attr.sh"
+    local stray
+    # Code lines only. The comments above talk about the tools this no longer
+    # uses, and saying so is the point of them.
+    stray="$(grep -nE '(^|[^[:alnum:]_#])(awk|sed|grep|cut|head|tail|tr|wc|sort|expr)[[:space:]]' "$src" \
+        | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+    assert_empty "$stray"
+}
+
+#[test]
+it_spawns_nothing_while_walking_a_file() {
+    # The property behind the one above, measured rather than read. A command
+    # substitution is a fork too, so this catches the shape that was actually
+    # slow: `$(_attr_defines "$line")` per line.
+    local src="${BASH_SOURCE[0]%/*}/../lib/attr.sh"
+    local body
+    body="$(sed -n '/^attr_on() {/,/^}/p' "$src"; sed -n '/^attr_find() {/,/^}/p' "$src")"
+    # No `$(...)` inside either walker. `$(( ))` is arithmetic and is not one.
+    local subs; subs="$(grep -n '\$(' <<<"$body" | grep -v '\$((' || true)"
+    assert_empty "$subs"
+}
+
+#[test]
+it_still_reads_an_attribute_with_an_argument_out_of_a_real_file() {
+    # The control for both above: taking the tools out has to leave the
+    # answers alone, including the tab-separated argument form.
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-attr.XXXXXX")"
+    printf '#[pub]\n#[allow(loc = 400)]\n# prose does not break the run\n\nbig_fn() {\n  :\n}\n' \
+        > "$d/x.sh"
+    assert_ok  attr_has "$d/x.sh" big_fn pub
+    assert_ok  attr_has "$d/x.sh" big_fn allow
+    assert_fails attr_has "$d/x.sh" big_fn nope
+    assert_eq "$(attr_arg "$d/x.sh" big_fn allow)" "loc = 400"
+    assert_empty "$(attr_arg "$d/x.sh" big_fn pub)"
+    assert_eq "$(attr_find "$d/x.sh" pub)" "big_fn"
+    rm -rf "$d"
+}

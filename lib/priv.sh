@@ -112,6 +112,55 @@ priv_uid()  { _priv_learn_user; printf '%s' "$PRIV_UID"; }
 priv_user_home() { _priv_learn_user; printf '%s' "$PRIV_HOME"; }
 
 #[pub]
+# Run one step as the person, from inside something that elevated.
+#
+# The other direction from `priv_run`, and the half that stops root's
+# fingerprints ending up on a person's files. `priv_return` repairs ownership
+# after the fact; this never creates the problem. Prefer it: a chown pass has
+# to be told every path, and the one it was not told about is the one nobody
+# notices.
+#
+# The cases that need it are the ones where the tool is root because some other
+# step needed root, and this step does not: git in somebody's checkout, a file
+# written into their home, anything reading their configuration.
+#
+# A no-op when not root, and a no-op when the person is root, so a caller does
+# not have to ask which it is.
+# Usage: priv_as_user "reading your checkout" git -C "$d" status
+priv_as_user() {
+    local what="${1:-a step}"; shift || true
+    (( $# > 0 )) || { log_error "priv_as_user: nothing to run"; return 2; }
+
+    local u; u="$(priv_user)"
+    if ! priv_is_root || [[ -z "$u" || "$u" == "root" ]]; then
+        "$@"
+        return $?
+    fi
+
+    local c
+    for c in runuser sudo su; do
+        command -v "$c" >/dev/null 2>&1 || continue
+        case "$c" in
+            # runuser is the one built for this: root to another user, no
+            # password, no login shell in the way.
+            runuser) runuser -u "$u" -- "$@"; return $? ;;
+            sudo)    sudo -n -u "$u" -- "$@"; return $? ;;
+            # Last, and through a shell, so the arguments have to be quoted
+            # back into one string. Every other route avoids that.
+            su)
+                local q="" a
+                for a in "$@"; do q+="${q:+ }$(printf '%q' "$a")"; done
+                su -s /bin/sh "$u" -c "$q"
+                return $?
+                ;;
+        esac
+    done
+
+    log_error "${what}: cannot step down to ${u}; there is no runuser, sudo or su"
+    return 2
+}
+
+#[pub]
 # Is this already root?
 # Usage: priv_is_root
 priv_is_root() { [[ "$(id -u 2>/dev/null)" == "0" ]]; }

@@ -40,9 +40,17 @@ TOML
 }
 
 # Each test gets its own cache root, so one test's checkout is not another's.
+# A store of its own for each test.
+#
+# `NUTSHELL_STORE` rather than an XDG variable, because the store root is the
+# thing being isolated and pointing at whichever XDG directory it currently
+# derives from is isolation that stops working the moment it moves. It did:
+# the store went from the cache directory to the data directory and the tests
+# kept setting the cache one, so they were writing into the real store and
+# nothing said so.
 _isolate() {
-    XDG_CACHE_HOME="$(fs_temp_dir nutshell-extern-cache)"
-    export XDG_CACHE_HOME
+    NUTSHELL_STORE="$(fs_temp_dir nutshell-extern-store)"
+    export NUTSHELL_STORE
 }
 
 #[test]
@@ -767,4 +775,32 @@ it_resolves_the_tag_again_when_the_lock_entry_is_gone() {
 
     dir="$(extern_path fixture)"
     assert_eq "$(git -C "$dir" rev-parse HEAD)" "$first"
+}
+
+# --- the isolation itself ----------------------------------------------------
+
+#[test]
+it_puts_the_store_where_it_is_told_to() {
+    # The negative control for every test above. Each of them believes it is
+    # working in a store of its own, and none of them would notice being wrong.
+    _isolate
+    assert_contains "$(_extern_cache_root)" "$NUTSHELL_STORE"
+}
+
+#[test]
+it_does_not_put_the_store_under_the_cache_directory() {
+    _isolate
+    local root; root="$(_extern_cache_root)"
+    # Not merely somewhere else: specifically not in the directory a cleaner is
+    # entitled to empty.
+    assert_fails grep -q '/\.cache/' <<<"$root"
+}
+
+#[test]
+it_puts_the_store_under_the_data_directory_when_nothing_overrides_it() {
+    local root
+    root="$(unset NUTSHELL_STORE; XDG_DATA_HOME=/tmp/xdg-probe _extern_cache_root)"
+    assert_contains "$root" "/tmp/xdg-probe"
+    assert_contains "$root" "externs"
+    _isolate
 }

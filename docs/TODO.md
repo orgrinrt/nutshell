@@ -231,3 +231,82 @@ orders, the checker's second parser, the symlink key. Written down instead:
       migration refuses to write one; a hand-edited file can still have it.
 - [ ] **`nutshell_modules` changed its output from names to paths.** Nothing
       in the tree reads it. Decide which it is and say so.
+
+## Pinning, as op wants it
+
+op, verbatim:
+
+> imports, as well as the nutshell binary itself, should be pinnable by git ref
+> (if a git dep), or a version (basically a git ref; tag). So if `dev` branch
+> is pinned, that means it's always the remote head on dev. So if the current
+> one is stale, it's evident on each call and will be fetched and updated as
+> per the pin. We should do the same thing as `renki` does, but just in bash.
+
+### The intent
+
+**A branch pin is a moving pin.** `ref = "dev"` means the remote head of `dev`,
+now, on every call: staleness is visible each time and the dependency is
+fetched and updated to match. A tag or a sha is the fixed kind. Both are "a git
+ref", and the distinction is whether the ref moves, not a separate concept.
+
+**Nutshell itself is pinnable the same way.** The interpreter is a dependency
+like any other and takes the same declaration.
+
+**`renki` is the reference**, in bash rather than whatever it is written in.
+The intent is the semantics; how much of renki's shape carries over is a
+judgement to make after reading it.
+
+op, on what the lockfile is then for:
+
+> lockfile should hold back. But if the pin is the branch itself, it's
+> implicitly meaning its head. If the pin is a specific commit or tag, then
+> that's actually something that needs to be held back by the lockfile. And
+> lockfile itself should obviously update to match each time the head moves and
+> the pinned branch head is something new
+
+So the lockfile has two jobs and which one it is doing depends on the pin. On a
+commit or a tag it holds the checkout back, which is what a lockfile is for. On
+a branch it records what the head resolved to and is rewritten every time that
+moves, which makes it a report rather than a pin.
+
+## A library that is not at the root of its repository
+
+op:
+
+> also that means nutshell should be able to depend on a nut library that is
+> not in the root of the repo, but has a path from the root. I think git has a
+> standard notation for this which should be expressible and respected on
+> nutshell's side
+
+### The intent
+
+**A dependency is a directory, not necessarily a repository.** One repository
+may carry several nut libraries and a consumer names the one it wants.
+
+On the notation: git itself has none. There is no URL form git understands that
+means "this subdirectory of that repository", because git clones repositories
+and nothing smaller. What exists is a convention borrowed by other tools, the
+double slash of go-getter and Terraform, `https://host/repo.git//sub/dir`, and
+it is theirs rather than git's. So the choice is between adopting that
+convention because people recognise it, and a second key beside `git` because
+it cannot be mistaken for something git will parse. Worth settling before it is
+built, and worth checking my claim about git rather than taking it: `git help
+clone` and `git help submodule` are where the answer is if there is one.
+
+## A shell renki
+
+op, thinking aloud rather than deciding:
+
+> I wonder if we shouldn't have a renki-sh or some subdir in the renki repo,
+> that would contain both a nut.toml for the same concept, same design, same
+> impl, but in posix compliant sh/bash. And also a raw entrypoint to source for
+> those that don't use nutshell. Could we even write attribute macros in fact,
+> on the renki rust side itself, to generate the sh version?
+
+Recorded as a question, not a mandate. What is being asked: whether the pin and
+launcher concept should exist twice, in rust and in shell, from one design; and
+whether the shell half could be generated from the rust half rather than
+written twice. The second is the interesting half and the risky one, since a
+generator that produces shell from rust attributes is a project of its own.
+
+Nothing here is scheduled.

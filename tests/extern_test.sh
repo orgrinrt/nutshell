@@ -13,7 +13,7 @@ use extern test fs
 # commits, so a test can pin to the older one and see whether it is obeyed.
 _extern_fixture() {
     local work dep first second
-    work="$(fs_temp_dir nutshell-extern)"
+    work="$(_ex_tmp work)"
     dep="${work}/dep"
 
     mkdir -p "${dep}/lib"
@@ -48,8 +48,26 @@ TOML
 # the store went from the cache directory to the data directory and the tests
 # kept setting the cache one, so they were writing into the real store and
 # nothing said so.
+# One root for the whole file, taken down at the end of it.
+#
+# Every scratch directory here is a child of this one. `fs_temp_dir` and a bare
+# `mktemp -d` both make one under the system temporary directory and neither
+# removes it, and this file was leaving twenty-seven per run.
+#
+# The three that still call `mktemp -d` run in a fresh `bash -c` which has none
+# of this file's helpers, and each removes its own directory on the way out.
+# They say `self-cleaned` on the line, which is what the guard below allows.
+_EX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-extern.XXXXXX")"
+trap '[[ -n "${_EX_TMP:-}" ]] && rm -rf "$_EX_TMP"' EXIT
+
+# A scratch directory under this file's own root.
+_ex_tmp() {
+    local d; d="$(mktemp -d "${_EX_TMP}/${1:-d}.XXXXXX")"
+    printf '%s' "$d"
+}
+
 _isolate() {
-    NUTSHELL_STORE="$(fs_temp_dir nutshell-extern-store)"
+    NUTSHELL_STORE="$(_ex_tmp store)"
     export NUTSHELL_STORE
 }
 
@@ -405,7 +423,7 @@ _manifest_fixture() {
     # fs_temp_dir passes it through, while a path that has been cd'd into comes
     # back single-slashed. Comparing one against the other fails on the slash
     # rather than on the behaviour.
-    root="$(cd "$(fs_temp_dir nutshell-manifest)" && pwd)"
+    root="$(cd "$(_ex_tmp manifest)" && pwd)"
     mkdir -p "${root}/unit" "${root}/elsewhere" "${root}/project/sub" "${root}/loose"
     printf '[deps.a]\ngit = "x"\n' > "${root}/unit/nut.toml"
     printf '[deps.b]\ngit = "y"\n' > "${root}/project/nut.toml"
@@ -518,7 +536,7 @@ it_does_not_hand_back_a_checkout_that_has_gone() {
 
 #[test]
 it_takes_a_nested_module_separated_all_the_way_down() {
-    local d; d="$(mktemp -d)"
+    local d; d="$(_ex_tmp)"
     mkdir -p "$d/dep/libs/tui"
     printf 'MARKER=reached\n' > "$d/dep/libs/tui/key.sh"
     printf '[meta]\nname="dep"\n' > "$d/dep/nut.toml"
@@ -531,7 +549,7 @@ it_takes_a_nested_module_separated_all_the_way_down() {
 
 #[test]
 it_refuses_a_module_path_that_uses_a_slash() {
-    local d; d="$(mktemp -d)"
+    local d; d="$(_ex_tmp)"
     mkdir -p "$d/dep/libs/tui"
     printf 'MARKER=reached\n' > "$d/dep/libs/tui/key.sh"
     extern_path() { printf '%s/dep' "$d"; }
@@ -544,7 +562,7 @@ it_refuses_a_module_path_that_uses_a_slash() {
 
 #[test]
 it_says_the_spelling_that_would_have_worked() {
-    local d out; d="$(mktemp -d)"
+    local d out; d="$(_ex_tmp)"
     mkdir -p "$d/dep/libs/tui"
     : > "$d/dep/libs/tui/key.sh"
     extern_path() { printf '%s/dep' "$d"; }
@@ -556,7 +574,7 @@ it_says_the_spelling_that_would_have_worked() {
 
 #[test]
 it_still_takes_a_flat_module() {
-    local d; d="$(mktemp -d)"
+    local d; d="$(_ex_tmp)"
     mkdir -p "$d/dep/lib"
     : > "$d/dep/lib/plain.sh"
     extern_path() { printf '%s/dep' "$d"; }
@@ -578,7 +596,7 @@ it_loads_a_module_once_however_it_was_named() {
     out="$(bash -c '
         cd '"$PWD"'
         . ./init
-        d=$(mktemp -d); mkdir -p "$d/libs/tui"
+        d=$(mktemp -d); mkdir -p "$d/libs/tui"  # self-cleaned, fresh shell
         printf "COUNT=\$(( \${COUNT:-0} + 1 ))\n" > "$d/libs/tui/key.sh"
         use extern
         extern_path() { printf "%s" "$d"; }
@@ -595,7 +613,7 @@ it_answers_that_a_module_is_loaded_by_either_name() {
     out="$(bash -c '
         cd '"$PWD"'
         . ./init
-        d=$(mktemp -d); mkdir -p "$d/libs/tui"
+        d=$(mktemp -d); mkdir -p "$d/libs/tui"  # self-cleaned, fresh shell
         : > "$d/libs/tui/key.sh"
         use extern
         extern_path() { printf "%s" "$d"; }
@@ -613,7 +631,7 @@ it_does_not_record_a_module_that_failed_to_load() {
     out="$(bash -c '
         cd '"$PWD"'
         . ./init
-        d=$(mktemp -d); mkdir -p "$d/libs"
+        d=$(mktemp -d); mkdir -p "$d/libs"  # self-cleaned, fresh shell
         printf "return 1\n" > "$d/libs/bad.sh"
         use extern
         extern_path() { printf "%s" "$d"; }
@@ -631,7 +649,7 @@ it_finds_a_units_manifest_when_run_from_somewhere_else() {
     # resolve a single dependency: the manifest search had only PWD, which is a
     # fact about where the shell was started rather than about which unit is
     # asking.
-    local d out; d="$(mktemp -d)"
+    local d out; d="$(_ex_tmp)"
     mkdir -p "$d/unit/lib" "$d/dep/libs"
     printf '[meta]\nname="unit"\n\n[deps.dep]\ngit = "x"\n' > "$d/unit/nut.toml"
     printf 'MARKER=reached\n' > "$d/dep/libs/thing.sh"
@@ -660,7 +678,7 @@ it_finds_a_units_manifest_when_run_from_somewhere_else() {
 # and months of work in it had never reached the consumer.
 
 _ex_origin() {
-    local d; d="$(mktemp -d)"
+    local d; d="$(_ex_tmp)"
     git -C "$d" init --quiet -b dev
     git -C "$d" config user.email t@t; git -C "$d" config user.name t
     mkdir -p "$d/libs"
@@ -679,7 +697,7 @@ _ex_advance() {
 #[test]
 it_takes_the_newest_commit_when_the_lock_says_nothing() {
     local origin; origin="$(_ex_origin)"
-    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    local mirror; mirror="$(_ex_tmp)"; rm -rf "$mirror"
     git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
     local before; before="$(_extern_ref_commit "$mirror" dev)"
 
@@ -701,7 +719,7 @@ it_answers_with_the_commit_it_already_has_when_the_ref_cannot_be_fetched() {
     # A machine with no network still has whatever it cloned. A stale answer
     # beats no answer for a tool whose job is a machine that is broken.
     local origin; origin="$(_ex_origin)"
-    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    local mirror; mirror="$(_ex_tmp)"; rm -rf "$mirror"
     git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
     local before; before="$(_extern_ref_commit "$mirror" dev)"
     rm -rf "$origin"
@@ -715,7 +733,7 @@ it_answers_with_the_commit_it_already_has_when_the_ref_cannot_be_fetched() {
 #[test]
 it_refuses_a_ref_the_mirror_has_never_heard_of() {
     local origin; origin="$(_ex_origin)"
-    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    local mirror; mirror="$(_ex_tmp)"; rm -rf "$mirror"
     git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
     local rc=0
     _extern_ref_commit "$mirror" "no-such-ref" >/dev/null 2>&1 || rc=$?
@@ -731,7 +749,7 @@ it_takes_a_commit_that_carries_a_file_the_old_one_did_not() {
     # commit of a library resolved every module that existed then and none of
     # the ones added since, and the error named the module rather than the pin.
     local origin; origin="$(_ex_origin)"
-    local mirror; mirror="$(mktemp -d)"; rm -rf "$mirror"
+    local mirror; mirror="$(_ex_tmp)"; rm -rf "$mirror"
     git clone --quiet --depth 1 --branch dev "$origin" "$mirror" 2>/dev/null
     _ex_advance "$origin"
     _extern_refresh "$mirror" dev
@@ -863,4 +881,16 @@ it_keeps_them_together_when_xdg_names_the_data_directory() {
     assert_eq "$(nutshell_toolchain_dir)" "/tmp/xdg-one-root/nutshell/toolchains"
     unset XDG_DATA_HOME
     _isolate
+}
+
+#[test]
+it_makes_no_scratch_directory_outside_its_own_root() {
+    # The leak was twenty-seven per run and nothing failed while it happened.
+    # The three that stay are in a fresh `bash -c` which cannot see `_ex_tmp`,
+    # and each removes its own directory; they are named so, and the check
+    # allows exactly those.
+    local stray
+    stray="$(grep -nE 'mktemp -d[)" ]|fs_temp_dir[ )"]' "${BASH_SOURCE[0]}" \
+        | grep -v '_EX_TMP' | grep -v 'self-cleaned' | grep -vE '^[0-9]+: *#' || true)"
+    assert_empty "$stray"
 }

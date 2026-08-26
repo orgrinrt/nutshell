@@ -258,6 +258,13 @@ _use_resolve() {
         mod_path="$(_lib_nut_lookup "$_NUTSHELL_ROOT" "$mod" 2>/dev/null)" || mod_path=""
         if [[ -z "$mod_path" ]]; then
             use extern || return 1
+            # Where the asking file lives, so extern can find that unit's
+            # manifest rather than searching from wherever the process happens
+            # to have been started.
+            local _NUT_ASKING_FROM=""
+            if [[ -n "$caller" && "$caller" == */* ]]; then
+                _NUT_ASKING_FROM="$(cd "${caller%/*}" 2>/dev/null && pwd)"
+            fi
             mod_path="$(extern_resolve "$mod")" || return 1
         fi
     else

@@ -7,6 +7,7 @@
 array                    lib/array.sh
 attr                     lib/attr.sh
 check-runner             lib/check-runner.sh
+checkcache               lib/checkcache.sh
 cli                      lib/cli.sh
 color                    lib/color.sh
 deps                     lib/deps.sh

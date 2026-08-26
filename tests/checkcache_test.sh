@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Tests for keeping a check's answer until it can change.
+#
+# A cache that is wrong is worse than a check that is slow, so most of this is
+# about what has to invalidate it. Three things can: the file, the check that
+# read it, and the config the thresholds came from. op's point, and the one an
+# obvious implementation misses: the checker counts. A cache over the file
+# alone keeps answering with the old check's opinion after the check changes,
+# and nothing says so.
+
+use test
+use checkcache
+
+_cc_setup() {
+    CCROOT="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-cc.XXXXXX")"
+    export NUT_CACHE_DIR="$CCROOT/cache"
+    export NUT_CACHE_ENABLED=1
+    export NUT_CACHE_CHECKER="$CCROOT/checker.sh"
+    printf 'a checker\n' > "$NUT_CACHE_CHECKER"
+    printf 'some source\n' > "$CCROOT/src.sh"
+    CONFIG_FILE="$CCROOT/nut.toml"; printf 'threshold = 1\n' > "$CONFIG_FILE"
+    # Everything below wants the entry to be newer than its inputs, and a
+    # filesystem with one-second stamps cannot tell two writes apart.
+    sleep 1
+}
+_cc_end() {
+    rm -rf "$CCROOT"
+    unset CCROOT NUT_CACHE_DIR NUT_CACHE_ENABLED NUT_CACHE_CHECKER CONFIG_FILE
+}
+
+#[test]
+it_has_nothing_before_anything_is_written() {
+    _cc_setup
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_gives_back_what_was_kept() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'two findings here'
+    assert_ok nut_cache_hit probe "$CCROOT/src.sh"
+    assert_eq "$(nut_cache_read probe "$CCROOT/src.sh")" "two findings here"
+    _cc_end
+}
+
+#[test]
+it_forgets_when_the_file_changes() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'old answer'
+    sleep 1
+    printf 'edited\n' > "$CCROOT/src.sh"
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_forgets_when_the_check_itself_changes() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'old answer'
+    sleep 1
+    # The one an obvious cache misses. The file is untouched and the answer is
+    # still wrong, because a different check is asking.
+    printf 'a checker, with another step\n' > "$NUT_CACHE_CHECKER"
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_forgets_when_the_thresholds_change() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'old answer'
+    sleep 1
+    printf 'threshold = 2\n' > "$CONFIG_FILE"
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_keeps_one_answer_per_check_for_the_same_file() {
+    _cc_setup
+    nut_cache_write one "$CCROOT/src.sh" 'what one thinks'
+    nut_cache_write two "$CCROOT/src.sh" 'what two thinks'
+    assert_eq "$(nut_cache_read one "$CCROOT/src.sh")" "what one thinks"
+    assert_eq "$(nut_cache_read two "$CCROOT/src.sh")" "what two thinks"
+    _cc_end
+}
+
+#[test]
+it_answers_nothing_when_the_checker_is_not_named() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'answer'
+    unset NUT_CACHE_CHECKER
+    # A check that will not say which file it is cannot be cached, because
+    # there is no way to notice it changing.
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_stays_out_of_the_way_until_it_is_turned_on() {
+    _cc_setup
+    NUT_CACHE_ENABLED=0
+    nut_cache_write probe "$CCROOT/src.sh" 'answer'
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    # And nothing was written, so turning it on later does not find a stale one.
+    NUT_CACHE_ENABLED=1
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_forgets_a_file_that_is_no_longer_there() {
+    _cc_setup
+    nut_cache_write probe "$CCROOT/src.sh" 'answer'
+    rm -f "$CCROOT/src.sh"
+    assert_fails nut_cache_hit probe "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_can_be_thrown_away() {
+    _cc_setup
+    nut_cache_write one "$CCROOT/src.sh" 'a'
+    nut_cache_write two "$CCROOT/src.sh" 'b'
+    nut_cache_clear one
+    assert_fails nut_cache_hit one "$CCROOT/src.sh"
+    assert_ok    nut_cache_hit two "$CCROOT/src.sh"
+    nut_cache_clear
+    assert_fails nut_cache_hit two "$CCROOT/src.sh"
+    _cc_end
+}
+
+#[test]
+it_does_not_let_a_path_escape_the_cache_directory() {
+    _cc_setup
+    local outside="$CCROOT/outside"; mkdir -p "$outside"; printf 'keep\n' > "$outside/f"
+    nut_cache_write '../../outside' '../../outside/f' 'nope'
+    assert_ok test -f "$outside/f"
+    assert_eq "$(cat "$outside/f")" "keep"
+    _cc_end
+}

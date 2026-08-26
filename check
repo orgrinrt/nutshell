@@ -208,7 +208,11 @@ _run_check() {
     # A check that cannot be sourced is still run the old way, since a custom
     # check is somebody else's file and may not be a nutshell script at all.
     if [[ "${NUT_CHECK_ISOLATED:-0}" != "1" ]] && head -1 "$check_script" | grep -q 'env nutshell'; then
-        output=$( set +e; . "$check_script" 2>&1 )
+        # Which file this check is, so the cache can notice it changing. A
+        # check whose own source moved has to read everything again, and
+        # without this the cache would keep answering with the old one's
+        # opinion.
+        output=$( set +e; NUT_CACHE_CHECKER="$check_script" . "$check_script" 2>&1 )
         exit_code=$?
     else
         output=$("$check_script" 2>&1)
@@ -281,6 +285,7 @@ _run_builtin_checks() {
 
     # Once, here, so every check below inherits it rather than building its own.
     use srcfile 2>/dev/null || true
+    use checkcache 2>/dev/null || true
     local f
     while IFS= read -r f; do
         [[ -n "$f" ]] && nut_load_file "$f" 2>/dev/null

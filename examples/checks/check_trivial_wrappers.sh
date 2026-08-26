@@ -358,6 +358,27 @@ test_trivial_wrappers() {
         local file_has_issues=0
         local file_issues=""
         
+        # What this file contributed last time, if nothing that could change
+        # it has changed. One read for the whole file rather than one per
+        # function: a lookup that forks costs more than the work it saves, and
+        # the first attempt at this was measurably slower than no cache.
+        local __blob __kind __text
+        if nut_cache_hit "trivial_wrappers" "$file" 2>/dev/null \
+           && __blob="$(nut_cache_read "trivial_wrappers" "$file" 2>/dev/null)"; then
+            while IFS= read -r __line; do
+                [[ -n "$__line" ]] || continue
+                __kind="${__line%%$'\t'*}"; __text="${__line#*$'\t'}"
+                case "$__kind" in
+                    E) errors+=("$__text"); error_count=$((error_count + 1))
+                       wrapper_count=$((wrapper_count + 1)) ;;
+                    W) warnings+=("$__text"); warn_count=$((warn_count + 1))
+                       wrapper_count=$((wrapper_count + 1)) ;;
+                esac
+            done <<< "$__blob"
+            continue
+        fi
+
+
         # In this shell, before anything reads it from a subshell.
         nut_load_file "$file" || true
         tw_load_exemptions "$file"
@@ -366,7 +387,8 @@ test_trivial_wrappers() {
         # Get all functions in this file
         local functions
         functions=$(extract_functions "$file")
-        
+        local __record=""
+
         while IFS= read -r func_name; do
             [[ -z "$func_name" ]] && continue
             
@@ -396,6 +418,7 @@ test_trivial_wrappers() {
                     fi
                     
                     warnings+=("${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens")
+                    __record+="W"$'\t'"${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"$'\n' 
                     ;;
                 fail)
                     wrapper_count=$((wrapper_count + 1))
@@ -415,10 +438,13 @@ test_trivial_wrappers() {
                     fi
                     
                     errors+=("${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens")
+                    __record+="E"$'\t'"${func_name}() - ${lines} line(s), ${local_use} local / ${global_use} global usages, ${vars} vars, ${tokens} tokens"$'\n' 
                     ;;
             esac
         done <<< "$functions"
-        
+
+        nut_cache_write "trivial_wrappers" "$file" "$__record" 2>/dev/null || true
+
         if [[ -n "$file_issues" ]] && [[ "$QUIET_MODE" != "1" ]]; then
             echo -e "$file_issues"
         fi

@@ -26,6 +26,22 @@
 # through the shebang or sourced `init` directly.
 # =============================================================================
 
+# The floor, before anything that needs it. `init` carries the same refusal,
+# and it is repeated here because this file is also an entry point: run under
+# bash 3 it would otherwise get as far as sourcing init before saying so, and
+# it used to get all the way to exit 0.
+#
+# Spelled through `case` on the version string rather than `BASH_VERSINFO`,
+# so the block itself parses under any shell.
+case "${BASH_VERSION:-}" in
+    ""|1.*|2.*|3.*)
+        printf 'nutshell needs bash 4.0 or newer.\n' >&2
+        printf '  this is: %s\n' "${BASH_VERSION:-not bash at all}" >&2
+        printf '  macOS ships 3.2 at /bin/bash. Install a current one and put\n' >&2
+        printf '  it first on PATH, or run this under it directly.\n' >&2
+        exit 1 ;;
+esac
+
 set -uo pipefail
 
 # The shebang line names whatever is on PATH, which is normally a symlink into

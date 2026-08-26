@@ -13,6 +13,35 @@
 #
 # =============================================================================
 
+# =============================================================================
+# The floor, before anything that needs it
+# =============================================================================
+#
+# Everything below this point needs bash 4: associative arrays, `declare -g`,
+# `[[ =~ ]]` with `BASH_REMATCH`. macOS ships 3.2 at `/bin/bash` and that is
+# the machine this is most often reached from, so the refusal has to be here
+# and it has to be loud.
+#
+# It used to be neither. `declare -A` failed twice, `_NUTSHELL_LOADED` was not
+# an associative array, the first `use` died on an unbound variable, and the
+# interpreter **exited 0**. A Makefile, a task runner or CI read that as
+# success. Measured on bash 3.2.57: three errors and `EXIT=0`.
+#
+# Written so any shell can read it. `${BASH_VERSINFO...}` is a bash-only
+# expansion, so it is spelled through `case` on `$BASH_VERSION`, which is a
+# plain string, and the whole block parses under `sh` and under bash 3.
+_nutshell_refuse_old_bash() {
+    printf 'nutshell needs bash 4.0 or newer.\n' >&2
+    printf '  this is: %s\n' "${BASH_VERSION:-not bash at all}" >&2
+    printf '  macOS ships 3.2 at /bin/bash. Install a current one and put it\n' >&2
+    printf '  first on PATH, or run this under it directly.\n' >&2
+}
+
+case "${BASH_VERSION:-}" in
+    "")        _nutshell_refuse_old_bash; return 1 2>/dev/null || exit 1 ;;
+    1.*|2.*|3.*) _nutshell_refuse_old_bash; return 1 2>/dev/null || exit 1 ;;
+esac
+
 # Prevent multiple inclusion
 [[ -n "${_NUTSHELL_INIT:-}" ]] && return 0
 _NUTSHELL_INIT=1

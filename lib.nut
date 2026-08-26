@@ -25,6 +25,7 @@ log                      lib/log.sh
 modgraph                 lib/modgraph.sh
 nutshell                 nutshell.sh
 os                       lib/os.sh
+priv                     lib/priv.sh
 prompt                   lib/prompt.sh
 string                   lib/string.sh
 test                     lib/test.sh

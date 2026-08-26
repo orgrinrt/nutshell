@@ -448,3 +448,75 @@ asked-for version is not there, and both externs and toolchains under one store
 root. The externs moved from the cache directory to the data directory in the
 same change, because a cache is something a cleaner may delete at any moment
 and this is where every project's dependencies actually live.
+
+## renki-sh, or generating shell from the Rust
+
+> You know I feel more and more stern about us doing renki-sh or make nutshell
+> build a copy of the rust one natively and use that. It's no sense to reinvent
+> the wheel here. Nutshells idea is platform agnostic form that should
+> technically run anywhere with posix compliant or close enough shell and
+> utils. So this is why I have been and still am hesitant to introduce rust
+> into the mix. But if generating the bash-y version isn't likely to work from
+> the rust source, I don't know what to say here. It's just redundancy to
+> reinvent this specific wheel here
+
+**Two intents, and they are both mandates.** One: nutshell stays runnable on a
+POSIX-ish shell with no Rust anywhere in its chain. Two: the pin and lock
+semantics are not to be invented twice and left to drift apart. The vehicles
+offered, a `renki-sh` subdirectory and Rust attribute macros emitting shell, are
+proposals rather than either intent.
+
+### What the overlap actually is
+
+Counting non-comment lines, renki is 1500 of source across ten modules. What
+touches this problem at all:
+
+| module | lines | overlaps |
+| --- | --- | --- |
+| `pin.rs` | 171 | branch to rev via `git ls-remote`, TTL cached |
+| `manifest.rs` | 72 | the pin schema, a TOML shape |
+| `discover.rs` | 132 | walk up for the config file |
+| `cache.rs` | 147 | key to directory, payload is a cargo build |
+
+`tool.rs`, `engine.rs`, `registry.rs` and `selfupdate.rs`, 940 lines between
+them, are about cargo, crates.io, Rust toolchains and keeping a launcher binary
+current. None of it has a nutshell counterpart. Of the four above, `cache.rs`
+produces `cargo install` argument lists and `pin.rs` produces build attempts, so
+the shared part of each is smaller than its line count.
+
+The shared idea is about a hundred lines: branch resolves to its head, a rev or
+tag is held by the lock, resolution is cached with a TTL, the manifest is found
+by walking up. `lib/extern.sh` is 311 lines and already implements it.
+
+### On generating the shell from the Rust
+
+It does not pay, and the reason is not effort. The annotated functions would
+have to avoid generics, traits, iterators, `?`, `Result`, borrows, `PathBuf`,
+`SystemTime` and everything else in `std` with no shell counterpart. What
+remains is not Rust: it is a small language written inside Rust, compiled by a
+backend nobody else maintains, and every future edit to those functions has to
+stay inside a subset the compiler enforces nowhere. That is a compiler backend
+built to avoid a hundred lines of shell.
+
+### What to do instead: share the spec, not the code
+
+The redundancy that costs anything is semantic, not textual. Two
+implementations of one spec is ordinary. Two implementations that quietly
+disagree about what a branch pin means is the failure, and it is invisible until
+somebody's build resolves differently on two machines.
+
+So: the pin semantics get written down once, in renki, as prose plus a
+table-driven fixture set. Inputs to expected resolution, including the awkward
+ones: an annotated tag that has to peel, a branch head that moved since the
+lock, a TTL that has expired with no network, a rev pin the lock holds back, a
+tag that moved under a lock. Renki reads the fixtures in a Rust test; nutshell
+reads the same file in a shell test. Divergence is a red test in whichever one
+drifted, on the day it drifts.
+
+No Rust in nutshell's chain, no codegen backend, and the part with the real
+value, the settled semantics and the edge cases somebody had to think of once,
+is shared as data rather than copied as prose in two languages.
+
+A `renki-sh` subdirectory remains reasonable on top of that if a Rust project
+ever wants the launcher half in shell. It is a second consumer of the same
+fixtures, not a way of avoiding the second implementation.

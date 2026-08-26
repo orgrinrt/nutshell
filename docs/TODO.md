@@ -371,3 +371,52 @@ the dependency and the pin, rather than a missing function at line 426 of
 something the reader was in the middle of.
 
 Both are the same fix from two directions, and both make the guards go away.
+
+## Elevation is one step, not a mode
+
+op:
+
+> in general, I think the elevation should be nutshell api and abstracted so
+> that it only ever does a single disjoint thing elevated, then returns back to
+> original user. So it's really suDO, not just switching to su like it
+> presently behaves
+>
+> And the reason for being nutshell is that this should apply elsewhere, so we
+> don't accidentally end up writing things I expect in my home, to root's home
+> etc
+
+### The intent
+
+**One elevated step, then back.** The unit is a single thing that needs root,
+run as root, and everything around it stays the user who asked. Not a mode the
+process enters and stays in, which is what running a whole task under `sudo`
+is: `su` with extra steps.
+
+**It belongs in nutshell**, because the failure it prevents is not one tool's.
+Anything that elevates and then keeps going writes the user's files as root:
+their state directory, their cache, their config, their journal.
+
+### The evidence, from the machine, today
+
+Fetching an image needs the stick mounted, mounting needs root, so the whole
+task ran under `sudo`. The result, on the lifebook:
+
+    ~/.local/state/hulilupteri/journal        orgrinrt orgrinrt   22 lines
+    /run/hulilupteri/home/journal             root     root       10 lines
+
+Two histories of one tool, split by which user happened to run it, and the
+second one the user can no longer write: `test -w` says no. The next ordinary
+run either fails to record what it did or silently does not.
+
+Nothing was misconfigured. The tool asked for root for a reason and then kept
+it, which is the whole of the defect.
+
+### What the API has to do
+
+- run one command as root and return, with the caller's identity unchanged
+- try `sudo -n` first, so a machine needing no password never shows a prompt
+- refuse rather than hang where there is no terminal to answer a prompt on
+- name what is being elevated, so the sudo prompt and the log both say it
+- give a caller the real user's home, name and id even while the one step runs,
+  so nothing computes a path from `$HOME` at the wrong moment
+- say plainly when it cannot elevate, rather than falling back to trying anyway

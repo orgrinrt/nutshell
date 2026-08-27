@@ -144,15 +144,37 @@ declare -g _TOOLS_AVAILABLE=""
 # set, and there is no `${!table[@]}` to ask any more.
 declare -g _TOOL_CAN_NAMES=""
 
-# A name safe to build a variable out of. Refused rather than encoded: every
-# tool and capability this module has ever had is already `[a-z0-9_]`, so an
-# encoding would be machinery for a case that does not arise, and refusing
-# leaves the `eval` below unable to see anything that is not a name.
-_deps_name_ok() {
+# A tool or capability name, as the tail of a variable name. One-to-one.
+#
+# A name that is already `[A-Za-z0-9_]` and does not begin `enc_` is used as
+# itself, so `${_TOOL_PATH_jq}` and `${_TOOL_PATH_grep_pcre}` stay plain
+# expansions and the sixteen modules reading them literally pay nothing.
+#
+# Anything else is hex-encoded whole, behind `enc_`. A name that is safe but
+# begins `enc_` takes the encoded path too, which is what makes the mapping
+# one-to-one: without that, a tool genuinely called `enc_706b67` would collide
+# with `pkg` and one of them would read the other's path.
+#
+# Refusing instead was tried and was wrong. `deps_has` is documented to look up
+# anything not in the eager list, and half the binaries worth asking about have
+# a hyphen or a digit in them: `pkg-config`, `git-lfs`, `7z`. Refusing made
+# `deps_has pkg-config` answer yes with an empty path, which is the one outcome
+# that is worse than either alternative.
+_deps_key() {
     case "${1:-}" in
-        "" | *[!A-Za-z0-9_]* ) return 1 ;;
-        [0-9]* ) return 1 ;;
+        "" ) _dk=""; return 1 ;;
+        enc_* ) : ;;
+        [0-9]* ) : ;;
+        *[!A-Za-z0-9_]* ) : ;;
+        * ) _dk="$1"; return 0 ;;
     esac
+    _dk="enc_"
+    _dk_in="$1"
+    while [ -n "$_dk_in" ]; do
+        _dk_c="${_dk_in%"${_dk_in#?}"}"
+        _dk_in="${_dk_in#?}"
+        _dk="${_dk}$(printf '%02x' "$(printf '%d' "'$_dk_c")")"
+    done
     return 0
 }
 
@@ -162,14 +184,14 @@ _deps_name_ok() {
 # subshell. Callers outside this module skip it entirely where the name is a
 # literal and expand `${_TOOL_PATH_jq}` directly.
 _deps_get() {
-    if ! _deps_name_ok "$3"; then eval "$1=''"; return 1; fi
-    eval "$1=\"\${_TOOL_$2_$3:-}\""
+    _deps_key "$3" || { eval "$1=''"; return 1; }
+    eval "$1=\"\${_TOOL_$2_${_dk}:-}\""
 }
 
 # _deps_set <table> <name> <value>
 _deps_set() {
-    _deps_name_ok "$2" || return 1
-    eval "_TOOL_$1_$2=\$3"
+    _deps_key "$2" || return 1
+    eval "_TOOL_$1_${_dk}=\$3"
 }
 
 # _deps_can_set <capability> <0|1>
@@ -179,12 +201,12 @@ _deps_set() {
 # than `deps_caps` used to give: it listed what had been set, and an absent
 # capability was absent rather than false.
 _deps_can_set() {
-    _deps_name_ok "$1" || return 1
+    _deps_key "$1" || return 1
     case " $_TOOL_CAN_NAMES " in
         *" $1 "*) : ;;
         *) _TOOL_CAN_NAMES="${_TOOL_CAN_NAMES} $1" ;;
     esac
-    eval "_TOOL_CAN_$1=\$2"
+    eval "_TOOL_CAN_${_dk}=\$2"
 }
 
 # The config file, found once at init rather than on every lookup.

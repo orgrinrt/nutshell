@@ -70,24 +70,54 @@ it_refuses_an_absent_tool_through_every_door() {
 # --- the tables are variables now, not associative arrays --------------------
 
 #[test]
-it_refuses_a_name_that_is_not_a_name() {
-    # The tool tables are one variable per entry, so a name reaches `eval`.
-    # `deps_has` takes whatever a caller hands it, which makes this the one
-    # place where that matters, and the check is the whole defence.
-    assert_fails _deps_name_ok 'x; echo pwned'
-    assert_fails _deps_name_ok 'x$(echo pwned)'
-    assert_fails _deps_name_ok 'x`echo pwned`'
-    assert_fails _deps_name_ok 'a-b'
-    assert_fails _deps_name_ok 'a b'
-    assert_fails _deps_name_ok 'a.b'
-    assert_fails _deps_name_ok ''
-    assert_fails _deps_name_ok '1abc'
-    # And the shapes that are names, or the check would pass by refusing
-    # everything and the six above would prove nothing.
-    assert_ok _deps_name_ok 'sed'
-    assert_ok _deps_name_ok 'grep_pcre'
-    assert_ok _deps_name_ok '_x'
-    assert_ok _deps_name_ok 'a1'
+it_encodes_a_name_that_is_not_a_variable_name() {
+    # The tool tables are one variable per entry, so the name is part of a
+    # variable name. A name that already is one is used as itself, which is
+    # what keeps `${_TOOL_PATH_jq}` a plain expansion in the sixteen modules
+    # that read these literally.
+    _deps_key sed;        assert_eq "$_dk" "sed"
+    _deps_key grep_pcre;  assert_eq "$_dk" "grep_pcre"
+    _deps_key _x;         assert_eq "$_dk" "_x"
+    _deps_key a1;         assert_eq "$_dk" "a1"
+
+    # Anything else is encoded rather than refused. An earlier version refused,
+    # and `deps_has pkg-config` then answered yes with an empty path while
+    # growing the available-tools list on every call. Half the binaries worth
+    # asking about have a hyphen or a leading digit.
+    _deps_key pkg-config; assert_ne "$_dk" "pkg-config"
+    assert_eq "${_dk#enc_}" "706b672d636f6e666967"
+    _deps_key 7z;         assert_eq "${_dk%${_dk#enc_}}" "enc_"
+
+    # One to one, which is the property the whole scheme rests on. A safe name
+    # beginning `enc_` takes the encoded path too, or it would collide with
+    # whatever hex-encodes to it.
+    _deps_key enc_706b67; local a="$_dk"
+    _deps_key pkg;        local b="$_dk"
+    assert_ne "$a" "$b"
+
+    # And an empty name is not a name at all.
+    assert_fails _deps_key ""
+}
+
+#[test]
+it_resolves_a_tool_whose_name_is_not_a_variable_name() {
+    # The regression this replaced a refusal to fix. Answering yes with an
+    # empty path is worse than either answering no or answering correctly.
+    command -v pkg-config >/dev/null 2>&1 || return 0
+
+    assert_ok deps_has pkg-config
+    local p; p="$(deps_path pkg-config)"
+    assert_ne "$p" ""
+    assert_ok test -x "$p"
+
+    # And the miss is remembered, so the lookup does not re-fork forever. The
+    # available list grew by one word per call when the write was silently
+    # failing.
+    local before after
+    before="$(printf '%s' "$_TOOLS_AVAILABLE" | wc -w | tr -d ' ')"
+    deps_has pkg-config; deps_has pkg-config; deps_has pkg-config
+    after="$(printf '%s' "$_TOOLS_AVAILABLE" | wc -w | tr -d ' ')"
+    assert_eq "$after" "$before"
 }
 
 #[test]
@@ -95,9 +125,14 @@ it_does_not_execute_what_a_caller_puts_in_a_tool_name() {
     # The negative control for the one above, driven through the public
     # surface rather than the validator, because that is where a caller
     # reaches it.
+    # Encoded rather than refused now, so the defence is that the name never
+    # reaches `eval` as text: it is hex by the time it gets there.
     local out
     out="$(deps_has 'x; echo PWNED' 2>&1; deps_path 'y$(echo PWNED)' 2>&1; deps_cap 'z`echo PWNED`' 2>&1)"
     assert_not_contains "$out" "PWNED"
+    # And a name built to look like an assignment does not become one.
+    deps_has 'q=1; echo PWNED2; :' >/dev/null 2>&1
+    assert_eq "${q:-unset}" "unset"
 }
 
 #[test]
@@ -126,13 +161,14 @@ it_lists_only_the_capabilities_that_were_set() {
     assert_eq "$n" "$names"
     # Every line is name=0 or name=1, never an empty value, which is what a
     # read through a missing variable would have produced.
+    #
+    # The `assert_not_contains` is the whole check. A `while | case ... return 1`
+    # loop stood here and could not fail: the pipeline puts the loop in a
+    # subshell, its status becomes the function's return value, and the harness
+    # discards that in favour of the tally. Inverting the arm so every line took
+    # the failing branch still reported a pass. It was four lines below the
+    # commit that exists to fix exactly that class.
     assert_not_contains "$caps" "="$'\n'
-    printf '%s\n' "$caps" | while IFS= read -r line; do
-        case "$line" in
-            *=0|*=1) : ;;
-            *) return 1 ;;
-        esac
-    done
 }
 
 #[test]

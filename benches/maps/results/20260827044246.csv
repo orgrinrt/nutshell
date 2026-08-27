@@ -1,0 +1,11 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash declare -A,16,16,within the noise,yes
+eval names  encoded via subshell,1915,1948,11968%,yes
+eval names  encoded in place,42,82,262%,yes
+one string  scanned,-,-,-,no
+one file  read in shell,9390,10141,58687%,yes
+one file per key,319,347,1993%,yes
+one file per key  in memory,2,7,12%,yes
+slots by index (not a map),20,20,125%,yes
+slots by stride (not a map),43,44,268%,yes
+hash table rolled by hand,489,501,3056%,yes

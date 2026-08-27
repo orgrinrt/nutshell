@@ -6,6 +6,7 @@
 
 array                    lib/array.sh
 attr                     lib/attr.sh
+bench                    lib/bench.sh
 check-runner             lib/check-runner.sh
 checkcache               lib/checkcache.sh
 cli                      lib/cli.sh

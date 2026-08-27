@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell/bench - Run the benches
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# The third entry point, beside `test` and `check`. There was none, so every
+# performance question here was answered by a one-off script nobody could run
+# again, and the number then travelled without the conditions it was taken
+# under.
+#
+# A bench is a directory under `benches/` holding a `bench.sh` that declares its
+# arms. Its records land in `benches/<name>/results/` and are committed, so a
+# later reader compares against what was measured rather than rerunning to find
+# out whether they agree.
+#
+# Usage:
+#   ./bench                     every bench
+#   ./bench maps                one of them
+#   ./bench maps 20000          and its own arguments
+# =============================================================================
+
+set -uo pipefail
+
+# `|| exit 1`, because `init` refuses below bash 4 with a `return` and a
+# `return` cannot stop its caller.
+# shellcheck source=/dev/null
+. "${BASH_SOURCE[0]%/*}/init" || exit 1
+
+use log
+
+HERE="${BASH_SOURCE[0]%/*}"
+BENCH_DIR="${HERE}/benches"
+
+_list() {
+    local d
+    for d in "$BENCH_DIR"/*/; do
+        [[ -f "${d}bench.sh" ]] || continue
+        d="${d%/}"; printf '%s\n' "${d##*/}"
+    done
+}
+
+_run_one() {
+    local name="$1"; shift
+    local file="${BENCH_DIR}/${name}/bench.sh"
+    [[ -f "$file" ]] || { log_error "no bench called ${name}"; return 1; }
+
+    # Each in its own process. A bench declares global arms and a size, and two
+    # sharing a shell would read each other's.
+    (
+        export BENCH_RESULTS="${BENCH_DIR}/${name}/results"
+        # shellcheck source=/dev/null
+        . "$file" "$@"
+    )
+}
+
+main() {
+    local -a names=()
+    if [[ $# -gt 0 && -d "${BENCH_DIR}/$1" ]]; then
+        names=("$1"); shift
+    else
+        while IFS= read -r n; do [[ -n "$n" ]] && names+=("$n"); done < <(_list)
+    fi
+
+    if [[ ${#names[@]} -eq 0 ]]; then
+        log_error "no benches under ${BENCH_DIR}"
+        printf '  a bench is a directory with a bench.sh in it.\n' >&2
+        return 1
+    fi
+
+    local n rc=0
+    for n in "${names[@]}"; do
+        log_step "$n"
+        _run_one "$n" "$@" || rc=1
+        printf '\n'
+    done
+    return "$rc"
+}
+
+main "$@"

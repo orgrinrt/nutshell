@@ -1,0 +1,5 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+no trailing column,303,327,within the noise,yes
+a visibility  no predicate,322,353,within the noise,yes
+one predicate,344,359,113%,yes
+two  joined by a plus,362,375,119%,yes

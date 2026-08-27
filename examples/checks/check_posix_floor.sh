@@ -121,6 +121,40 @@ _shell_gated_files() {
     done < "${root}/lib.nut"
 }
 
+# Constructs a POSIX shell parses and then cannot run.
+#
+# Parsing is not running, and the gap between them is where this check was
+# quietly optimistic. `printf -v out ...` is a legal command line anywhere, so
+# `dash -n` accepts it; `dash` then reports an illegal option, **carries on**,
+# and leaves `out` empty. A frame drawn that way draws nothing and nobody is
+# told. `declare -gi x=0` is the same shape: not found, execution continues,
+# and the variable is simply not there.
+#
+# `${x//a/b}` at least fails loudly. The two above do not, which is why a file
+# can pass the parse and be broken on the floor in a way no test on a bash
+# machine will ever see.
+#
+# Reported beside the parse failures rather than folded into them, because they
+# are a different fact about the file: it reads, and it does not work.
+_posix_bashisms() {
+    local file="$1"
+    # Comments stripped first, crudely. A `#` inside a string is taken as one,
+    # which loses a real finding now and then; the alternative is parsing shell
+    # to run a warning, and this check never blocks.
+    sed -e 's/#.*$//' "$file" 2>/dev/null | grep -noE \
+        -e 'printf[[:space:]]+-v' \
+        -e '(^|[[:space:];&|(])declare[[:space:]]' \
+        -e 'local[[:space:]]+-[aAin]' \
+        -e '\$\{[A-Za-z_][A-Za-z0-9_]*//' \
+        -e '\$\{[A-Za-z_][A-Za-z0-9_]*(\^\^|,,)' \
+        -e '%[-0-9]*\*[sd]' \
+        -e "\\$'" \
+        -e 'BASH_[A-Z]' \
+        -e '(mapfile|readarray)[[:space:]]' \
+        -e 'read[[:space:]]+-[a-zA-Z]*[nNdt]([[:space:]]|$)' \
+        2>/dev/null | sed -e 's/^\([0-9]*\):[[:space:]]*/\1: /' | head -6
+}
+
 test_posix_floor() {
     log_header "POSIX floor"
 
@@ -173,8 +207,24 @@ test_posix_floor() {
         fi
     done <<< "$files"
 
+    # A second pass over the files that DID parse. The ones that did not are
+    # already counted, and saying they also contain a bashism adds nothing.
+    local unrunnable=0 hits
+    while IFS= read -r file; do
+        [[ -z "$file" || ! -f "$file" ]] && continue
+        rel="${file#$REPO_ROOT/}"
+        _is_exempt "$rel" && continue
+        [[ -n "${shell_gated[$rel]:-}" ]] && continue
+        "$sh" -n "$file" 2>/dev/null || continue
+        hits="$(_posix_bashisms "$file")"
+        [[ -n "$hits" ]] || continue
+        unrunnable=$(( unrunnable + 1 ))
+        log_test_warn "${rel} - parses, but $(printf '%s' "$hits" | head -1)"
+    done <<< "$files"
+
     echo ""
     log_info "${unreadable} of $(( total - exempt - gated )) cannot be read by ${sh}"
+    [[ "$unrunnable" -gt 0 ]] && log_info "${unrunnable} more parse but use something ${sh} cannot run"
     [[ "$gated" -gt 0 ]] && log_info "${gated} behind a shell: predicate, so never sourced there"
     [[ "$exempt" -gt 0 ]] && log_info "${exempt} exempt by config"
 

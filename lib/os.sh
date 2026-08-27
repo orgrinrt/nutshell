@@ -27,6 +27,7 @@ os_name() {
     esac
 }
 
+#[pub]
 # Returns 0 (true) if running on Linux, 1 (false) otherwise
 os_is_linux() {
     [[ "$(uname -s)" == Linux* ]]
@@ -39,6 +40,7 @@ os_is_macos() {
     [[ "$(uname -s)" == Darwin* ]]
 }
 
+#[pub]
 # Returns 0 (true) if running on Windows (via Cygwin/MSYS/MinGW), 1 (false) otherwise
 os_is_windows() {
     case "$(uname -s)" in
@@ -55,6 +57,7 @@ os_arch() {
     uname -m
 }
 
+#[pub]
 # Returns 0 if running in WSL, 1 otherwise
 os_is_wsl() {
     [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null

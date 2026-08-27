@@ -360,3 +360,31 @@ EOF
     assert_not_contains "$(modgraph_audit)" "private"
     _mgs_done
 }
+
+#[test]
+it_leaves_no_function_both_unmarked_and_without_an_underscore() {
+    # A function with no visibility marker is module-private, and a leading
+    # underscore is how this library says that in the name. One with neither
+    # is undecided: it reads as public to anybody scanning the file and the
+    # audit treats it as private, and nothing reconciles the two.
+    #
+    # There were nineteen. Sixteen in `check-runner`, which is the vocabulary a
+    # check is written against, and three in `os` that the README documents.
+    # All of them are public and now say so.
+    #
+    # This is the check that keeps it at zero. Without it the next one is
+    # invisible again, which is how the nineteen accumulated.
+    export MODGRAPH_NOCACHE=1
+    modgraph_build "${NUTSHELL_ROOT}/lib"
+
+    local mod fn undecided=""
+    for mod in "${_MG_MODULES[@]}"; do
+        for fn in ${_MG_DEFINES[$mod]:-}; do
+            case "$fn" in _*) continue ;; esac
+            [[ -n "$(modgraph_visibility "$fn")" ]] && continue
+            undecided="${undecided} ${mod}:${fn}"
+        done
+    done
+    unset MODGRAPH_NOCACHE
+    assert_eq "$undecided" "" "mark these #[pub], #[pub(lib)] or #[pub(super)], or give them a leading underscore"
+}

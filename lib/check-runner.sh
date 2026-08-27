@@ -81,6 +81,7 @@ declare -ga NUT_INCLUDE_PATTERNS=() 2>/dev/null || declare -a NUT_INCLUDE_PATTER
 declare -gA _CFG_CACHE=()
 declare -gA _CFG_MISS=()
 
+#[pub]
 cfg_get() {
     local key="$1"
     local value=""
@@ -114,6 +115,7 @@ cfg_get() {
     return 1
 }
 
+#[pub]
 # Get a config value with explicit default if not found anywhere
 # Usage: cfg_get_or "key" "default"
 cfg_get_or() {
@@ -128,6 +130,7 @@ cfg_get_or() {
     fi
 }
 
+#[pub]
 # Check if a config value is truthy
 # For test sections: a table without explicit boolean is considered "true"
 # Usage: cfg_is_true "key"
@@ -168,6 +171,7 @@ cfg_is_true() {
     return 1
 }
 
+#[pub]
 # Check if a section exists in the config
 # The hand-rolled `grep -qE "^\[${section}\]"` this replaced interpolated the
 # name into a regex, so every `.` in a section name matched any character:
@@ -194,6 +198,7 @@ cfg_test_enabled() {
     cfg_is_true "tests.${test_name}"
 }
 
+#[pub]
 # Get array from config
 # Usage: cfg_get_array "key" arr
 cfg_get_array() {
@@ -426,6 +431,7 @@ TESTS_WARNED=0
 declare -ga FAILED_TESTS=() 2>/dev/null || declare -a FAILED_TESTS=()
 declare -ga WARNED_TESTS=() 2>/dev/null || declare -a WARNED_TESTS=()
 
+#[pub]
 # Reset counters (useful when running multiple test files)
 reset_counters() {
     TESTS_RUN=0
@@ -440,6 +446,7 @@ reset_counters() {
 # TEST LOGGING
 # =============================================================================
 
+#[pub]
 log_header() {
     echo ""
     echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════════════${NC}"
@@ -448,6 +455,7 @@ log_header() {
     echo ""
 }
 
+#[pub]
 log_section() {
     echo ""
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────────${NC}"
@@ -455,10 +463,12 @@ log_section() {
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────────${NC}"
 }
 
+#[pub]
 log_test() {
     echo -e "${BLUE}[TEST]${NC} $*"
 }
 
+#[pub]
 log_pass() {
     TESTS_PASSED=$((TESTS_PASSED + 1))
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -476,6 +486,7 @@ log_pass() {
     fi
 }
 
+#[pub]
 log_fail() {
     echo -e "${RED}  ✗${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
@@ -483,16 +494,19 @@ log_fail() {
     FAILED_TESTS+=("$*")
 }
 
+#[pub]
 log_test_warn() {
     echo -e "${YELLOW}  ⚠${NC} $*"
     TESTS_WARNED=$((TESTS_WARNED + 1))
     WARNED_TESTS+=("$*")
 }
 
+#[pub]
 log_test_info() {
     echo -e "${BLUE}  ℹ${NC} $*"
 }
 
+#[pub]
 log_skip() {
     echo -e "${MAGENTA}  ○${NC} $* (skipped)"
 }
@@ -520,6 +534,7 @@ _is_excluded() {
 declare -g _NUT_LIB_FILES_CACHED=""
 declare -g _NUT_LIB_FILES=""
 
+#[pub]
 get_lib_files() {
     _framework_init
 
@@ -555,6 +570,7 @@ get_script_files() {
 # ANNOTATION CHECKING
 # =============================================================================
 
+#[pub]
 # attr_name_of <annotation>
 #
 # The attribute name inside a configured marker: `#[pub]` gives `pub`. Prints

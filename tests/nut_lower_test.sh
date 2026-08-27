@@ -105,11 +105,20 @@ it_rewrites_super_away() {
 }
 
 #[test]
-it_registers_what_it_contains_rather_than_stubbing_use() {
-    # `use() { return 0; }` looks equivalent and is not: `nut_reload` goes
-    # through `use`, so a stub breaks the lazy dispatch and the dispatched
-    # function answers nothing.
-    _lower_to --no-shake
+# Where the dispatch is left to run, the file registers what it contains rather
+# than stubbing the resolver.
+#
+# `use() { return 0; }` looks equivalent and is not, **on this path**:
+# `nut_reload` goes through `use`, so a stub breaks the lazy dispatch and the
+# dispatched function answers nothing.
+#
+# It became conditional when pre-binding landed. With the implementation bound
+# ahead of the first call the stub never runs, `nut_reload` is never reached,
+# and the stub is then correct and is what lets the file drop `init` entirely.
+# So the rule this test guards is now the `--no-prebind` rule, and the test says
+# so rather than asserting it of every lowering.
+it_registers_what_it_contains_when_the_dispatch_is_left_to_run() {
+    _lower_to --no-shake --no-prebind
     assert_contains "$(cat "$_LOW_OUT")" '_NUTSHELL_LOADED['
     assert_not_contains "$(cat "$_LOW_OUT")" 'use() { return 0; }'
     # Every registration before any body, or anything reading up to the first
@@ -257,5 +266,72 @@ it_still_dispatches_at_first_call_without_prebinding() {
     ' _ "$_LOW_OUT" 2>&1)"
 
     assert_contains "$out" "DISPATCH-RAN"
+    _lower_done
+}
+
+# A POSIX shell that is one, or nothing.
+_nl_posix_sh() {
+    local cand f; f="$(mktemp)"; printf 'declare -A x\n' > "$f"
+    for cand in dash ash yash busybox-sh; do
+        command -v "$cand" >/dev/null 2>&1 || continue
+        "$cand" -c ". '$f'" >/dev/null 2>&1 || { rm -f "$f"; printf '%s' "$cand"; return 0; }
+    done
+    rm -f "$f"; return 1
+}
+
+#[test]
+# A lowered file runs under a POSIX shell, which is the point of the floor.
+#
+# It did not, and no amount of converting modules would have changed that: the
+# emitted preamble sourced `init`, and `init` opens with `declare -gA`, which is
+# the first thing a POSIX shell refuses. Every module underneath could have been
+# perfectly POSIX and none of it was reachable.
+#
+# `init` is the development-time resolver. Six of its functions answer "which
+# file is this module" out of `lib.nut` and four more make a module load once,
+# and a lowered file has had both done to it already. What it actually
+# referenced was `use` at file scope, `nut_reload` and `nut_lazy_guard` inside
+# stubs that pre-binding overwrites, and one `NUTSHELL_ROOT`.
+#
+# `os` is lowered here rather than a larger closure because it carries no
+# `#[shell(bash4)]` gate. A gate resolves against the shell doing the lowering,
+# so lowering `string` under bash correctly picks the bash half and the artifact
+# is then a bash artifact by construction.
+it_produces_a_file_a_posix_shell_can_run() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use os --no-shake -o "$_LOW_OUT" 2>/dev/null
+
+    # No `init`, and none of the tables that need an associative array.
+    assert_fails grep -q '/init"' "$_LOW_OUT"
+    assert_fails grep -q '_NUTSHELL_LOADED\[' "$_LOW_OUT"
+
+    assert_ok "$sh" -n "$_LOW_OUT"
+
+    local got
+    got="$("$sh" -c '. "$1" && os_name' _ "$_LOW_OUT" 2>&1)"
+    assert_not_contains "$got" "not found"
+    assert_not_contains "$got" "Syntax error"
+    assert_eq "$got" "$(bash -c '. "$1" && os_name' _ "$_LOW_OUT" 2>&1)"
+    _lower_done
+}
+
+#[test]
+# The control, and the reason the preamble is chosen on pre-binding.
+#
+# Without it a stub still runs and still calls `nut_reload`. A no-op there would
+# leave it calling itself until `nut_lazy_guard` stopped it, so the function
+# would answer nothing at all. `--no-prebind` therefore keeps the old preamble
+# and stays a bash artifact, and this asserts that rather than leaving it to a
+# comment.
+it_keeps_the_bash_preamble_when_the_dispatch_is_left_to_run() {
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use os --no-shake --no-prebind -o "$_LOW_OUT" 2>/dev/null
+
+    assert_ok grep -q '/init"' "$_LOW_OUT"
+    assert_contains "$(head -1 "$_LOW_OUT")" "bash"
+
+    # And it still works under bash, which is what it is for.
+    assert_eq "$(bash -c '. "$1" && os_name' _ "$_LOW_OUT" 2>&1)" "$(bash -c 'uname -s' | tr 'A-Z' 'a-z' | sed 's/darwin/macos/')"
     _lower_done
 }

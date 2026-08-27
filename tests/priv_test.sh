@@ -524,3 +524,52 @@ it_names_doas_when_it_cannot_step_down_at_all() {
     # The message lists what it looked for, so a reader knows what to install.
     assert_contains "$err" "doas"
 }
+
+# A POSIX shell to check against, or nothing.
+_pt_posix_sh() {
+    local cand f; f="$(mktemp)"; printf 'declare -A x\n' > "$f"
+    for cand in dash ash yash busybox-sh; do
+        command -v "$cand" >/dev/null 2>&1 || continue
+        "$cand" -c ". '$f'" >/dev/null 2>&1 || { rm -f "$f"; printf '%s' "$cand"; return 0; }
+    done
+    rm -f "$f"; return 1
+}
+
+#[test]
+# It runs under a POSIX shell, not merely parses there.
+#
+# The distinction is the whole point of the floor work: `[[ -n x ]]` is a
+# command name and three arguments to a POSIX shell, so it reads anywhere and
+# then reports `[[: not found`, and `declare -g` is not found and carries on
+# with the variable never set. Neither is a parse error.
+#
+# So the assertion is that the module answers, and answers the same as it does
+# under bash. `priv_user_home` is the one worth asserting: it used to read the
+# passwd line into `local -a f=($line)` and take `${f[5]}`, which needs an
+# array and a per-command `IFS` a POSIX shell has neither of.
+it_runs_under_a_posix_shell() {
+    local sh; sh="$(_pt_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    local root="${BASH_SOURCE[0]%/*}/.."
+
+    # Not piped. Sourcing through a pipe puts it in a subshell and every
+    # function defined dies with it, which reads exactly like the module
+    # failing to load.
+    local probe='
+        use() { return 0; }
+        log_error() { :; }
+        . "$1"/lib/priv.sh || exit 1
+        printf "%s|%s|" "$PRIV_USER" "$(priv_user_home)"
+        priv_is_root && printf "root" || printf "notroot"
+    '
+    local got want
+    got="$("$sh" -c "$probe" _ "$root" 2>&1)"
+    want="$(bash -c "$probe" _ "$root" 2>&1)"
+
+    assert_not_contains "$got" "not found"
+    assert_not_contains "$got" "Bad substitution"
+    assert_ne "$got" ""
+    assert_eq "$got" "$want"
+
+    # And the field cut actually found a home rather than an empty string.
+    assert_not_contains "$got" "||"
+}

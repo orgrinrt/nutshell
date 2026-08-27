@@ -254,3 +254,19 @@ show_summary = true
 [deps.shebang]
 git = "https://github.com/orgrinrt/the-whole-shebang.git"
 ref = "main"
+
+# How much of this library a POSIX shell can read.
+#
+# The floor is meant to be POSIX sh, with a `when=` row selecting a better file
+# where a tool or a modern shell earns it. That is a direction rather than a
+# state, so this reports a number rather than passing or failing: 31 of 40 at
+# the time it was first measured, which is the honest starting point.
+#
+# `max_unreadable` is the budget. Left at -1 it reports and never blocks, which
+# is right while the number is still large, because a gate that fails every run
+# is one people stop reading. Lower it as the number comes down and it becomes
+# a ratchet.
+[tests.posix_floor]
+enabled = true
+max_unreadable = -1
+exempt = []

@@ -88,3 +88,28 @@ it_does_not_charge_one_test_with_another_s_failure() {
     assert_contains "$out" "[PASS] it_forks_a_child_that_fails_late"
     assert_contains "$out" "[PASS] it_is_the_innocent_one_after_the_fork"
 }
+
+#[test]
+it_fails_a_file_that_yields_no_tests() {
+    # The same reasoning as the assert-nothing check, one level up. `0 passed`
+    # is not a pass, and the harness used to print `[OK] 0 passed` and exit 0
+    # for it.
+    #
+    # Found by mutation rather than by reading: renaming `attr_find` breaks the
+    # discovery `test_run` itself uses, so the whole suite yielded nothing and
+    # reported green over a library that no longer loaded.
+    local out
+    out="$(_harness_run "${FIXTURES}/no_tests_at_all_test.sh")"
+    assert_contains "$out" "FAIL"
+    assert_contains "$out" "no #[test] found"
+}
+
+#[test]
+it_does_not_call_a_filtered_run_empty() {
+    # The control. A filter matching nothing yields no tests for a reason that
+    # is not a defect, and refusing it would make `TEST_FILTER` unusable. The
+    # count that decides is taken before the filter.
+    local out
+    out="$(TEST_FILTER=zzz_matches_nothing _harness_run "${FIXTURES}/first_assertion_fails_test.sh")"
+    assert_eq "${out#*FAIL}" "$out"
+}

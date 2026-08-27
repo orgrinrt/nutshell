@@ -265,3 +265,135 @@ it_refuses_an_entry_written_in_an_older_format() {
     assert_fails nut_cache_hit probe "$CCROOT/src.sh"
     _cc_end
 }
+
+# --- which stat this machine has ---------------------------------------------
+#
+# The flavour is decided by what `stat` prints, not by what it returns, and
+# the difference only shows on the platform this was not developed on.
+#
+# BSD spells the format `-f`. GNU spells it `-c`, and its own `-f` asks for
+# file-system status and does not know `%m`. A chooser written as
+# `stat -f … || stat -c …` therefore reads the wrong thing on Linux while
+# exiting 0, so the fallback never fires and every stamp is garbage that
+# compares equal to itself. Invalidation stops with nothing to show for it.
+#
+# GNU is unavailable here, so it is planted: a `stat` that owns the whole PATH
+# and behaves the way GNU's does. Prepending would let the machine's real one
+# answer, which is how a stub test comes to prove nothing.
+
+_stat_stub() {
+    local dir="$1" kind="$2"
+    mkdir -p "$dir"
+    case "$kind" in
+        gnu)
+            # `-c` works. `-f` exits 0 and prints filesystem noise, which is
+            # the whole hazard.
+            cat > "$dir/stat" <<'STUB'
+#!/bin/sh
+if [ "$1" = "-c" ]; then
+    shift; fmt="$1"; shift
+    for f do
+        m=$(/usr/bin/stat -f '%m' "$f" 2>/dev/null) || exit 1
+        z=$(/usr/bin/stat -f '%z' "$f" 2>/dev/null) || exit 1
+        case "$fmt" in
+            '%Y %s %n') printf '%s %s %s\n' "$m" "$z" "$f" ;;
+            '%Y')       printf '%s\n' "$m" ;;
+            *)          printf '?\n' ;;
+        esac
+    done
+    exit 0
+fi
+if [ "$1" = "-f" ]; then
+    shift; shift
+    for f do printf 'Blocks: Total: 1000 Free: 500\n'; done
+    exit 0
+fi
+exit 1
+STUB
+            ;;
+        bsd)
+            cat > "$dir/stat" <<'STUB'
+#!/bin/sh
+[ "$1" = "-f" ] || exit 1
+shift; fmt="$1"; shift
+exec /usr/bin/stat -f "$fmt" "$@"
+STUB
+            ;;
+        none)
+            printf '#!/bin/sh\nexit 127\n' > "$dir/stat"
+            ;;
+    esac
+    chmod +x "$dir/stat"
+
+    # The stub owns the whole PATH. Prepending leaves the real one reachable
+    # by anything that resolves a second time, and then the test is about the
+    # machine rather than about the stub.
+    for t in find sort head printf mktemp rm cat chmod sh; do
+        [[ -e "$dir/$t" ]] && continue
+        local real; real="$(command -v "$t" 2>/dev/null)" || continue
+        ln -sf "$real" "$dir/$t"
+    done
+}
+
+_stat_flag_under() {
+    local dir="$1"
+    bash -c '
+        PATH="$1"; export PATH
+        . "$2"/init || exit 1
+        use checkcache
+        _nut_cache_stat_flag || printf "NONE"
+    ' _ "$dir" "$NUTSHELL_ROOT" 2>/dev/null
+}
+
+#[test]
+it_picks_the_format_a_gnu_stat_understands() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-stat.XXXXXX")"
+    _stat_stub "$d" gnu
+    assert_eq "$(_stat_flag_under "$d")" "-c"
+    rm -rf "$d"
+}
+
+#[test]
+it_picks_the_format_a_bsd_stat_understands() {
+    # The control. A probe that always answered `-c` would pass the one above
+    # and be just as wrong, in the other direction.
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-stat.XXXXXX")"
+    _stat_stub "$d" bsd
+    assert_eq "$(_stat_flag_under "$d")" "-f"
+    rm -rf "$d"
+}
+
+#[test]
+it_says_so_rather_than_guessing_when_there_is_no_stat() {
+    # A machine with neither has no stamps, and no stamps has to mean every
+    # entry misses. Answering with a flag that does not work would mean every
+    # entry hits on a stamp that never changes.
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-stat.XXXXXX")"
+    _stat_stub "$d" none
+    assert_eq "$(_stat_flag_under "$d")" "NONE"
+    rm -rf "$d"
+}
+
+#[test]
+it_reads_a_real_mtime_and_size_through_whichever_stat_it_picked() {
+    # The flag being right is not the claim. The claim is that the numbers
+    # coming back are this file's mtime and size, and a probe that accepted a
+    # format printing `?` would satisfy the three above and fail this.
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-stat.XXXXXX")"
+    _stat_stub "$d" gnu
+    printf '0123456789' > "$d/probe.txt"
+
+    local got
+    got="$(bash -c '
+        PATH="$1"; export PATH
+        . "$2"/init || exit 1
+        use checkcache
+        _nut_cache_stat_into "$3"
+        printf "%s" "${_NUT_CACHE_STAMP[$3]:-}"
+    ' _ "$d" "$NUTSHELL_ROOT" "$d/probe.txt" 2>/dev/null)"
+
+    assert_ne "$got" ""
+    assert_eq "${got#* }" "10"
+    [[ "${got%% *}" =~ ^[0-9]+$ ]] || _test_failed "mtime is not a number: [${got%% *}]"
+    rm -rf "$d"
+}

@@ -201,6 +201,27 @@ test_run() {
     local name output rc
     _TEST_MARK_DIR="$(_test_mark_dir)" || return 1
 
+    # A file that yields no tests at all, counted before any filter. The same
+    # reasoning as the assert-nothing check below, one level up: a file nobody
+    # can run occupies the place a real one would be noticed missing from, and
+    # `[OK] 0 passed` reads as a pass.
+    #
+    # It is not hypothetical. Renaming `attr_find` breaks the discovery this
+    # very loop uses, so every file in the suite yields nothing and the run
+    # reports green over a library that no longer loads.
+    local found=0
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && found=$(( found + 1 ))
+    done < <(attr_find "$file" test)
+
+    if [[ "$found" -eq 0 ]]; then
+        _TEST_FAILED+=1
+        _TEST_FAILURES+=("${file##*/}: no #[test] found in the file")
+        log_tagged "FAIL" red "${file##*/}"
+        log_substep "no #[test] found. An empty file reports a pass otherwise."
+        return 1
+    fi
+
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
         [[ -n "${TEST_FILTER:-}" && "$name" != *"$TEST_FILTER"* ]] && continue

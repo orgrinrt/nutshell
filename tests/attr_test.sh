@@ -85,6 +85,15 @@ it_spawns_nothing_while_walking_a_file() {
     local src="${BASH_SOURCE[0]%/*}/../lib/attr.sh"
     local body
     body="$(sed -n '/^attr_on() {/,/^}/p' "$src"; sed -n '/^attr_find() {/,/^}/p' "$src")"
+
+    # The extraction has to have found something. Rename either walker and the
+    # `sed` matches nothing, the grep below finds nothing in nothing, and this
+    # reports a clean pass over a walker that forks per line. A zero out of a
+    # pipeline is a claim about the pipeline until the pipeline is shown able
+    # to produce anything else.
+    assert_ne "$body" ""
+    assert_contains "$body" "while IFS= read -r line"
+
     # No `$(...)` inside either walker. `$(( ))` is arithmetic and is not one.
     local subs; subs="$(grep -n '\$(' <<<"$body" | grep -v '\$((' || true)"
     assert_empty "$subs"

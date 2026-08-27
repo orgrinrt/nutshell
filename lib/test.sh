@@ -35,13 +35,26 @@
 #   TEST_FILTER - only run tests whose name contains this
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success.
+[ -n "${_NUTSHELL_TEST_SH:-}" ] && return 0
+_NUTSHELL_TEST_SH=1
 
-use attr log fs
+# A newline as itself. There is no `$'\n'` here to write one inline with, and
+# the trailing `.` is because command substitution strips the trailing newline,
+# which is the character being asked for.
+_TEST_NL="$(printf '\n.')"; _TEST_NL="${_TEST_NL%.}"
 
-declare -gi _TEST_PASSED=0
-declare -gi _TEST_FAILED=0
-declare -ga _TEST_FAILURES=()
+use attr log fs list
+
+_TEST_PASSED=0
+_TEST_FAILED=0
+# A `list` rather than an indexed array, which is bash's. It only ever grows by
+# one and is read once at the end, which is what `list` is for.
+list_new _TEST_FAILURES
 
 # -----------------------------------------------------------------------------
 # Assertions
@@ -83,7 +96,7 @@ _test_failed() {
 # A file, because each test runs in its own subshell and a variable set there
 # cannot reach the runner that has to decide the verdict.
 _test_mark() {
-    [[ -n "${_TEST_MARK:-}" ]] && printf '%s' "$1" >> "$_TEST_MARK"
+    [ -n "${_TEST_MARK:-}" ] && printf '%s' "$1" >> "$_TEST_MARK"
     return 0
 }
 
@@ -94,7 +107,7 @@ _test_asserted() { _test_mark a; }
 # Usage: assert_eq "$got" "$want" ["what this is about"] -> 0 or 1
 assert_eq() {
     _test_asserted
-    [[ "$1" == "$2" ]] && return 0
+    [ "$1" = "$2" ] && return 0
     _test_failed "expected [$2]" "     got [$1]" ${3:+"     $3"}
 }
 
@@ -102,7 +115,7 @@ assert_eq() {
 # Usage: assert_ne "$got" "$unwanted" ["what this is about"] -> 0 or 1
 assert_ne() {
     _test_asserted
-    [[ "$1" != "$2" ]] && return 0
+    [ "$1" != "$2" ] && return 0
     _test_failed "expected anything but [$2]" ${3:+"     $3"}
 }
 
@@ -110,7 +123,7 @@ assert_ne() {
 # Usage: assert_contains "$haystack" "$needle" ["about"] -> 0 or 1
 assert_contains() {
     _test_asserted
-    [[ "$1" == *"$2"* ]] && return 0
+    case "$1" in *"$2"*) return 0 ;; esac
     _test_failed "expected to find [$2]" "            in [$1]" ${3:+"     $3"}
 }
 
@@ -127,7 +140,7 @@ assert_contains() {
 # Usage: assert_not_contains "$output" "PWNED"
 assert_not_contains() {
     _test_asserted
-    [[ "$1" != *"$2"* ]] && return 0
+    case "$1" in *"$2"*) ;; *) return 0 ;; esac
     _test_failed "expected NOT to find [$2]" "                in [$1]" ${3:+"     $3"}
 }
 
@@ -135,7 +148,7 @@ assert_not_contains() {
 # Usage: assert_empty "$value" ["about"] -> 0 or 1
 assert_empty() {
     _test_asserted
-    [[ -z "$1" ]] && return 0
+    [ -z "$1" ] && return 0
     _test_failed "expected nothing, got [$1]" ${2:+"     $2"}
 }
 
@@ -145,7 +158,7 @@ assert_ok() {
     _test_asserted
     local rc=0
     "$@" || rc=$?
-    [[ "$rc" -eq 0 ]] && return 0
+    [ "$rc" -eq 0 ] && return 0
     _test_failed "expected success from [$*], got exit ${rc}"
 }
 
@@ -175,7 +188,7 @@ assert_exits() {
     local want="$1"; shift
     local rc=0
     "$@" || rc=$?
-    [[ "$rc" -eq "$want" ]] && return 0
+    [ "$rc" -eq "$want" ] && return 0
     _test_failed "expected exit [${want}] from [$*]" "     got exit [${rc}]"
 }
 
@@ -192,8 +205,23 @@ assert_exits() {
 # under bash older than 5.0, and the caller then prints no timing rather than
 # a wrong one.
 _test_now_us() {
-    local t="${EPOCHREALTIME:-}"
-    [[ -n "$t" ]] && printf '%s' "${t//[!0-9]/}"
+    local t="${EPOCHREALTIME:-}" out="" run
+    [ -n "$t" ] || return 0
+    # Digits only, `1234.5678` to `12345678`. Walked rather than
+    # `${t//[!0-9]/}`, which is bash's; whole digit runs are taken at once, so
+    # this is two passes rather than one per character.
+    #
+    # `EPOCHREALTIME` is bash's too, so on the floor `$t` is empty and this
+    # returns nothing, which is the fallback the caller already handles by
+    # printing no timing rather than a wrong one.
+    while [ -n "$t" ]; do
+        run="${t%%[!0-9]*}"
+        if [ -n "$run" ]; then
+            out="${out}${run}"; t="${t#"$run"}"; continue
+        fi
+        t="${t#?}"
+    done
+    printf '%s' "$out"
 }
 
 # _test_mark_dir -> a directory to keep one tally per test in
@@ -205,7 +233,7 @@ _test_now_us() {
 #
 # A directory is still one thing to remove at the end.
 _test_mark_dir() {
-    [[ -n "${_TEST_MARK_DIR:-}" ]] && { printf '%s' "$_TEST_MARK_DIR"; return 0; }
+    [ -n "${_TEST_MARK_DIR:-}" ] && { printf '%s' "$_TEST_MARK_DIR"; return 0; }
     fs_temp_dir nutshell-test
 }
 
@@ -213,7 +241,7 @@ _test_mark_dir() {
 # Usage: test_run tests/string_test.sh -> runs every #[test] in the file
 test_run() {
     local file="$1"
-    [[ -f "$file" ]] || { log_error "no test file: ${file}"; return 1; }
+    [ -f "$file" ] || { log_error "no test file: ${file}"; return 1; }
 
     local name output rc
     _TEST_MARK_DIR="$(_test_mark_dir)" || return 1
@@ -226,22 +254,32 @@ test_run() {
     # It is not hypothetical. Renaming `attr_find` breaks the discovery this
     # very loop uses, so every file in the suite yields nothing and the run
     # reports green over a library that no longer loads.
-    local found=0
+    local found=0 _tf_names
+    # Gathered first. The body counts into `found`, which the code after it
+    # reads, so on the right of a pipe the count would be made in a subshell
+    # and read back as zero here: every file would report no tests.
+    _tf_names="$(attr_find "$file" test)"
     while IFS= read -r name; do
-        [[ -n "$name" ]] && found=$(( found + 1 ))
-    done < <(attr_find "$file" test)
+        [ -n "$name" ] && found=$(( found + 1 ))
+    done <<EOF
+$_tf_names
+EOF
 
-    if [[ "$found" -eq 0 ]]; then
-        _TEST_FAILED+=1
-        _TEST_FAILURES+=("${file##*/}: no #[test] found in the file")
+    if [ "$found" -eq 0 ]; then
+        _TEST_FAILED=$(( _TEST_FAILED + 1 ))
+        list_push _TEST_FAILURES "${file##*/}: no #[test] found in the file"
         log_tagged "FAIL" red "${file##*/}"
         log_substep "no #[test] found. An empty file reports a pass otherwise."
         return 1
     fi
 
+    # Same here-document, same reason: the body counts passes and failures
+    # into variables the summary reads.
     while IFS= read -r name; do
-        [[ -z "$name" ]] && continue
-        [[ -n "${TEST_FILTER:-}" && "$name" != *"$TEST_FILTER"* ]] && continue
+        [ -z "$name" ] && continue
+        if [ -n "${TEST_FILTER:-}" ]; then
+            case "$name" in *"$TEST_FILTER"*) ;; *) continue ;; esac
+        fi
 
         # Its own file, so nothing a previous test left behind, and nothing a
         # previous test is still doing, can be read as this one's.
@@ -259,7 +297,7 @@ test_run() {
         start_us="$(_test_now_us)"
         output="$( set +e; . "$file" >/dev/null 2>&1; "$name" 2>&1; _test_mark z )"
         end_us="$(_test_now_us)"
-        [[ -n "$start_us" && -n "$end_us" ]] &&
+        [ -n "$start_us" ] && [ -n "$end_us" ] &&
             took=" ($(( (end_us - start_us) / 1000000 )).$(( (end_us - start_us) / 100000 % 10 ))s)"
 
         # The tally decides, not the exit status. A test whose last command
@@ -269,41 +307,44 @@ test_run() {
         local tally why=""
         tally="$(cat "$_TEST_MARK" 2>/dev/null)"
         rc=0
-        if [[ "$tally" != *z* ]]; then
+        _has_z=0; case "$tally" in *z*) _has_z=1 ;; esac
+        if [ "$_has_z" -eq 0 ]; then
             # What the marker actually held, because "did not finish" alone is
             # not diagnosable and this has fired intermittently on tests that
             # pass when run on their own. An empty tally and a truncated one
             # are different faults: empty says the test body never reached its
             # first mark, and a partial one says it stopped part way.
             rc=1
-            if [[ ! -e "$_TEST_MARK" ]]; then
+            if [ ! -e "$_TEST_MARK" ]; then
                 why="the test did not finish (its marker file is gone: ${_TEST_MARK})"
-            elif [[ -z "$tally" ]]; then
+            elif [ -z "$tally" ]; then
                 why="the test did not finish (marker empty, so it stopped before the first assertion)"
             else
                 why="the test did not finish (marker held '${tally}', so it stopped part way)"
             fi
-        elif [[ "$tally" == *f* ]]; then
+        elif case "$tally" in *f*) true ;; *) false ;; esac; then
             rc=1
-        elif [[ "$tally" != *a* ]]; then
+        elif case "$tally" in *a*) false ;; *) true ;; esac; then
             # Worse than a weak test: it occupies the place a real one would be
             # noticed missing from, and it counts toward a number people quote.
             rc=1; why="the test asserted nothing"
         fi
-        [[ -n "$why" ]] && output="${output}${output:+$'\n'}${why}"
+        [ -n "$why" ] && output="${output}${output:+$_TEST_NL}${why}"
 
-        if [[ $rc -eq 0 ]]; then
-            _TEST_PASSED+=1
+        if [ $rc -eq 0 ]; then
+            _TEST_PASSED=$(( _TEST_PASSED + 1 ))
             log_tagged "PASS" green "$name${took}"
         else
-            _TEST_FAILED+=1
-            _TEST_FAILURES+=("${file##*/}: ${name}")
+            _TEST_FAILED=$(( _TEST_FAILED + 1 ))
+            list_push _TEST_FAILURES "${file##*/}: ${name}"
             log_tagged "FAIL" red "$name${took}"
-            [[ -n "$output" ]] && printf '%s\n' "$output" | while IFS= read -r l; do
+            [ -n "$output" ] && printf '%s\n' "$output" | while IFS= read -r l; do
                 log_substep "$l"
             done
         fi
-    done < <(attr_find "$file" test)
+    done <<EOF
+$_tf_names
+EOF
 }
 
 #[pub]
@@ -311,7 +352,7 @@ test_run() {
 test_run_dir() {
     local dir="${1:-tests}" file
     for file in "$dir"/*_test.sh; do
-        [[ -f "$file" ]] || continue
+        [ -f "$file" ] || continue
         log_step "${file##*/}"
         test_run "$file"
     done
@@ -323,12 +364,15 @@ test_run_dir() {
 # Also the end of the run, so the mark file goes here. A trap would fire on
 # every subshell exit as well, and there is exactly one place the run is over.
 test_summary() {
-    [[ -n "${_TEST_MARK_DIR:-}" ]] && rm -rf "$_TEST_MARK_DIR"
+    [ -n "${_TEST_MARK_DIR:-}" ] && rm -rf "$_TEST_MARK_DIR"
     printf '\n'
-    if [[ "$_TEST_FAILED" -gt 0 ]]; then
-        local f
-        for f in "${_TEST_FAILURES[@]}"; do
+    if [ "$_TEST_FAILED" -gt 0 ]; then
+        local f _tf_i=0 _tf_n
+        _tf_n="$(list_len _TEST_FAILURES)"
+        while [ "$_tf_i" -lt "$_tf_n" ]; do
+            f="$(list_get _TEST_FAILURES "$_tf_i")"
             log_tagged "FAILED" red "$f"
+            _tf_i=$(( _tf_i + 1 ))
         done
         log_error "${_TEST_FAILED} failed, ${_TEST_PASSED} passed"
         return 1

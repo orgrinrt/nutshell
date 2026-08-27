@@ -114,3 +114,35 @@ it_says_how_far_a_test_got_before_it_stopped() {
     assert_contains "$out" "stopped part way"
     assert_contains "$out" "'a'"
 }
+
+#[test]
+# The pass and fail counters are numbers, not strings.
+#
+# They were `declare -gi`, and dropping that attribute during the floor work
+# turned `_TEST_PASSED+=1` from addition into concatenation: six passing tests
+# reported as `0111111 passed`. The suite still said OK, so nothing failed and
+# every number the harness printed was nonsense.
+#
+# Asserted through a nested run, because the counters belong to the run that
+# owns them and this one is inside a run of its own.
+it_counts_passes_as_a_number() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_one() { assert_eq 1 1; }\n'
+        printf '#%s\n' '[test]'
+        printf 'it_two() { assert_eq 2 2; }\n'
+        printf '#%s\n' '[test]'
+        printf 'it_three() { assert_eq 3 3; }\n'
+    } > "$d/zz_count_test.sh"
+
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_count_test.sh" 2>&1)"
+    rm -rf "$d"
+
+    # Three, not `0111`.
+    assert_contains "$out" "3 passed"
+    assert_not_contains "$out" "0111"
+}

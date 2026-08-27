@@ -86,13 +86,17 @@ it_spawns_nothing_while_walking_a_file() {
     local body
     body="$(sed -n '/^attr_on() {/,/^}/p' "$src"; sed -n '/^attr_find() {/,/^}/p' "$src")"
 
-    # The extraction has to have found something. Rename either walker and the
-    # `sed` matches nothing, the grep below finds nothing in nothing, and this
-    # reports a clean pass over a walker that forks per line. A zero out of a
-    # pipeline is a claim about the pipeline until the pipeline is shown able
-    # to produce anything else.
+    # Both walkers, counted. The first guard here asserted the extraction was
+    # non-empty, which closes the case where both are renamed and leaves the
+    # one that matters: rename `attr_on` alone, keep a wrapper, and put a fork
+    # in its loop, and `attr_find`'s text alone satisfies "non-empty" and
+    # "contains a read loop" while the forking walker is never looked at.
+    #
+    # A zero out of a pipeline is a claim about the pipeline, and so is a one
+    # where two were meant.
     assert_ne "$body" ""
-    assert_contains "$body" "while IFS= read -r line"
+    local loops; loops="$(grep -c 'while IFS= read -r line' <<<"$body")"
+    assert_eq "$loops" "2" "both walkers have to be in the extraction"
 
     # No `$(...)` inside either walker. `$(( ))` is arithmetic and is not one.
     local subs; subs="$(grep -n '\$(' <<<"$body" | grep -v '\$((' || true)"

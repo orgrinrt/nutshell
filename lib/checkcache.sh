@@ -79,34 +79,43 @@ declare -g  _NUT_CACHE_STAT=""
 # compares equal to itself. Invalidation stops, silently, on the platform most
 # of this runs on.
 #
-# So the probe reads the answer back. A format is accepted when it produces a
-# line whose first field is a plain number, which neither flavour produces for
-# the other's spelling.
+# So the probe reads the answer back, against a file whose size it already
+# knows. Requiring only "starts with a digit" would rest on a premise nothing
+# here can check: that no `stat` ever leads its wrong-flag output with a
+# number. GNU prints the literal `%m` and a stub might print a block count, and
+# the difference decides whether Linux gets working invalidation.
+#
+# A written file of known length removes the premise. A format is accepted when
+# it returns that exact length, which only the right spelling can do.
 #
 # Prints `-f` or `-c`, or nothing when neither works.
 _nut_cache_stat_flag() {
     [[ -n "$_NUT_CACHE_STAT" ]] && { printf '%s' "${_NUT_CACHE_STAT#none}"; return 0; }
 
-    local probe="${NUTSHELL_ROOT:-.}/init" out
-    [[ -f "$probe" ]] || probe="${BASH_SOURCE[0]}"
+    local probe out flag fmt rc=1
+    probe="$(mktemp "${TMPDIR:-/tmp}/nutshell-stat.XXXXXX")" || { _NUT_CACHE_STAT="none"; return 1; }
+    # Ten bytes, no trailing newline, so the size is known exactly.
+    printf '0123456789' > "$probe"
 
-    local flag fmt
     for flag in -f -c; do
         case "$flag" in
-            -f) fmt='%m' ;;
-            -c) fmt='%Y' ;;
+            -f) fmt='%m %z' ;;
+            -c) fmt='%Y %s' ;;
         esac
         out="$(stat "$flag" "$fmt" "$probe" 2>/dev/null)" || continue
-        out="${out%%[!0-9]*}"
-        if [[ -n "$out" ]]; then
-            _NUT_CACHE_STAT="$flag"
-            printf '%s' "$flag"
-            return 0
-        fi
+        # `<mtime> <size>`, and the size has to be the one just written.
+        [[ "$out" == *' '* ]] || continue
+        [[ "${out%% *}" =~ ^[0-9]+$ ]] || continue
+        [[ "${out##* }" == "10" ]] || continue
+        _NUT_CACHE_STAT="$flag"
+        rc=0
+        break
     done
 
-    _NUT_CACHE_STAT="none"
-    return 1
+    rm -f "$probe"
+    [[ "$rc" -eq 0 ]] || { _NUT_CACHE_STAT="none"; return 1; }
+    printf '%s' "$_NUT_CACHE_STAT"
+    return 0
 }
 
 # The `<mtime> <size> <path>` format for whichever `stat` this is.

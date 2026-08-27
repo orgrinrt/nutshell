@@ -179,3 +179,92 @@ exit_with_status')"
     local out; out="$(_crp_run "$d")"
     assert_contains "$out" "⚠"
 }
+
+# --- a gate that examined nothing has not passed -----------------------------
+#
+# `./check` sourced `init` unchecked. `init` refuses below bash 4 with a
+# `return`, and a `return` returns to whoever sourced it: it cannot stop them.
+# So on macOS under `/bin/bash` the gate printed the refusal, ran its whole
+# body with no modules loaded, found nothing to run, and reported
+# `PASSED - All 0 checks passed` with exit 0. `release` gates on that command.
+#
+# Two independent guards, because either alone leaves a hole. The source line
+# stops this particular cause; the zero-check refusal stops every other way a
+# run can end up examining nothing.
+
+# A nutshell whose `init` refuses, and this repo's `check` beside it.
+_crp_refusing_nutshell() {
+    local d="$_CRP_TMP/refusing"
+    rm -rf "$d"; mkdir -p "$d"
+    cp -R "$_CRP_NUT/lib" "$_CRP_NUT/examples" "$d/" 2>/dev/null
+    cp "$_CRP_NUT/check" "$d/check"
+    # `init` that says no, the way it does on bash 3.
+    {
+        printf 'printf "nutshell needs bash 4.0 or newer.\\n" >&2\n'
+        printf 'return 1 2>/dev/null || exit 1\n'
+    } > "$d/init"
+    chmod +x "$d/check"
+    printf '%s' "$d"
+}
+
+#[test]
+it_refuses_rather_than_passing_when_nutshell_will_not_load() {
+    local d; d="$(_crp_refusing_nutshell)"
+    local out rc=0
+    out="$( (cd "$d" && ./check) 2>&1 )" || rc=$?
+
+    assert_ne "$rc" "0"
+    # And it must not have said the word that made this dangerous.
+    assert_eq "${out#*All 0 checks passed}" "$out"
+}
+
+#[test]
+it_fails_with_the_reason_rather_than_shell_noise() {
+    # The source guard on its own, and what it is actually worth.
+    #
+    # The zero-check refusal below turns this scenario into a failure too, and
+    # `set -u` often kills the unguarded run on an unbound variable before it
+    # gets anywhere, so "did it fail" cannot separate them. What separates them
+    # is *what the reader is told*.
+    #
+    # Guarded, the source line is the last thing that runs and the refusal is
+    # the whole output. Unguarded, the body runs on with no modules loaded and
+    # the reader gets `use: command not found` and `NUTSHELL_ROOT: unbound
+    # variable` on top of it, or, where nothing happens to be unbound, a
+    # summary saying everything passed.
+    local d; d="$(_crp_refusing_nutshell)"
+    local out
+    out="$( (cd "$d" && ./check) 2>&1 )" || true
+
+    assert_contains "$out" "bash 4.0 or newer"
+    assert_eq "${out#*unbound variable}" "$out" "it kept going with nothing loaded"
+    assert_eq "${out#*command not found}" "$out" "it kept going with nothing loaded"
+    assert_eq "${out#*checks passed}" "$out" "it reached a verdict with nothing loaded"
+}
+
+#[test]
+it_says_no_checks_ran_rather_than_all_of_them_passing() {
+    # The second guard on its own. A project that names no checks and runs no
+    # builtins reaches the summary with a working nutshell and nothing done.
+    local d="$_CRP_TMP/nothing-to-run"
+    mkdir -p "$d"
+    printf '[qa]\ncustom_checks = []\nrun_builtins = false\n' > "$d/nut.toml"
+
+    local out rc=0
+    out="$(_crp_run "$d")" || rc=$?
+
+    assert_ne "$rc" "0"
+    assert_contains "$out" "no checks ran"
+}
+
+#[test]
+it_still_passes_a_project_that_has_a_check_and_it_succeeds() {
+    # The control for both. A refusal that fired on every run would satisfy the
+    # two above and make the gate useless.
+    local d; d="$(_crp_project ok-run 'exit 0')"
+    local out rc=0
+    out="$(_crp_run "$d")" || rc=$?
+
+    assert_eq "$rc" "0"
+    assert_contains "$out" "PASSED"
+}

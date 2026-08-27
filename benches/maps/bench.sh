@@ -1,41 +1,29 @@
 #!/usr/bin/env bash
 # =============================================================================
-# nutshell/tools/assoc-array-report - What a map costs without bash arrays
+# nutshell/benches/maps - What a map costs without bash associative arrays
 # =============================================================================
 #
-# POSIX sh has no associative arrays. nutshell uses them in the places that
-# decide how fast it is: the config cache, the toolchain store tables, the
-# attribute tables, and the file-line table the QA checks read. So "make
-# nutshell POSIX" has a price, and the price is a number rather than an
-# opinion. This is the number.
+# POSIX sh has no associative arrays. nutshell uses them where they decide how
+# fast it is: the config cache, the toolchain tables, the attribute tables, and
+# the file-line table the QA checks read. So "make nutshell POSIX" has a price,
+# and the price is a number rather than an opinion.
 #
-# **A report, not a gate.** There is no threshold anybody can justify here; the
-# decision it feeds is a design one.
-#
-# **Two arms are not maps and are labelled so in the table.** `slots by index`
-# and `slots by stride` are what a map becomes once the key has already been
-# resolved: the caller holds the index. They belong here because the gap
-# between them and the arms beside them prices the key lookup, which is the
-# thing a design would be trading away. They are not alternatives to
-# `declare -A` and the table must not read as though they were.
-#
-# **This is not a bench.** nutshell has no bench harness, so this is an ad-hoc
-# measurement and is called that. It does what it can without one: every arm is
-# a real alternative somebody would actually reach for, the arms run on the
-# same generated input, the input is shaped like nutshell's own keys, and the
-# controls below refuse to print numbers the instrument cannot support.
+# **Two arms are not maps and are labelled so.** `slots by index` and `slots by
+# stride` are what a map becomes once the key has already been resolved and the
+# caller holds the index. They are here because the gap between them and the
+# arms beside them prices the key lookup, which is the thing a design would be
+# trading away. They are not alternatives to `declare -A`.
 #
 # The size defaults to the largest real table: `_PAD_LINES` in the docs check
-# holds one entry per line of source, which on this library is 9606 across 24
-# files. The keys are the real shape too, `<path>:<n>`, because two of the arms
-# cannot take a key with a slash or a colon in it and the encoding that fixes
-# that is part of what they cost.
+# holds one entry per line of source, 9606 across 24 files. The keys are the
+# real shape too, `<path>:<n>`, because two arms cannot take a key with a slash
+# or a colon in it and the encoding that fixes that is part of what they cost.
 #
 # Usage:
-#   tools/assoc-array-report [entries] [lookups]
+#   ./bench maps [entries] [lookups]
 # =============================================================================
 
-set -uo pipefail
+use bench
 
 ENTRIES="${1:-2000}"
 LOOKUPS="${2:-500}"
@@ -346,156 +334,39 @@ arm_hand_rolled_hash() {
     printf '%s' "$last"
 }
 
+
 # -----------------------------------------------------------------------------
-# Running them
+# The bench
 # -----------------------------------------------------------------------------
 
-# One arm, run several times, reported as its best and its spread.
-#
-# A single timing of a 5ms arm is not a measurement. Observed on this machine,
-# four consecutive runs of the same arm at the same size: 5, 5, 35, 5. The
-# ratio column then read 160%, 160%, 25%, 180% for the arm beside it, and the
-# old control passed every time, because it only asked whether *any* arm
-# differed from the first by a millisecond across a set spanning 5ms to 3s.
-#
-# The minimum is the estimator rather than the mean: every source of noise here
-# adds time and none removes it, so the fastest run is the one least disturbed.
-# The spread is kept and printed, because a number without one cannot be
-# compared against another number.
-_REPEATS="${ASSOC_REPEATS:-7}"
+_generate
 
-_time_once() {
-    local fn="$1" start end
-    start="$(date +%s%N 2>/dev/null)" || return 1
-    "$fn" >/dev/null
-    end="$(date +%s%N 2>/dev/null)" || return 1
-    printf '%s' "$(( (end - start) / 1000000 ))"
-}
+# Every arm prints the value it last found, which is how they are compared. An
+# arm whose encoding collides two keys answers differently, and the harness
+# then refuses the whole run rather than reporting that arm as the fastest.
+_answer_of() { "$1"; }
 
-# Sets _ARM_BEST and _ARM_WORST.
-_measure() {
-    local fn="$1" i t
-    _ARM_BEST=""; _ARM_WORST=""
-    for (( i = 0; i < _REPEATS; i++ )); do
-        t="$(_time_once "$fn")" || return 1
-        [[ -z "$_ARM_BEST"  || "$t" -lt "$_ARM_BEST"  ]] && _ARM_BEST="$t"
-        [[ -z "$_ARM_WORST" || "$t" -gt "$_ARM_WORST" ]] && _ARM_WORST="$t"
-    done
-    return 0
-}
+bench_case "What a map costs without bash associative arrays"
+bench_size "$ENTRIES"
+bench_verify _answer_of
 
-main() {
-    _generate
+# The first is the baseline. Ceilings are stated per arm rather than hidden,
+# because which arms have one at all is itself the result: the two that address
+# a key directly have none.
+bench_arm "bash declare -A"                  arm_bash_assoc
+bench_arm "eval names, encoded via subshell" arm_eval_names        4000
+bench_arm "eval names, encoded in place"     arm_eval_names_nofork
+bench_arm "one string, scanned"              arm_one_string         800
+bench_arm "one file, read in shell"          arm_one_file          4000
+bench_arm "one file per key"                 arm_dir_table
+bench_arm "one file per key, in memory"      arm_memfs_table        0 "no memory filesystem here"
+bench_arm "slots by index (not a map)"       arm_slots_by_index
+bench_arm "slots by stride (not a map)"      arm_slots_by_stride
+bench_arm "hash table rolled by hand"        arm_hand_rolled_hash  4000
 
-    printf 'What a map costs without bash associative arrays\n\n'
-    printf '  entries   %s\n' "$ENTRIES"
-    printf '  lookups   %s hits and %s misses\n' "$LOOKUPS" "$LOOKUPS"
-    printf '  keys      the real shape, <path>:<n>\n'
-    printf '  bash      %s\n' "${BASH_VERSION:-unknown}"
-    printf '  host      %s %s\n\n' "$(uname -s)" "$(uname -m)"
+bench_run || exit 1
 
-    local -a names=(arm_bash_assoc arm_eval_names arm_eval_names_nofork
-                    arm_one_string arm_one_file arm_dir_table arm_memfs_table
-                    arm_slots_by_index arm_slots_by_stride arm_hand_rolled_hash)
-    local -a labels=("bash declare -A" "eval names, encoded via subshell"
-                     "eval names, encoded in place" "one string, scanned"
-                     "one file, read in shell" "one file per key"
-                     "one file per key, in memory"
-                     "slots by index (not a map)"
-                     "slots by stride (not a map)"
-                     "hash table rolled by hand")
-    # Above these sizes an arm takes long enough that running it stops being
-    # worth the wait. Stated per arm rather than hidden, because which arms
-    # have a ceiling at all is itself the result: the two that address a key
-    # directly have none.
-    local -a ceiling=(0 4000 0 800 4000 0 0 0 0 4000)
-    local -a best=() worst=()
-    local i t
-
-    for (( i = 0; i < ${#names[@]}; i++ )); do
-        if (( ceiling[i] > 0 && ENTRIES > ceiling[i] )); then
-            best+=("-"); worst+=("-")
-            continue
-        fi
-        _measure "${names[$i]}" || {
-            printf 'no nanosecond clock here; cannot measure\n' >&2; return 1; }
-        best+=("$_ARM_BEST"); worst+=("$_ARM_WORST")
-    done
-
-    # The control that matters most: every arm has to give the same answers.
-    # Comparing a fast wrong one against a slow right one is not a comparison,
-    # and an arm whose encoding collides two keys would look excellent.
-    local want="" got=""
-    for (( i = 0; i < ${#names[@]}; i++ )); do
-        [[ "${best[$i]}" == "-" ]] && continue
-        got="$("${names[$i]}")"
-        [[ "$got" == "SKIP" ]] && continue
-        if [[ -z "$want" ]]; then want="$got"; continue; fi
-        if [[ "$got" != "$want" ]]; then
-            printf 'arms disagree: %s answered %q where the first answered %q\n' \
-                "${labels[$i]}" "$got" "$want" >&2
-            return 1
-        fi
-    done
-
-    # And that the input is distinct enough to be worth answering.
-    local -A seen=(); local n
-    for (( i = 0; i < ENTRIES; i++ )); do
-        n="${KEYS[$i]//[^A-Za-z0-9_]/_}"
-        seen["$n"]=1
-    done
-    if (( ${#seen[@]} != ENTRIES )); then
-        printf 'the name encoding collides: %s keys became %s names\n' \
-            "$ENTRIES" "${#seen[@]}" >&2
-        return 1
-    fi
-
-    # The baseline has to be steady enough to divide by. This is the control
-    # the old one was missing: it compared arms to each other and never asked
-    # whether the number it divided by meant anything.
-    local base_best="${best[0]}" base_worst="${worst[0]}"
-    if [[ "$base_best" == "-" ]] || (( base_best <= 0 )); then
-        printf 'the baseline did not measure; nothing below can be a ratio\n' >&2
-        return 1
-    fi
-    if (( base_worst > base_best * 2 )); then
-        printf 'the baseline moved from %sms to %sms across %s runs.\n' \
-            "$base_best" "$base_worst" "$_REPEATS" >&2
-        printf 'this machine is too noisy right now for a ratio to mean anything.\n' >&2
-        printf 'raw times only:\n\n' >&2
-        for (( i = 0; i < ${#names[@]}; i++ )); do
-            printf '  %-34s %6s..%-6s\n' "${labels[$i]}" "${best[$i]}" "${worst[$i]}"
-        done
-        return 1
-    fi
-
-    printf '  %-34s %8s %9s  %s\n' "arm" "best ms" "spread" "against bash"
-    for (( i = 0; i < ${#names[@]}; i++ )); do
-        if [[ "${best[$i]}" == "-" ]]; then
-            printf '  %-34s %8s %9s  %s\n' "${labels[$i]}" "-" "-" "not run at this size"
-            continue
-        fi
-        if [[ "$("${names[$i]}")" == "SKIP" ]]; then
-            printf '  %-34s %8s %9s  %s\n' "${labels[$i]}" "-" "-" "no memory filesystem here"
-            continue
-        fi
-        # A ratio only where the two ranges do not overlap. Where they do, the
-        # arms are not distinguishable at this size and saying so is the
-        # honest answer.
-        local rel
-        if (( best[i] > base_worst )) || (( worst[i] < base_best )); then
-            rel="$(( best[i] * 100 / base_best ))%"
-        else
-            rel="within the noise"
-        fi
-        printf '  %-34s %8s %9s  %s\n' \
-            "${labels[$i]}" "${best[$i]}" "${best[$i]}..${worst[$i]}" "$rel"
-    done
-
-    printf '\n'
-    printf 'The real table this stands in for is %s entries, and the arms that\n' "$REAL_TABLE"
-    printf 'search rather than address grow with it. Run with a larger first\n'
-    printf 'argument to see that; the default is small enough to finish.\n'
-}
-
-main "$@"
+printf '\n'
+printf 'The real table this stands in for is %s entries, and the arms that\n' "$REAL_TABLE"
+printf 'search rather than address grow with it. Run with a larger first\n'
+printf 'argument to see that; the default is small enough to finish.\n'

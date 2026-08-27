@@ -12,7 +12,10 @@
 # =============================================================================
 
 set -uo pipefail
-. "${BASH_SOURCE[0]%/*}/init"
+# `|| exit 1` for the reason every example in the readme carries it: `init`
+# refuses below bash 4 with a `return`, and a `return` cannot stop its caller.
+# shellcheck source=/dev/null
+. "${BASH_SOURCE[0]%/*}/init" || exit 1
 
 use test log
 

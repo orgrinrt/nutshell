@@ -22,7 +22,7 @@
 # key written after one belongs to that table, which is a quiet way to have a
 # pin that is never read.
 #
-#   nutshell_version = "0.3.0"    the released form
+#   nutshell_version = "0.4.0"    the released form
 #   nutshell_branch  = "dev"      when the version you need has no release yet
 #
 # Same spelling mockspace.toml uses for the same job, so a reader who knows one

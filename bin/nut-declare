@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nut-declare - Write the lib.nut a library was already implying
+# =============================================================================
+#
+# Before lib.nut, a module name was turned into a file by trying three layouts
+# in order and taking whichever answered. That is a rule, so it can be run
+# backwards: every file those layouts would have found, under the name that
+# would have found it. What this writes therefore resolves exactly what
+# resolved yesterday, which is the point. It is a migration, not a redesign.
+#
+# It never overwrites. A lib.nut that exists is the library's own statement
+# about itself and this has no business editing it; the diff against a fresh
+# one is printed instead, which is also how you check a hand-edited file still
+# covers everything.
+#
+# Usage:
+#   nut-declare                 write ./lib.nut
+#   nut-declare path/to/lib     write path/to/lib/lib.nut
+#   nut-declare --check         print what is missing, write nothing
+#   nut-declare --print         print it, write nothing
+#
+# A file under impl/ is marked internal: those are picked at runtime by the
+# module above them and sourced directly, so they were never names anybody
+# used, and a consumer reaching one would be reaching past the thing whose
+# whole job is to choose between them.
+# =============================================================================
+
+set -uo pipefail
+
+MODE="write"
+ROOT="."
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check) MODE="check"; shift ;;
+        --print) MODE="print"; shift ;;
+        -h|--help) sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+        -*) printf 'nut-declare: no such option %s\n' "$1" >&2; exit 2 ;;
+        *)  ROOT="$1"; shift ;;
+    esac
+done
+
+ROOT="${ROOT%/}"
+[[ -d "$ROOT" ]] || { printf 'nut-declare: %s is not a directory\n' "$ROOT" >&2; exit 1; }
+
+# Every module file, under the name the old resolver would have reached it by.
+# The three layouts, in the order it tried them, so a file findable two ways
+# gets the name that would have won.
+_scan() {
+    local f rel name
+    # find, not a list of globs at fixed depths. A glob per level means a
+    # module one level deeper than anyone wrote a glob for is invisible, and
+    # invisible to the check as well, because both read the same list. That is
+    # how text::impl::combo::grep_sed came to be undeclared while --check
+    # reported the library complete.
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        rel="${f#$ROOT/}"
+        # nutshell's own vendored copy is not part of the library declaring it.
+        [[ "$rel" == */nutshell/* ]] && continue
+        name="${rel#lib/}"; name="${name#libs/}"
+        name="${name%.sh}"
+        # A file at the root is named by its stem, with no directory to strip.
+        name="${name//\//::}"
+        # A file under impl/ is chosen at runtime by the module above it and
+        # sourced directly. It was never a module anybody names, and declaring
+        # it public would invite a consumer to reach past the thing whose job
+        # is to pick between them.
+        if [[ "$rel" == */impl/* ]]; then
+            printf '%s\t%s\tinternal\n' "$name" "$rel"
+        else
+            printf '%s\t%s\t\n' "$name" "$rel"
+        fi
+    done < <({
+        find "$ROOT/lib" "$ROOT/libs" -type f -name '*.sh' 2>/dev/null
+        # And a module flat at the library root, which the resolver tries last
+        # and the scan did not try at all. A migration that drops a module the
+        # resolver can reach, and a check that then certifies the drop, are one
+        # bug counted twice.
+        find "$ROOT" -maxdepth 1 -type f -name '*.sh' 2>/dev/null
+    } | sort) | sort -u
+}
+
+# A name more than one file answers to. The resolver picks by precedence and
+# the declaration would freeze whichever came out of sort, so it is reported
+# rather than silently resolved.
+_dupes() {
+    _scan | awk -F'\t' '{ print $1 }' | sort | uniq -d
+}
+
+# Every name a declaration holds. One parser for the checker, so it and the
+# resolver cannot disagree about what the file says.
+_lib_nut_modules_of() {
+    local r="$1" n _rest
+    [[ -r "${r}/lib.nut" ]] || return 1
+    while read -r n _rest || [[ -n "$n" ]]; do
+        [[ -z "$n" || "${n:0:1}" == "#" ]] && continue
+        printf '%s\n' "$n"
+    done < "${r}/lib.nut"
+}
+
+_render() {
+    local name rel
+    printf '# lib.nut - the modules %s provides.\n' "$(basename "$(cd "$ROOT" && pwd)")"
+    printf '#\n'
+    printf '# One module per line: the name a `use` writes, then the file.\n'
+    printf '# Read before any module is loaded, so it stays a format that needs\n'
+    printf '# no parser: the TOML one is itself a module.\n'
+    printf '\n'
+    local vis
+    while IFS=$'\t' read -r name rel vis; do
+        [[ -n "$name" ]] || continue
+        if [[ -n "$vis" ]]; then printf '%-24s %-28s %s\n' "$name" "$rel" "$vis"
+        else printf '%-24s %s\n' "$name" "$rel"; fi
+    done < <(_scan)
+}
+
+case "$MODE" in
+    print) _render ;;
+    dupes) _dupes ;;
+    check)
+        if [[ ! -r "$ROOT/lib.nut" ]]; then
+            printf '%s has no lib.nut. %d modules would be declared:\n\n' \
+                "$ROOT" "$(_scan | grep -c .)"
+            _scan | awk -F'\t' '{ printf "  %s\n", $1 }'
+            exit 1
+        fi
+        # Declared but absent, and present but undeclared. Both are errors a
+        # run would only have found by reaching the module.
+        rc=0
+        # The same parse the resolver does: leading space skipped, a comment is
+        # a comment wherever it starts, a missing newline on the last line does
+        # not lose it, and a line that is not a declaration is reported rather
+        # than crashing on an unset positional.
+        while read -r dname dfile dvis || [[ -n "$dname" ]]; do
+            [[ -z "$dname" || "${dname:0:1}" == "#" ]] && continue
+            if [[ -z "$dfile" ]]; then
+                printf 'not a declaration: %s\n' "$dname"; rc=1; continue
+            fi
+            case "${dvis:-}" in
+                ""|internal) ;;
+                *) printf 'unknown visibility on %s: %s\n' "$dname" "$dvis"; rc=1 ;;
+            esac
+            if [[ ! -f "$ROOT/$dfile" ]]; then
+                printf 'declared but missing: %s -> %s\n' "$dname" "$dfile"; rc=1
+            fi
+        done < "$ROOT/lib.nut"
+        while IFS=$'\t' read -r name rel _vis; do
+            # Compared as a word, not matched as a pattern. A module named
+            # `fs.impl` would otherwise match `fsXimpl` and be reported as
+            # declared when it is not.
+            _lib_nut_modules_of "$ROOT" | grep -qxF "$name" \
+                || { printf 'present but undeclared: %s (%s)\n' "$name" "$rel"; rc=1; }
+        done < <(_scan)
+        # Not `local`: this is a case arm at file scope, where `local` is a
+        # fatal error that `bash -n` does not catch.
+        d="$(_dupes)"
+        if [[ -n "$d" ]]; then
+            printf 'two files answer to one name: %s\n' "$(tr '\n' ' ' <<<"$d")"
+            rc=1
+        fi
+        (( rc == 0 )) && printf '%s: every module declared, every declaration present\n' "$ROOT"
+        exit "$rc" ;;
+    write)
+        if [[ -e "$ROOT/lib.nut" ]]; then
+            printf '%s/lib.nut already exists. Not touching it.\n\n' "$ROOT"
+            printf 'What a fresh one would say, against what is there:\n\n'
+            diff -u "$ROOT/lib.nut" <(_render) && printf '  (no difference)\n'
+            exit 0
+        fi
+        d="$(_dupes)"
+        if [[ -n "$d" ]]; then
+            printf 'Two files answer to the same name, so the declaration would\n'
+            printf 'freeze one of them and hide the other:\n\n'
+            printf '%s\n' "$d" | sed 's/^/  /'
+            printf '\nMove or rename one, then run this again.\n'
+            exit 1
+        fi
+        _render > "$ROOT/lib.nut"
+        printf 'wrote %s/lib.nut, %d modules\n' "$ROOT" "$(_scan | grep -c .)" ;;
+esac

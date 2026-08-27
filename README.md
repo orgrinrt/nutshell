@@ -9,47 +9,148 @@ macOS ships 3.2 at `/bin/bash`, so install a current bash there first.
 
 ## Installation
 
-Add nutshell to your project:
+One nutshell on the machine, shared by everything that uses it. That is the
+good state, and the two lines below are the whole of it:
 
 ```bash
-# Option A: Git submodule (recommended)
-git submodule add https://github.com/orgrinrt/nutshell.git scripts/lib/nutshell
-
-# Option B: Download a source archive (releases ship no built artifacts).
-# 0.3.0 is the latest tag; check the releases page for newer ones.
-mkdir -p scripts/lib/nutshell
-curl -L https://github.com/orgrinrt/nutshell/archive/refs/tags/0.3.0.tar.gz \
-    | tar -xz --strip-components=1 -C scripts/lib/nutshell
+git clone https://github.com/orgrinrt/nutshell.git
+./nutshell/install
 ```
 
-That's it. No global install required. Nutshell lives in your project.
+`install` links the interpreter onto PATH, so a script can say
+`#!/usr/bin/env nutshell` and a project can find it without carrying a copy.
 
-Optionally, link the interpreter onto PATH so standalone scripts can use the
-`#!/usr/bin/env nutshell` shebang:
+### When a project needs a version the machine does not have
+
+Copy `find-nutshell` into the project and let it resolve. It is one file, it needs no nutshell module, and it is what has to be on disk
+before anything else can be found. It does use `git`, `date`, `uname` and the
+ordinary file tools, since fetching is what it is for:
 
 ```bash
-./scripts/lib/nutshell/install
+# in the project
+curl -LO https://raw.githubusercontent.com/orgrinrt/nutshell/main/find-nutshell
 ```
+
+```bash
+#!/usr/bin/env bash
+HERE="${BASH_SOURCE[0]%/*}"
+. "$HERE/find-nutshell"
+nutshell_find "$HERE" dev || exit 1    # a version, or a branch
+. "$NUTSHELL_INIT" || exit 1
+```
+
+It takes what the caller named, then what is installed if that satisfies, then
+the store, then fetches into the store. A pin naming a branch means that
+branch's head, asked at most once an hour.
+
+### Do not carry a copy in the tree
+
+A nutshell inside a project is a second version that drifts from the machine's
+in silence, and there is no moment where that becomes visible: it simply
+resolves modules that existed when it was added and none since, and the error
+names a missing function rather than a stale copy. It happened twice in one day
+in the projects this was written for, and both of them dropped theirs.
+
+A vendored copy at `<project>/lib/nutshell` is still the last thing
+`nutshell_find` tries, and it is there for one case: a machine with no network
+that is being rescued. Not as a way to install.
+
+### The store
+
+Fetched dependencies live in one place shared by every project on the machine,
+keyed by url and commit, so two projects on the same commit of the same library
+have one copy of it between them and neither carries a dependency tree of its
+own.
+
+The interpreter is one of those dependencies rather than a special case.
+Versions sit side by side, a tool asks for the one it needs, and a version that
+is not on the machine yet is fetched at its tag rather than being a failure. A
+machine carrying four of them is the ordinary state.
+
+```
+<store>/
+  externs/       one directory per url and commit
+  toolchains/    one directory per version
+  toolchains/branches/<ref>/<revision>/
+```
+
+`XDG_DATA_HOME` names the store wherever it is set, on any platform. With it
+unset the store is `~/.local/share/nutshell` on Linux and
+`~/Library/Application Support/nutshell` on macOS, which is where each puts
+application data. The point of both is that neither is the cache directory.
+
+`NUTSHELL_STORE` moves the root, `NUTSHELL_TOOLCHAINS` just the toolchains, and
+`NUTSHELL_REMOTE` says where a fetch goes. Under the data directory and not the
+cache directory, because a cache is something a cleaner is entitled to delete
+and this is where every project's dependencies actually live.
+
+A pin that names a version gets a directory named for that version, and one
+that names a branch gets a directory named for the revision that branch
+resolved to. The second is what makes the store safe to share: a revision
+directory is written once and never replaced, so somebody else's push cannot
+delete the tree a running interpreter is reading out of.
+
+The store used to sit under the cache directory. Nothing migrates it: what was
+there is reproducible, so the first resolution after upgrading fetches into the
+new place and the old directory is left for you to delete. It is
+`${XDG_CACHE_HOME:-~/.cache}/nutshell` on Linux and
+`~/Library/Caches/nutshell` on macOS.
+
+A pin that names a version resolves in this order: `NUTSHELL_HOME` if it is
+set, then an installed interpreter if it satisfies what the tool asked for,
+then the store, then a fetch into the store, then whatever the project has
+vendored. One shared interpreter that everything uses is still the good state;
+the store is for the tools that cannot use it, and the vendored copy is the
+last resort for a machine with no network.
+
+A pin that names a branch is a different question and takes a different route:
+`NUTSHELL_HOME`, then the branch's head, then vendored. It does not consult the
+installed interpreter or the version store, because neither can answer it. A
+branch pin is not a floor, it is an identity: `dev` means the head of dev
+today, and nothing already on the machine can be assumed to be that. The remote
+is asked at most once an hour, and when it cannot be reached the last known
+revision runs and says which one it is.
 
 ---
 
 ## Quick Start
 
-Every script that uses nutshell needs **one line** at the top:
+With nutshell installed, a script needs no boilerplate at all. The shebang is
+the whole of it:
 
 ```bash
-#!/usr/bin/env bash
-. "${0%/*}/lib/nutshell/init"
+#!/usr/bin/env nutshell
 
 use os log
 
-log_info "Hello from nutshell!"
+log_info "hello"
 ```
 
-The `. "${0%/*}/lib/nutshell/init"` line is the **only boilerplate**. Copy it exactly.
+For a script that has to run where nutshell may not be installed, source the
+resolver instead and let it find one:
 
-> **What does `${0%/*}` mean?**  
-> It's bash for "directory containing this script". It ensures the script works regardless of where it's called from.
+```bash
+#!/usr/bin/env bash
+HERE="${BASH_SOURCE[0]%/*}"
+. "$HERE/find-nutshell"
+nutshell_find "$HERE" dev || exit 1
+. "$NUTSHELL_INIT" || exit 1
+
+use os log
+
+log_info "hello"
+```
+
+Both source lines end in `|| exit 1`, and that is not decoration. Sourcing
+`init` can fail: on a bash older than 4 it refuses, and a `return` inside a
+sourced file returns *to* the caller rather than stopping it. Without the
+check, a script prints the refusal and then runs its whole body with nothing
+loaded, reporting success.
+
+That second form is what a project carries when it pins a version, and
+`find-nutshell` is the only file it needs beside its own source. There is no
+third form: a copy of nutshell in the tree is the arrangement the section above
+tells you not to adopt.
 
 ---
 
@@ -57,7 +158,7 @@ The `. "${0%/*}/lib/nutshell/init"` line is the **only boilerplate**. Copy it ex
 
 ```
 nutshell/
-├── init                    # Source this: . "${0%/*}/lib/nutshell/init"
+├── init                    # what `nutshell` and `find-nutshell` source
 ├── check                   # Main QA entry point (executable)
 ├── bin/
 │   └── nutshell           # Interpreter for #!/usr/bin/env nutshell
@@ -116,7 +217,7 @@ Each script is independent. Each one has the init line:
 ```bash
 #!/usr/bin/env bash
 # scripts/build.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT" || exit 1
 
 use os log fs
 
@@ -134,7 +235,7 @@ One script bootstraps, others use the clean shebang:
 ```bash
 #!/usr/bin/env bash
 # scripts/main.sh - The entry point
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT" || exit 1
 
 # PATH is already set by init, so internal scripts can use nutshell shebang
 "${0%/*}/internal/build.sh" "$@"
@@ -154,14 +255,19 @@ log_info "Building..."
 
 ## Integrating with Task Runners
 
-Nutshell scripts work with any task runner. The scripts bootstrap themselves:
+Nutshell scripts work with any task runner. The scripts bootstrap themselves,
+so the runner does not have to know where nutshell is.
+
+`nutshell-check` below is the project's own one-line wrapper: it resolves
+nutshell the same way the tool does and hands over. `check` in this repository
+is that wrapper.
 
 **deno.json:**
 ```json
 {
   "tasks": {
     "build": "./scripts/build.sh",
-    "check": "./scripts/lib/nutshell/check"
+    "check": "nutshell-check"
   }
 }
 ```
@@ -171,7 +277,7 @@ Nutshell scripts work with any task runner. The scripts bootstrap themselves:
 {
   "scripts": {
     "build": "./scripts/build.sh",
-    "check": "./scripts/lib/nutshell/check"
+    "check": "nutshell-check"
   }
 }
 ```
@@ -182,7 +288,7 @@ build:
 	./scripts/build.sh
 
 check:
-	./scripts/lib/nutshell/check
+	nutshell-check
 ```
 
 Anyone can run `deno task build` or `npm run check` without knowing nutshell exists.
@@ -208,7 +314,9 @@ use os log json http
 | `text` | Text processing (`text_grep`, `text_replace`, `text_count_matches`) |
 | `json` | JSON parsing (`json_get`, `json_set`, `json_valid`, `json_pretty`) |
 | `http` | HTTP requests (`http_get`, `http_post`, `http_download`) |
-| `toml` | TOML parsing (`toml_get`, `toml_get_or`, `toml_is_true`) |
+| `toml` | TOML reading (`toml_get`, `toml_get_or`, `toml_is_true`, `toml_array`) |
+| `toml::write` | Changing a TOML file in place (`toml_set`, `toml_unset`) |
+| `toml::json` | TOML as JSON (`toml_to_json`) |
 | `prompt` | User prompts (`prompt_confirm`, `prompt_input`, `prompt_select`) |
 | `color` | Terminal colors (`color_red`, `color_green`, `color_bold`) |
 | `validate` | Validation (`is_set`, `is_integer`, `require_command`) |
@@ -217,6 +325,9 @@ use os log json http
 | `test` | Test harness (`assert_eq`, `test_run`, `test_summary`) |
 | `attr` | Attributes on definitions (`attr_has`, `attr_arg`, `attr_find`) |
 | `cli` | Subcommand dispatch with did-you-mean (`cli_command`, `cli_run`) |
+| `srcfile` | A source file read once (`nut_load_file`, `nut_defined_at`, `nut_body_of`) |
+| `checkcache` | A check's answer kept until it can change (`nut_cache_hit`, `nut_cache_read`) |
+| `priv` | Elevating for one step and stepping back (`priv_run`, `priv_as_user`) |
 | `git` | Reading a repository (`git_trunk`, `git_changed_files`, `git_trailers`) |
 | `modgraph` | The module graph and its violations (`modgraph_build`, `modgraph_audit`) |
 | `extern` | Libraries from elsewhere (`extern_path`, `extern_resolve`) |
@@ -323,7 +434,7 @@ Three namespaces, and they answer three different questions:
 | Written | Resolves to |
 |---|---|
 | `use log` | nutshell's own module |
-| `use shebang::diagnostics/findings` | a module in a library declared in `nut.toml` |
+| `use shebang::tui::term` | a module in a library declared in `nut.toml` |
 | `use super::mine` | `lib/mine.sh` in **this** unit, found from its `nut.toml` |
 
 `super::` is anchored on the manifest rather than on the running script, so a
@@ -387,15 +498,15 @@ ref = "main"
 and a module inside it is reached by namespacing the `use`:
 
 ```bash
-use shebang::diagnostics/findings
+use shebang::tui::term
 ```
 
 Declared in the manifest because a script that fetches its own dependencies
 decides for the whole project where code comes from, and does it somewhere
 nobody looks. One file answers "what does this project pull in".
 
-Resolution is cached globally by url and ref, so several projects naming the
-same ref share one checkout and the second pays nothing.
+Resolution goes through the store, so several projects naming the same commit
+share one checkout and the second pays nothing.
 
 `nut.lock` records the commit each dependency resolved to, and is written on
 first resolution and obeyed from then on. `ref = "main"` names a branch, and a
@@ -411,7 +522,7 @@ happens.
 ```bash
 #!/usr/bin/env bash
 # scripts/build.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT" || exit 1
 
 use os log deps fs
 
@@ -438,7 +549,7 @@ log_success "Build complete!"
 ```bash
 #!/usr/bin/env bash
 # scripts/fetch-data.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT" || exit 1
 
 use log http json
 
@@ -461,7 +572,7 @@ fi
 ```bash
 #!/usr/bin/env bash
 # scripts/install.sh
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT" || exit 1
 
 use log prompt fs color
 
@@ -489,13 +600,13 @@ log_success "Installation complete!"
 Every script needs this line:
 
 ```bash
-. "${0%/*}/lib/nutshell/init"
+. "$NUTSHELL_INIT" || exit 1
 ```
 
 Breaking it down:
 - `.` sources a file (same as `source`)
 - `"${0%/*}"` is the directory containing this script
-- `/lib/nutshell/init` is the path to nutshell's init file
+- `find-nutshell` is the resolver a project carries when it pins a version
 
 This works regardless of:
 - Where the script is called from (`./scripts/build.sh` or `scripts/build.sh`)
@@ -559,17 +670,27 @@ See `examples/configs/` for configuration templates:
 
 ## Why This Design?
 
-**Q: Why not a global install?**  
-A: Nutshell is designed to be bundled with your project. When someone clones your repo and runs `npm run build`, it should just work, with no "please install nutshell first".
+**Q: Why a global install rather than a copy in the project?**  
+A: Because a copy in the project is a second version, and it drifts from the
+machine's without saying so. It resolves the modules that existed when it was
+added and none added since, so what you get is an error naming a missing
+function rather than one naming a stale copy. That happened twice in one day in
+the projects this was written for.
 
-**Q: Why not `#!/usr/bin/env nutshell` everywhere?**  
-A: That requires `nutshell` to be on PATH. `./install` links it there in one step, but the source line works on a fresh clone with no setup at all, so it stays the default.
+**Q: Then what about a fresh clone with nothing installed?**  
+A: `find-nutshell` is for that. One file in the project, depending on nothing,
+which finds an installed one or fetches the version the project pins. It is
+what the second Quick Start form uses.
 
-**Q: Can I use the pretty shebang?**  
-A: Yes. The `init` file adds nutshell's `bin/` to PATH, so any scripts called after sourcing init can use `#!/usr/bin/env nutshell`, and `./install` makes it resolve everywhere else. This suits internal scripts in larger script suites.
+**Q: Can I use `#!/usr/bin/env nutshell` everywhere?**  
+A: Yes, once `./install` has linked it onto PATH, and that is the shape to
+prefer. `init` also puts nutshell's `bin/` on PATH, so anything a script starts
+after sourcing it can use the shebang without the install.
 
 **Q: What if I have many scripts?**  
-A: Each standalone script needs the init line. It's one line of boilerplate per file. For large script suites, consider Pattern 2 (entry point + internal scripts).
+A: Then the shebang is worth the one-time install: no boilerplate per file at
+all. Where that is not available, an entry point resolves once and everything
+it calls inherits PATH, which is Pattern 2 below.
 
 ---
 

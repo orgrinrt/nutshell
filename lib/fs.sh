@@ -250,33 +250,39 @@ fs_basename_no_ext() {
 # Get file size in bytes
 # Usage: fs_size "/path/to/file" -> "12345"
 fs_size() {
+    nut_lazy_guard fs_size || return 1
+    local _NUT_LAZY_fs_size=1
     # First call: decide which implementation to use
     local impl=""
     
     if deps_has "stat"; then
         local variant="${_TOOL_VARIANT[stat]:-unknown}"
         case "$variant" in
-            gnu)     impl="stat_gnu.sh" ;;
-            bsd)     impl="stat_bsd.sh" ;;
+            gnu)     impl="stat_gnu" ;;
+            bsd)     impl="stat_bsd" ;;
             *)
                 # Unknown variant; try perl if available
                 if deps_has "perl"; then
-                    impl="perl_stat.sh"
+                    impl="perl_stat"
                 else
                     # Guess based on OS
                     case "$(uname -s)" in
-                        Darwin*) impl="stat_bsd.sh" ;;
-                        *)       impl="stat_gnu.sh" ;;
+                        Darwin*) impl="stat_bsd" ;;
+                        *)       impl="stat_gnu" ;;
                     esac
                 fi
                 ;;
         esac
     elif deps_has "perl"; then
-        impl="perl_stat.sh"
+        impl="perl_stat"
     fi
     
     if [[ -n "$impl" ]]; then
-        source "${_FS_IMPL_DIR}/${impl}"
+        # Named, not sourced by an assembled path. The resolver knows where
+        # the module is, loads it once however many callers arrive, and the
+        # declaration covers it; a hand-rolled `source` has none of that, and
+        # fails at the moment it is reached rather than before the run.
+        nut_reload "super::fs::impl::${impl}"
     else
         # No tool available
         fs_size() {
@@ -293,31 +299,37 @@ fs_size() {
 # Get file modification time (epoch seconds)
 # Usage: fs_mtime "/path/to/file" -> "1234567890"
 fs_mtime() {
+    nut_lazy_guard fs_mtime || return 1
+    local _NUT_LAZY_fs_mtime=1
     # First call: decide which implementation to use
     local impl=""
     
     if deps_has "stat"; then
         local variant="${_TOOL_VARIANT[stat]:-unknown}"
         case "$variant" in
-            gnu)     impl="stat_gnu.sh" ;;
-            bsd)     impl="stat_bsd.sh" ;;
+            gnu)     impl="stat_gnu" ;;
+            bsd)     impl="stat_bsd" ;;
             *)
                 if deps_has "perl"; then
-                    impl="perl_stat.sh"
+                    impl="perl_stat"
                 else
                     case "$(uname -s)" in
-                        Darwin*) impl="stat_bsd.sh" ;;
-                        *)       impl="stat_gnu.sh" ;;
+                        Darwin*) impl="stat_bsd" ;;
+                        *)       impl="stat_gnu" ;;
                     esac
                 fi
                 ;;
         esac
     elif deps_has "perl"; then
-        impl="perl_stat.sh"
+        impl="perl_stat"
     fi
     
     if [[ -n "$impl" ]]; then
-        source "${_FS_IMPL_DIR}/${impl}"
+        # Named, not sourced by an assembled path. The resolver knows where
+        # the module is, loads it once however many callers arrive, and the
+        # declaration covers it; a hand-rolled `source` has none of that, and
+        # fails at the moment it is reached rather than before the run.
+        nut_reload "super::fs::impl::${impl}"
     else
         fs_mtime() {
             echo "[ERROR] fs_mtime: no stat tool available" >&2

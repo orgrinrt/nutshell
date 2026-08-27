@@ -72,11 +72,13 @@ fi
 # `_JSON_IMPL` a decision taken once at load rather than a value the dispatch
 # reads, which is what lets a caller move it and lets the tests exercise all
 # three rather than whichever the machine happened to pick.
-readonly _JSON_IMPL_DIR="${BASH_SOURCE[0]%/*}/json/impl"
-
-deps_has jq && source "${_JSON_IMPL_DIR}/jq.sh"
-{ deps_has python3 || deps_has python; } && source "${_JSON_IMPL_DIR}/python.sh"
-deps_has perl && source "${_JSON_IMPL_DIR}/perl.sh"
+# Named, not sourced by a path this file assembles. A hand-rolled `source`
+# goes around the resolver, so the file is loaded again for every caller that
+# reaches it, the declaration does not cover it, and nothing can tell before
+# running that the path was wrong.
+deps_has jq                             && use super::json::impl::jq
+{ deps_has python3 || deps_has python; } && use super::json::impl::python
+deps_has perl                           && use super::json::impl::perl
 
 
 # -----------------------------------------------------------------------------

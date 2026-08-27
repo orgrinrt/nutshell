@@ -57,7 +57,15 @@ use toml xdg fs log validate
 # manifest is the right answer for it.
 _extern_manifest() {
     local start dir
-    for start in "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
+    # The file that wrote the `use`, first. NUTSHELL_SCRIPT_DIR is unset on
+    # purpose (a process that sources init would inherit an ancestor's), which
+    # left only PWD: so a tool installed on PATH and run from anywhere else
+    # could not find its own nut.toml, and every `use dep::x` in it failed.
+    #
+    # _NUT_ASKING_FROM is set per call by `use`, from BASH_SOURCE, so it says
+    # which unit is asking rather than which process was started. Same
+    # anchoring `super::` uses, for the same reason.
+    for start in "${_NUT_ASKING_FROM:-}" "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
         [[ -z "$start" ]] && continue
         dir="$start"
         while [[ "$dir" != "/" && -n "$dir" ]]; do
@@ -68,9 +76,22 @@ _extern_manifest() {
     return 1
 }
 
+# Where fetched dependencies live: one central, content-addressed store shared
+# by every project on the machine, the same arrangement pnpm and yarn 2 settled
+# on. Two projects on the same commit of the same dependency have one copy of
+# it between them, and a project tree carries no dependency of its own.
+#
+# Under data rather than cache, deliberately. A cache is something a cleaner is
+# entitled to delete at any moment; this is where the dependencies of every
+# project on the machine actually live, and losing it offline breaks all of
+# them at once. `NUTSHELL_STORE` overrides it.
 _extern_cache_root() {
+    if [[ -n "${NUTSHELL_STORE:-}" ]]; then
+        printf '%s/externs' "${NUTSHELL_STORE%/}"
+        return 0
+    fi
     xdg_set_app_name nutshell
-    printf '%s/externs' "$(xdg_app_cache)"
+    printf '%s/externs' "$(xdg_app_data)"
 }
 
 # -----------------------------------------------------------------------------
@@ -114,9 +135,11 @@ extern_lock_write() {
 
     tmp="${lock}.tmp.$$"
     {
-        printf '# nut.lock - resolved dependency commits. Generated; commit it.\n'
+        printf '# nut.lock - what each dependency resolved to. Generated; commit it.\n'
         printf '#\n'
-        printf '# Delete an entry to take the newest commit on its ref again.\n'
+        printf '# A commit or a tag in nut.toml is a pin, and this holds the checkout\n'
+        printf '# there. A branch is a pin on that branch, meaning its head, and this\n'
+        printf '# records what the head was and is rewritten whenever it moves.\n'
 
         # Every other entry, carried across unchanged.
         if [[ -f "$lock" ]]; then
@@ -148,20 +171,74 @@ extern_declared() {
     printf '%s %s' "$url" "${ref:-HEAD}"
 }
 
+# Resolved paths, by name, for the life of this process.
+#
+# Every `use <dep>::<module>` resolves the dependency again: the manifest is
+# re-read, the lockfile re-read, the mirror and the worktree each asked whether
+# git will answer for them. None of that can change while a script runs, and a
+# program taking five modules out of one library paid it five times -- about
+# four hundred milliseconds before anything of its own happened.
+# What has been resolved this process.
+#
+# It reads as a working memo and has never been one: everything that writes to
+# it is reached through a command substitution, so the assignment happens in a
+# subshell and is gone when that returns. The per-process property callers
+# actually get comes from `init`'s loaded-module table short-circuiting the
+# `use` before this is reached.
+#
+# Left in place rather than deleted, because `extern_forget` is a public door
+# onto it and removing that is a change for consumers. Marked so the next
+# person to optimise this path does not find it and believe it.
+declare -gA _EXTERN_RESOLVED=()
+
+#[pub]
+# Forget what has been resolved. For a caller that has changed a lockfile and
+# wants the next lookup to see it, and for tests.
+# Usage: extern_forget [name]
+extern_forget() {
+    if [[ -n "${1:-}" ]]; then unset '_EXTERN_RESOLVED[$1]'; else _EXTERN_RESOLVED=(); fi
+}
+
 #[pub]
 # Usage: extern_path shebang -> prints the checkout, fetching it once if needed
 extern_path() {
-    local name="$1" spec url ref mirror commit dir
+    local name="$1" spec url ref mirror commit dir out
+
+    if [[ -n "${_EXTERN_RESOLVED[$name]:-}" ]]; then
+        # Still checked, because a cached path whose checkout has been removed
+        # is worse than no cache: the caller gets a directory git will not
+        # answer for and no explanation.
+        if _extern_is_repo "${_EXTERN_RESOLVED[$name]}"; then
+            printf '%s' "${_EXTERN_RESOLVED[$name]}"
+            return 0
+        fi
+        unset '_EXTERN_RESOLVED[$name]'
+    fi
     spec="$(extern_declared "$name")" || return 1
     url="${spec%% *}"
     ref="${spec##* }"
 
     mirror="$(_extern_mirror "$name" "$url" "$ref")" || return 1
 
-    commit="$(extern_locked "$name")" || commit=""
-    if [[ -z "$commit" ]]; then
-        commit="$(git -C "$mirror" rev-parse HEAD 2>/dev/null)" || return 1
+    # What the ref means decides whether the lock has anything to say. A branch
+    # is the remote's head of that branch now, so a recorded commit is a note
+    # about the past rather than a pin, and the lock is written rather than
+    # read. A tag or a revision names one commit, so the lock is the answer.
+    local kind="" resolved=""
+    if out="$(extern_resolve_ref "$url" "$ref")"; then
+        kind="${out%% *}"; resolved="${out#* }"
+    fi
+
+    if [[ "$kind" == "moving" ]]; then
+        commit="$resolved"
         extern_lock_write "$name" "$commit"
+    else
+        commit="$(extern_locked "$name")" || commit=""
+        if [[ -z "$commit" ]]; then
+            commit="${resolved:-$(_extern_ref_commit "$mirror" "$ref")}" || return 1
+            [[ -n "$commit" ]] || return 1
+            extern_lock_write "$name" "$commit"
+        fi
     fi
 
     dir="$(_extern_cache_root)/$(_extern_key "${url}@${commit}")"
@@ -174,6 +251,7 @@ extern_path() {
         _extern_guard "$dir" _extern_lay_out "$name" "$mirror" "$url" "$commit" "$dir" || return 1
     fi
 
+    _EXTERN_RESOLVED["$name"]="$dir"
     printf '%s' "$dir"
 }
 
@@ -252,6 +330,12 @@ _extern_guard() {
     local dir="$1"; shift
     local lock="${dir}.lock" waited=0
 
+    # The parent, first. `mkdir "$lock"` is the lock, so it must not have a
+    # second reason to fail: a missing parent directory failed it exactly the
+    # way contention does, and the loop below then waited out the full eleven
+    # minutes for a lock nobody was holding.
+    mkdir -p "${lock%/*}" 2>/dev/null || true
+
     while ! mkdir "$lock" 2>/dev/null; do
         # Ready means ready, so a waiter never returns a half-written tree.
         _extern_is_repo "$dir" && return 0
@@ -284,7 +368,15 @@ _extern_guard() {
         fi
     done
 
-    printf '%s' "$$" > "${lock}/pid" 2>/dev/null
+    # `$BASHPID`, not `$$`.
+    #
+    # This runs inside a command substitution: `init` calls `extern_resolve`
+    # in `$( )`, which calls `extern_path`, which calls this. `$$` in a
+    # subshell is the *parent's* pid, so the lock recorded a process that
+    # outlives the one holding it. A subshell that died mid-clone left a lock
+    # naming a pid that `kill -0` still says is alive, and the takeover branch
+    # below never fired: the next process sat out the full wait instead.
+    printf '%s' "$BASHPID" > "${lock}/pid" 2>/dev/null
 
     local rc=0
     if ! _extern_is_repo "$dir"; then
@@ -336,6 +428,169 @@ _extern_mirror() {
     printf '%s' "$dir"
 }
 
+# -----------------------------------------------------------------------------
+# What a ref means
+# -----------------------------------------------------------------------------
+#
+# Two kinds, and the difference is whether the ref moves. A branch names the
+# remote's head of that branch, now, so the dependency comes up to it on every
+# run. A tag or a revision names one commit forever.
+#
+# A branch pin that locks itself the first time is not a pin on a branch, it is
+# a pin on whatever that branch happened to be. That is how a consumer ended up
+# holding its dependency's first commit while months of work went past it, and
+# the only symptom was a module that would not resolve.
+#
+# Asking the remote is a round trip, so the answer is kept for an hour: long
+# enough that a script in a loop does not talk to the network every time, short
+# enough that somebody who just pushed sees it on the next run.
+
+declare -gi EXTERN_BRANCH_TTL="${EXTERN_BRANCH_TTL:-3600}"
+
+# What the remote calls this ref. Prints "heads <sha>" or "tags <sha>", and
+# nothing when the remote has neither.
+#
+# The full refspec on both sides, because a bare name matches a tag as well as
+# a branch and which one wins is otherwise down to the order the remote lists
+# them. A branch wins where both exist: it is the one somebody meant to track.
+_extern_remote_ref() {
+    local url="$1" ref="$2" line sha
+    [[ -n "$ref" ]] || return 1
+
+    while IFS= read -r line; do
+        [[ "$line" == *"refs/heads/${ref}" ]] || continue
+        sha="${line%%[[:space:]]*}"
+        [[ -n "$sha" ]] && { printf 'heads %s' "$sha"; return 0; }
+    done < <(git ls-remote "$url" "refs/heads/${ref}" 2>/dev/null)
+
+    # `^{}` is the commit an annotated tag points at, and it is the one to
+    # build from; the bare line is the tag object itself.
+    local peeled="" plain=""
+    while IFS= read -r line; do
+        sha="${line%%[[:space:]]*}"
+        case "$line" in
+            *"refs/tags/${ref}^{}") peeled="$sha" ;;
+            *"refs/tags/${ref}")    plain="$sha"  ;;
+        esac
+    done < <(git ls-remote "$url" "refs/tags/${ref}" 2>/dev/null)
+    [[ -n "$peeled" ]] && { printf 'tags %s' "$peeled"; return 0; }
+    [[ -n "$plain" ]]  && { printf 'tags %s' "$plain";  return 0; }
+    return 1
+}
+
+# Where a branch resolution is remembered.
+_extern_resolution_path() {
+    printf '%s/branch-%s' "$(_extern_cache_root)" "$(_extern_key "${1}@${2}")"
+}
+
+_extern_read_resolution() {
+    local f="$1" ts sha
+    [[ -r "$f" ]] || return 1
+    { IFS= read -r ts; IFS= read -r sha; } < "$f" || return 1
+    [[ -n "$sha" ]] || return 1
+    printf '%s %s' "${ts:-0}" "$sha"
+}
+
+# The remembered resolution, if it is younger than the window.
+_extern_fresh_resolution() {
+    local out ts sha now
+    out="$(_extern_read_resolution "$1")" || return 1
+    ts="${out%% *}"; sha="${out#* }"
+    [[ "$ts" =~ ^[0-9]+$ ]] || return 1
+    now="$(date -u +%s 2>/dev/null)" || return 1
+    (( now - ts <= EXTERN_BRANCH_TTL )) || return 1
+    printf '%s' "$sha"
+}
+
+# The remembered resolution whatever its age, for when the remote cannot be
+# asked at all.
+_extern_any_resolution() {
+    local out; out="$(_extern_read_resolution "$1")" || return 1
+    printf '%s' "${out#* }"
+}
+
+_extern_remember_resolution() {
+    local f="$1" sha="$2"
+    fs_mkdir "${f%/*}" 2>/dev/null || return 0
+    printf '%s\n%s\n' "$(date -u +%s 2>/dev/null || printf 0)" "$sha" > "$f" 2>/dev/null || true
+    return 0
+}
+
+#[pub]
+# What a declared ref resolves to right now, and whether it can move.
+#
+# Prints "moving <sha>" for a branch and "fixed <sha>" for a tag or a
+# revision. A branch is asked of the remote, at most once an hour. Offline, the
+# last answer is used and said out loud: a revision that was the head an hour
+# ago is very probably still in the cache, and running from it beats refusing
+# to run on a machine somebody is in the middle of fixing.
+# Where a fixed ref and the lockfile disagree, the lockfile wins and the
+# checkout goes to the commit it names. That is what a lockfile is for and it is
+# right when an upstream tag has moved under a project that already resolved it.
+# It also means a hand-edited or damaged lock silently redirects a tag pin:
+# nothing checks that the locked commit is reachable from the ref, and deleting
+# the entry is how you ask for the ref to be resolved again.
+# Usage: extern_resolve_ref <url> <ref> -> prints "moving <sha>" or "fixed <sha>"
+extern_resolve_ref() {
+    local url="$1" ref="$2" out kind sha f
+
+    # A revision is itself, and asking a remote about it tells nobody anything.
+    if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        printf 'fixed %s' "$ref"
+        return 0
+    fi
+
+    f="$(_extern_resolution_path "$url" "$ref")"
+    if sha="$(_extern_fresh_resolution "$f")"; then
+        printf 'moving %s' "$sha"
+        return 0
+    fi
+
+    if out="$(_extern_remote_ref "$url" "$ref")"; then
+        kind="${out%% *}"; sha="${out#* }"
+        if [[ "$kind" == "heads" ]]; then
+            _extern_remember_resolution "$f" "$sha"
+            printf 'moving %s' "$sha"
+        else
+            printf 'fixed %s' "$sha"
+        fi
+        return 0
+    fi
+
+    if sha="$(_extern_any_resolution "$f")"; then
+        log_warn "could not ask ${url} about ${ref}; using the revision it named before" >&2
+        printf 'moving %s' "$sha"
+        return 0
+    fi
+    return 1
+}
+
+# Bring a mirror up to date with its ref. Best effort: a machine with no
+# network still has whatever it cloned, and a stale answer beats no answer for
+# a tool whose whole point is working on a machine that is broken.
+_extern_refresh() {
+    local mirror="$1" ref="$2"
+    [[ -n "$ref" ]] || return 0
+    # `--depth 1` because the mirror is only ever read at one commit, and the
+    # clone that made it was shallow too.
+    git -C "$mirror" fetch --quiet --depth 1 origin "$ref" 2>/dev/null || return 0
+    return 0
+}
+
+# What a ref points at in a mirror. FETCH_HEAD first, since that is what the
+# refresh just wrote; then the remote branch; then HEAD, which is the answer
+# for a mirror that was cloned at a sha.
+_extern_ref_commit() {
+    local mirror="$1" ref="$2" c
+    for c in FETCH_HEAD "origin/${ref}" "$ref" HEAD; do
+        [[ -n "$ref" || "$c" == "HEAD" ]] || continue
+        if git -C "$mirror" rev-parse --verify --quiet "${c}^{commit}" >/dev/null 2>&1; then
+            git -C "$mirror" rev-parse "${c}^{commit}" 2>/dev/null && return 0
+        fi
+    done
+    return 1
+}
+
 # _extern_fetch <name> <url> <ref> <dir>
 _extern_fetch() {
     local name="$1" url="$2" ref="$3" dir="$4"
@@ -372,7 +627,31 @@ extern_resolve() {
     rest="${spec#*::}"
     [[ "$name" == "$spec" ]] && return 1
 
+    # `::` separates modules the whole way down. A `/` is refused rather than
+    # handed to the filesystem, which is what made it work by accident.
+    if [[ "$rest" == */* ]]; then
+        log_error "'${spec}' separates modules with '/'; use '::': ${spec//\//::}"
+        return 1
+    fi
+    local declared="${spec#*::}"
+    rest="${rest//:://}"
+
     root="$(extern_path "$name")" || return 1
+
+    # A library that declares its modules is answered from the declaration and
+    # from nowhere else. Falling back to a search would put the guessing back
+    # underneath the declaration, where a wrong entry resolves anyway and
+    # nothing says so.
+    if [[ -r "${root}/lib.nut" ]]; then
+        local from_nut
+        if from_nut="$(_lib_nut_lookup "$root" "$declared" public)"; then
+            [[ -f "$from_nut" ]] && { printf '%s' "$from_nut"; return 0; }
+            log_error "${name}'s lib.nut declares '${declared}' at ${from_nut#$root/}, which is not there"
+            return 1
+        fi
+        log_error "'${declared}' is not among the modules ${name} declares"
+        return 1
+    fi
 
     # Two shapes, tried in order: a library laid out as `libs/<group>/<mod>.sh`,
     # and a flat `lib/<mod>.sh` like nutshell's own. Nothing else is guessed at,

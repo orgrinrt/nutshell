@@ -206,3 +206,56 @@ it_lowers_a_single_named_module() {
     assert_not_contains "$out" "loads no modules"
     assert_contains "$out" "lib/text.sh"
 }
+
+#[test]
+# A dispatched function answers without the dispatch running.
+#
+# This is what "resolved ahead of time" has to mean. The lowering knows which
+# implementation `deps_has` would pick, so the lowered file carries that
+# implementation bound to the name already, and the first call is the real
+# function rather than a stub that goes and loads one.
+#
+# `nut_reload` is made a canary. If the dispatch still runs it fires, and the
+# test says so, which is stronger than timing: it fails on the mechanism being
+# present rather than on it being slow.
+it_binds_the_implementation_ahead_of_the_first_call() {
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use text --no-shake -o "$_LOW_OUT" 2>/dev/null
+
+    local out
+    out="$(bash -c '
+        . "$1" >/dev/null 2>&1 || exit 1
+        nut_reload() { printf "DISPATCH-RAN\n"; return 0; }
+        f="$(mktemp)"; printf "alpha\n" > "$f"
+        text_contains alpha "$f" && printf "yes\n" || printf "no\n"
+        rm -f "$f"
+    ' _ "$_LOW_OUT" 2>&1)"
+
+    assert_not_contains "$out" "DISPATCH-RAN"
+    assert_contains "$out" "yes"
+    _lower_done
+}
+
+#[test]
+# The control, and the reason the test above is not vacuous.
+#
+# Without pre-binding the same probe must see the dispatch run. If it does not,
+# the canary is not wired to anything and the test above proves nothing.
+it_still_dispatches_at_first_call_without_prebinding() {
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use text --no-shake --no-prebind -o "$_LOW_OUT" 2>/dev/null
+
+    local out
+    out="$(bash -c '
+        . "$1" >/dev/null 2>&1 || exit 1
+        nut_reload() { printf "DISPATCH-RAN\n"; return 0; }
+        f="$(mktemp)"; printf "alpha\n" > "$f"
+        # Not redirected. `>/dev/null` here swallows the canary too, which
+        # made this control pass for the wrong reason the first time.
+        text_contains alpha "$f"
+        rm -f "$f"
+    ' _ "$_LOW_OUT" 2>&1)"
+
+    assert_contains "$out" "DISPATCH-RAN"
+    _lower_done
+}

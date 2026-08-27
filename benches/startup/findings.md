@@ -22,9 +22,34 @@ did not.
 
 | arm | best ms | against the first |
 |---|---|---|
-| resolved through the manifest | 261 | |
-| lowered, `use` resolved already | 236 | within the noise |
-| lowered and shaken | 233 | 89%, and the spreads nearly touch |
+| resolved through the manifest | 248 | |
+| lowered, dispatch left to run | 221 | 89% |
+| lowered, `use` resolved already | 216 | 87% |
+| lowered and shaken | 217 | 87%, and the spreads nearly touch |
+
+## Deciding the dispatch here is worth about 5ms on this workload, and that is per function
+
+The middle pair is the price of resolving the lazy dispatch at lower time
+rather than at first call: same concatenation, same closure, and the only
+difference is whether `fs_size` is the implementation when the file finishes
+loading or is still a stub that will go and fetch one.
+
+**5ms, and the spreads overlap, so on this workload it is inside the noise.**
+
+That is not a small win hiding; it is one dispatched function. This workload
+calls exactly one, and `benches/lazy-dispatch` measures six at about 35ms, so
+the two agree at roughly **6ms per dispatched function a program actually
+touches**. A program calling one saves nothing worth measuring and a program
+calling all thirteen saves most of a tenth of a second.
+
+**holds for:** bash 5.3, `Darwin arm64`, this workload's 6 modules and its one
+dispatched call, tools as this machine has them. Nothing here says what it
+costs where the winning implementation is a different one.
+
+The mechanism is asserted rather than timed in `tests/nut_lower_test.sh`:
+`nut_reload` is made a canary, and a dispatched function has to answer without
+it firing. That fails on the dispatch being present rather than on it being
+slow, and it carries the control that proves the canary is wired to something.
 
 ## What the earlier 26% actually was
 

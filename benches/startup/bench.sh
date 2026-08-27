@@ -59,9 +59,19 @@ _ST_LOWER="${_ST_ROOT}/bin/nut-lower"
 _ST_WORKLOAD="${_ST_ROOT}/benches/startup/workload.sh"
 _ST_LOWERED="$_ST_TMP/lowered.sh"
 _ST_SHAKEN="$_ST_TMP/shaken.sh"
+_ST_NOPRE="$_ST_TMP/nopre.sh"
 
 _st_lower() {
     "$_ST_LOWER" "$_ST_WORKLOAD" --use "${MODS// /,}" --no-shake -o "$_ST_LOWERED"
+}
+
+# The same lowering with the dispatch left to run at first call, which is what
+# the tool did before it decided it here. The pair is what prices deciding it
+# ahead of time: same concatenation, same resolution, same closure, and the
+# only difference is whether `fs_size` is already the implementation when the
+# file finishes loading or is still a stub that will go and fetch one.
+_st_lower_nopre() {
+    "$_ST_LOWER" "$_ST_WORKLOAD" --use "${MODS// /,}" --no-shake --no-prebind -o "$_ST_NOPRE"
 }
 
 _st_shake() {
@@ -110,6 +120,11 @@ arm_shaken() {
         _ "$_ST_SHAKEN" "$_ST_PROBE" 2>/dev/null
 }
 
+arm_lowered_nopre() {
+    bash -c '. "$1" >/dev/null 2>&1 || exit 1; eval "$2"' \
+        _ "$_ST_NOPRE" "$_ST_PROBE" 2>/dev/null
+}
+
 # The interpreter and nothing else, so the two above can be read against what
 # is paid before any module is asked for at all.
 arm_init_only() {
@@ -118,6 +133,7 @@ arm_init_only() {
 }
 
 _st_lower
+_st_lower_nopre
 _st_shake
 
 _answer_of() { "$1"; }
@@ -127,9 +143,10 @@ _ST_CLOSURE="$("$_ST_LOWER" "$_ST_WORKLOAD" --use "${MODS// /,}" --list | wc -l 
 bench_size "$_ST_CLOSURE"
 bench_verify _answer_of
 
-bench_arm "resolved through the manifest" arm_resolved
-bench_arm "lowered, use resolved already" arm_lowered
-bench_arm "lowered and shaken"            arm_shaken
+bench_arm "resolved through the manifest"  arm_resolved
+bench_arm "lowered, dispatch left to run"  arm_lowered_nopre
+bench_arm "lowered, use resolved already"  arm_lowered
+bench_arm "lowered and shaken"             arm_shaken
 
 bench_run || exit 1
 

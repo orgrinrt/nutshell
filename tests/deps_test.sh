@@ -237,3 +237,89 @@ it_remembers_a_tool_it_could_not_find() {
     deps_has definitely_not_a_real_tool_xyzzy && return 1
     return 0
 }
+
+# --- the POSIX floor ---------------------------------------------------------
+
+# A POSIX shell that is one, or nothing. Same probe the floor check uses: it
+# has to reject an array and still accept ordinary POSIX.
+_dt_posix_sh() {
+    local cand probe; probe="$(mktemp)"
+    for cand in dash ash yash posh sh; do
+        command -v "$cand" >/dev/null 2>&1 || continue
+        printf 'a=(1 2)\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && continue
+        printf 'x=1\necho "${x:-}"\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && { rm -f "$probe"; printf '%s' "$cand"; return 0; }
+    done
+    rm -f "$probe"; return 1
+}
+
+# What `deps` answers when loaded directly under one shell. `os` first, because
+# that is what it declares, and `init` is not involved: the point is the module
+# on its own.
+_dt_under() {
+    local sh="$1" expr="$2"
+    "$sh" -c '. "$1/lib/os.sh" >/dev/null 2>&1
+              . "$1/lib/deps.sh" >/dev/null 2>&1
+              eval "$2"' _ "$NUTSHELL_ROOT" "$expr" 2>&1
+}
+
+#[test]
+# It parses there at all, which is the precondition for everything below.
+it_reads_under_a_posix_shell() {
+    local sh; sh="$(_dt_posix_sh)"
+    assert_ne "$sh" ""
+    assert_ok "$sh" -n "${NUTSHELL_ROOT}/lib/deps.sh"
+}
+
+#[test]
+# Parsing is not running, and this module is the reason that sentence is in the
+# rules. It parsed under `dash` while answering wrong, and nothing about the
+# parse said so.
+it_finds_the_same_tools_under_both_shells() {
+    local sh; sh="$(_dt_posix_sh)"
+    local expr='printf "%s" "$_TOOLS_AVAILABLE" | wc -w | tr -d " "'
+    local p b
+    p="$(_dt_under "$sh" "$expr")"
+    b="$(_dt_under bash "$expr")"
+    assert_ne "$b" "0"
+    assert_eq "$p" "$b"
+}
+
+#[test]
+# The regression, and it is worth its own test because of how it looked.
+#
+# `command -v which &>/dev/null` is a bashism a POSIX shell does not refuse: it
+# reads `&>` as a background `&` followed by a redirect, so `which` ran in the
+# background and printed its own path into the answer. `_TOOL_PATH_sed` came
+# back as two lines, `/usr/bin/which` and then `/usr/bin/sed`, and the file
+# passed `dash -n` the whole time.
+#
+# So the assertion is that a resolved path is one line. A comparison against
+# bash catches this one too, but only because bash happens to be right; the
+# shape of the bug is a tool path with something else in it.
+it_does_not_leak_a_backgrounded_command_into_a_tool_path() {
+    local sh; sh="$(_dt_posix_sh)"
+    local t
+    for t in sed grep awk; do
+        local got n
+        got="$(_dt_under "$sh" "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        assert_ne "$got" "" "no path resolved for $t"
+        n="$(printf '%s' "$got" | wc -l | tr -d ' ')"
+        assert_eq "$n" "0" "the path for $t is more than one line: [$got]"
+        assert_ok test -x "$got"
+    done
+}
+
+#[test]
+# And the answers themselves agree, not only their shape.
+it_resolves_the_same_paths_under_both_shells() {
+    local sh; sh="$(_dt_posix_sh)"
+    local t
+    for t in sed grep awk stat; do
+        local p b
+        p="$(_dt_under "$sh"  "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        b="$(_dt_under bash   "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        assert_eq "$p" "$b" "$t resolved differently"
+    done
+}

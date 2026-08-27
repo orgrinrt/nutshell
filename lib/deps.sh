@@ -27,8 +27,12 @@
 #     awk = "/usr/local/bin/gawk"
 # =============================================================================
 
-# Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and so
+# needs bash. Under a POSIX shell `nut_once` is simply not found, and the
+# `|| return 0` after it then fires on every load: the module reports success
+# and defines nothing.
+[ -n "${_NUTSHELL_DEPS_SH:-}" ] && return 0
+_NUTSHELL_DEPS_SH=1
 
 # -----------------------------------------------------------------------------
 # Dependencies
@@ -45,13 +49,15 @@ use os
 
 # Find nut.toml - check current dir, then repo root, then nutshell dir
 _deps_find_config() {
-    local check_paths=(
-        "${PWD}/nut.toml"
-        "${NUTSHELL_ROOT}/nut.toml"
-    )
-    
-    for path in "${check_paths[@]}"; do
-        if [[ -f "$path" ]]; then
+    # Positional parameters rather than a list in a variable, because both of
+    # these carry a directory somebody else chose and a space in it would split
+    # the word. An array would have held them; POSIX has one array and this is
+    # it.
+    local path
+    set -- "${PWD}/nut.toml" "${NUTSHELL_ROOT}/nut.toml"
+
+    for path in "$@"; do
+        if [ -f "$path" ]; then
             echo "$path"
             return 0
         fi
@@ -67,35 +73,42 @@ _deps_toml_get() {
     local section="$2"
     local key="$3"
     
-    [[ ! -f "$file" ]] && return 1
-    
+    [ -f "$file" ] || return 1
+
     local in_section=0
     local current_section=""
-    local line
-    
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        # Skip comments and empty lines
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-        
-        # Section header
-        if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
-            current_section="${BASH_REMATCH[1]}"
-            if [[ "$current_section" == "$section" ]]; then
-                in_section=1
-            else
-                in_section=0
-            fi
-            continue
-        fi
-        
+    local line t
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Matched by shape rather than by `[[ =~ ]]`. A regex match is the one
+        # bashism a POSIX shell cannot even parse past, so a file carrying one
+        # is unreadable there whatever the rest of it does.
+        t="${line#"${line%%[![:space:]]*}"}"
+
+        # Comments and blank lines
+        case "$t" in ''|'#'*) continue ;; esac
+
+        # Section header. `[^\]]+` was the old shape: at least one character
+        # and no `]` inside it.
+        case "$t" in
+            '['*']')
+                current_section="${t#\[}"
+                current_section="${current_section%]}"
+                case "$current_section" in
+                    ''|*']'*)     in_section=0 ;;
+                    "$section")   in_section=1 ;;
+                    *)            in_section=0 ;;
+                esac
+                continue ;;
+        esac
+
         # Skip if not in the right section
-        [[ $in_section -eq 0 ]] && continue
-        
+        [ "$in_section" -eq 0 ] && continue
+
         # Key = value
-        if [[ "$line" =~ ^[[:space:]]*([^=]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-            local k="${BASH_REMATCH[1]}"
-            local v="${BASH_REMATCH[2]}"
+        if [ "${t#*=}" != "$t" ]; then
+            local k="${t%%=*}"
+            local v="${t#*=}"
             # Trim whitespace
             k="${k#"${k%%[![:space:]]*}"}"
             k="${k%"${k##*[![:space:]]}"}"
@@ -107,7 +120,7 @@ _deps_toml_get() {
             v="${v#\'}"
             v="${v%\'}"
             
-            if [[ "$k" == "$key" ]]; then
+            if [ "$k" = "$key" ]; then
                 echo "$v"
                 return 0
             fi
@@ -121,9 +134,8 @@ _deps_toml_get() {
 # Global state - populated by _deps_init
 # -----------------------------------------------------------------------------
 
-# Space-separated list of available tools
-# Use -g for global scope when sourced from within a function (like use())
-declare -g _TOOLS_AVAILABLE=""
+# Space-separated list of available tools.
+_TOOLS_AVAILABLE=""
 
 # One variable per entry rather than four associative arrays.
 #
@@ -142,7 +154,7 @@ declare -g _TOOLS_AVAILABLE=""
 #
 # Capability names are kept in a list because `deps_caps` has to report what is
 # set, and there is no `${!table[@]}` to ask any more.
-declare -g _TOOL_CAN_NAMES=""
+_TOOL_CAN_NAMES=""
 
 # A tool or capability name, as the tail of a variable name. One-to-one.
 #
@@ -248,7 +260,7 @@ _deps_can_set() {
 }
 
 # The config file, found once at init rather than on every lookup.
-declare -g _DEPS_CONFIG=""
+_DEPS_CONFIG=""
 
 # -----------------------------------------------------------------------------
 # Internal: Path resolution
@@ -263,36 +275,33 @@ _deps_find_tool() {
     local config_file="$2"
     
     # 1. Check user config first
-    if [[ -n "$config_file" ]]; then
+    if [ -n "$config_file" ]; then
         local user_path
         user_path="$(_deps_toml_get "$config_file" "deps.paths" "$tool")"
-        if [[ -n "$user_path" ]] && [[ -x "$user_path" ]]; then
+        if [ -n "$user_path" ] && [ -x "$user_path" ]; then
             echo "$user_path"
             return 0
         fi
     fi
     
     # 2. Try which if available (using command -v to check for which itself)
-    if command -v which &>/dev/null; then
+    if command -v which >/dev/null 2>&1; then
         local found
         found="$(which "$tool" 2>/dev/null)"
-        if [[ -n "$found" ]] && [[ -x "$found" ]]; then
+        if [ -n "$found" ] && [ -x "$found" ]; then
             echo "$found"
             return 0
         fi
     fi
     
     # 3. Check common locations
-    local locations=(
-        "/usr/bin/${tool}"
-        "/bin/${tool}"
-        "/usr/local/bin/${tool}"
-        "/opt/homebrew/bin/${tool}"
-    )
-    
-    for loc in "${locations[@]}"; do
-        if [[ -x "$loc" ]]; then
-            echo "$loc"
+    # The prefixes rather than the joined paths, so the list is words with no
+    # spaces in any of them and splitting it is safe. A tool name with a space
+    # in it is not a tool name.
+    local dir
+    for dir in /usr/bin /bin /usr/local/bin /opt/homebrew/bin; do
+        if [ -x "${dir}/${tool}" ]; then
+            echo "${dir}/${tool}"
             return 0
         fi
     done
@@ -346,7 +355,7 @@ _deps_detect_awk_variant() {
     fi
     
     # nawk (check binary name as fallback)
-    if [[ "$(basename "$cmd")" == "nawk" ]]; then
+    if [ "$(basename "$cmd")" = "nawk" ]; then
         echo "nawk"
         return
     fi
@@ -401,7 +410,7 @@ _deps_detect_find_variant() {
 
 _deps_detect_capabilities() {
     # sed capabilities
-    if [[ -n "${_TOOL_PATH_sed:-}" ]]; then
+    if [ -n "${_TOOL_PATH_sed:-}" ]; then
         local sed_cmd="${_TOOL_PATH_sed}"
         local variant="${_TOOL_VARIANT_sed:-unknown}"
         
@@ -419,7 +428,7 @@ _deps_detect_capabilities() {
         fi
         
         # GNU-specific -r (same as -E but older)
-        if [[ "$variant" == "gnu" ]]; then
+        if [ "$variant" = "gnu" ]; then
             _deps_can_set sed_regex_r 1
         else
             _deps_can_set sed_regex_r 0
@@ -427,14 +436,14 @@ _deps_detect_capabilities() {
     fi
     
     # grep capabilities
-    if [[ -n "${_TOOL_PATH_grep:-}" ]]; then
+    if [ -n "${_TOOL_PATH_grep:-}" ]; then
         local grep_cmd="${_TOOL_PATH_grep}"
         
         # Extended regex (-E)
         _deps_can_set grep_extended 1
         
         # PCRE (-P) - mainly GNU grep
-        if echo "test" | "$grep_cmd" -P "t.st" &>/dev/null; then
+        if echo "test" | "$grep_cmd" -P "t.st" >/dev/null 2>&1; then
             _deps_can_set grep_pcre 1
         else
             _deps_can_set grep_pcre 0
@@ -448,7 +457,7 @@ _deps_detect_capabilities() {
         fi
         
         # -o (only matching)
-        if echo "test" | "$grep_cmd" -o "es" &>/dev/null; then
+        if echo "test" | "$grep_cmd" -o "es" >/dev/null 2>&1; then
             _deps_can_set grep_only_matching 1
         else
             _deps_can_set grep_only_matching 0
@@ -456,7 +465,7 @@ _deps_detect_capabilities() {
     fi
     
     # awk capabilities
-    if [[ -n "${_TOOL_PATH_awk:-}" ]]; then
+    if [ -n "${_TOOL_PATH_awk:-}" ]; then
         local awk_cmd="${_TOOL_PATH_awk}"
         local variant="${_TOOL_VARIANT_awk:-unknown}"
         
@@ -464,7 +473,7 @@ _deps_detect_capabilities() {
         _deps_can_set awk_regex 1
         
         # gawk-specific features
-        if [[ "$variant" == "gawk" ]]; then
+        if [ "$variant" = "gawk" ]; then
             _deps_can_set awk_nextfile 1
             _deps_can_set awk_strftime 1
             _deps_can_set awk_gensub 1
@@ -476,12 +485,12 @@ _deps_detect_capabilities() {
     fi
     
     # stat capabilities
-    if [[ -n "${_TOOL_PATH_stat:-}" ]]; then
+    if [ -n "${_TOOL_PATH_stat:-}" ]; then
         local stat_cmd="${_TOOL_PATH_stat}"
         local variant="${_TOOL_VARIANT_stat:-unknown}"
         
         # Format strings
-        if [[ "$variant" == "gnu" ]] || [[ "$variant" == "bsd" ]]; then
+        if [ "$variant" = "gnu" ] || [ "$variant" = "bsd" ]; then
             _deps_can_set stat_format 1
         else
             _deps_can_set stat_format 0
@@ -489,7 +498,7 @@ _deps_detect_capabilities() {
     fi
     
     # perl capabilities
-    if [[ -n "${_TOOL_PATH_perl:-}" ]]; then
+    if [ -n "${_TOOL_PATH_perl:-}" ]; then
         local perl_cmd="${_TOOL_PATH_perl}"
         
         # Basic perl is always capable
@@ -505,7 +514,7 @@ _deps_detect_capabilities() {
     fi
     
     # find capabilities
-    if [[ -n "${_TOOL_PATH_find:-}" ]]; then
+    if [ -n "${_TOOL_PATH_find:-}" ]; then
         local find_cmd="${_TOOL_PATH_find}"
         local variant="${_TOOL_VARIANT_find:-unknown}"
         
@@ -513,7 +522,7 @@ _deps_detect_capabilities() {
         _deps_can_set find_maxdepth 1
         
         # -printf (GNU only)
-        if [[ "$variant" == "gnu" ]]; then
+        if [ "$variant" = "gnu" ]; then
             _deps_can_set find_printf 1
         else
             _deps_can_set find_printf 0
@@ -531,18 +540,19 @@ _deps_init() {
     _DEPS_CONFIG="$config_file"
     
     # List of tools to detect
-    local tools=(
-        sed awk grep perl stat mktemp find sort wc tr
-        head tail dirname basename uname cut tee xargs
-    )
-    
-    local available=()
+    # A plain word list. Every entry is a tool name, so there is nothing here a
+    # space could split wrongly, and the accumulator below is the same string
+    # shape `_TOOLS_AVAILABLE` has always been.
+    local tools="sed awk grep perl stat mktemp find sort wc tr
+        head tail dirname basename uname cut tee xargs"
+
+    local available=""
     local tool path variant
-    
-    for tool in "${tools[@]}"; do
+
+    for tool in $tools; do
         if path="$(_deps_find_tool "$tool" "$config_file")"; then
             _deps_set PATH "$tool" "$path"
-            available+=("$tool")
+            available="${available} ${tool}"
             
             # Detect variant for tools that have meaningful variants
             case "$tool" in
@@ -557,7 +567,7 @@ _deps_init() {
     done
     
     # Build space-separated available list
-    _TOOLS_AVAILABLE="${available[*]}"
+    _TOOLS_AVAILABLE="${available# }"
     
     # Detect capabilities based on what we found
     _deps_detect_capabilities
@@ -585,10 +595,10 @@ _deps_init
 # Usage: deps_has "sed" -> returns 0 (true) or 1 (false)
 deps_has() {
     local tool="${1:-}"
-    [[ -z "$tool" ]] && return 1
+    [ -z "$tool" ] && return 1
     local _hit
-    _deps_get _hit PATH "$tool"    && [[ -n "$_hit" ]] && return 0
-    _deps_get _hit MISSING "$tool" && [[ -n "$_hit" ]] && return 1
+    _deps_get _hit PATH "$tool"    && [ -n "$_hit" ] && return 0
+    _deps_get _hit MISSING "$tool" && [ -n "$_hit" ] && return 1
 
     # Anything not in the eager list is looked for now, once, and remembered.
     #
@@ -675,7 +685,7 @@ deps_variant() {
 deps_is_gnu() {
     local tool="${1:-}"
     local variant; _deps_get variant VARIANT "$tool"
-    [[ "$variant" == "gnu" ]] || [[ "$variant" == "gawk" ]]
+    [ "$variant" = "gnu" ] || [ "$variant" = "gawk" ]
 }
 
 #[pub]
@@ -684,7 +694,7 @@ deps_is_gnu() {
 deps_is_bsd() {
     local tool="${1:-}"
     local variant; _deps_get variant VARIANT "$tool"
-    [[ "$variant" == "bsd" ]]
+    [ "$variant" = "bsd" ]
 }
 
 # -----------------------------------------------------------------------------
@@ -697,7 +707,7 @@ deps_is_bsd() {
 deps_can() {
     local cap="${1:-}"
     local _c; _deps_get _c CAN "$cap"
-    [[ "${_c:-0}" == "1" ]]
+    [ "${_c:-0}" = "1" ]
 }
 
 #[pub]
@@ -741,15 +751,15 @@ deps_require() {
 # Require multiple tools; exit if any missing
 # Usage: deps_require_all "sed" "awk" "grep"
 deps_require_all() {
-    local missing=()
+    local missing=""
     local tool
-    
+
     for tool in "$@"; do
-        deps_has "$tool" || missing+=("$tool")
+        deps_has "$tool" || missing="${missing} ${tool}"
     done
-    
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "[FATAL] Required tools not found: ${missing[*]}" >&2
+
+    if [ -n "$missing" ]; then
+        echo "[FATAL] Required tools not found: ${missing# }" >&2
         exit 1
     fi
 }
@@ -788,9 +798,9 @@ deps_info() {
         _deps_get path PATH "$tool"
         _deps_get variant VARIANT "$tool"
         
-        if [[ -n "$path" ]]; then
+        if [ -n "$path" ]; then
             printf "  %-10s %s" "$tool:" "$path"
-            [[ -n "$variant" && "$variant" != "standard" ]] && printf " (%s)" "$variant"
+            [ -n "$variant" ] && [ "$variant" != "standard" ] && printf " (%s)" "$variant"
             echo ""
         else
             printf "  %-10s NOT FOUND\n" "$tool:"
@@ -809,16 +819,16 @@ deps_info() {
 # Check all common tools and report status
 # Usage: deps_check -> returns 0 if all basic tools present
 deps_check() {
-    local required=(sed awk grep stat mktemp find sort wc tr head tail)
-    local missing=()
+    local required="sed awk grep stat mktemp find sort wc tr head tail"
+    local missing=""
     local tool
-    
-    for tool in "${required[@]}"; do
-        deps_has "$tool" || missing+=("$tool")
+
+    for tool in $required; do
+        deps_has "$tool" || missing="${missing} ${tool}"
     done
-    
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "Missing tools: ${missing[*]}" >&2
+
+    if [ -n "$missing" ]; then
+        echo "Missing tools: ${missing# }" >&2
         return 1
     fi
     

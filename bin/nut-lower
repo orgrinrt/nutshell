@@ -186,11 +186,11 @@ _nl_emit() {
     # underneath could be perfectly POSIX and none of it was reachable. With
     # it gone the closure decides: one unconverted module in the set and a
     # POSIX shell is still shut out, only now it fails inside a module rather
-    # than on line 40 of the preamble. Six of the twenty-eight single-module
-    # closures parse under `dash` today, five of them without the shaking,
-    # and that gap is one module whose only unconverted function nothing
-    # calls. The rest are the modules nobody has converted, not anything in
-    # here. `nut_lower_test.sh` holds both numbers as a ratchet, so they are
+    # than on line 40 of the preamble. Ten of the twenty-eight single-module
+    # closures parse under `dash` today, eight of them without the shaking,
+    # and that gap is what dropping unreached functions buys. The rest are
+    # the modules nobody has converted, not anything in here.
+    # `nut_lower_test.sh` holds both numbers as a ratchet, so they are
     # measured rather than remembered.
     #
     # Only with pre-binding. Without it a stub still runs, still calls

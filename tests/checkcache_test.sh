@@ -286,8 +286,10 @@ _stat_stub() {
     mkdir -p "$dir"
     case "$kind" in
         gnu)
-            # `-c` works. `-f` exits 0 and prints filesystem noise, which is
-            # the whole hazard.
+            # `-c` works and expands directives the way GNU does. `-f` exits 0
+            # and prints filesystem noise, which is the whole hazard: written
+            # against exit status, the chooser picks `-f` here and every stamp
+            # on Linux is garbage that compares equal to itself.
             cat > "$dir/stat" <<'STUB'
 #!/bin/sh
 if [ "$1" = "-c" ]; then
@@ -295,11 +297,9 @@ if [ "$1" = "-c" ]; then
     for f do
         m=$(/usr/bin/stat -f '%m' "$f" 2>/dev/null) || exit 1
         z=$(/usr/bin/stat -f '%z' "$f" 2>/dev/null) || exit 1
-        case "$fmt" in
-            '%Y %s %n') printf '%s %s %s\n' "$m" "$z" "$f" ;;
-            '%Y')       printf '%s\n' "$m" ;;
-            *)          printf '?\n' ;;
-        esac
+        out=$fmt
+        out=$(printf '%s' "$out" | sed -e "s|%Y|$m|g" -e "s|%s|$z|g" -e "s|%n|$f|g")
+        printf '%s\n' "$out"
     done
     exit 0
 fi
@@ -319,6 +319,32 @@ shift; fmt="$1"; shift
 exec /usr/bin/stat -f "$fmt" "$@"
 STUB
             ;;
+        gnu-numeric)
+            # The premise the digit test rested on, denied. A `stat` whose
+            # wrong-flag output *starts with a number* passes any "first field
+            # looks numeric" probe, and the chooser then picks `-f` on a
+            # machine where `-f` is not a format flag at all. Nothing here can
+            # rule such a `stat` out, so the detection stops depending on it.
+            cat > "$dir/stat" <<'STUB'
+#!/bin/sh
+if [ "$1" = "-c" ]; then
+    shift; fmt="$1"; shift
+    for f do
+        m=$(/usr/bin/stat -f '%m' "$f" 2>/dev/null) || exit 1
+        z=$(/usr/bin/stat -f '%z' "$f" 2>/dev/null) || exit 1
+        out=$(printf '%s' "$fmt" | sed -e "s|%Y|$m|g" -e "s|%s|$z|g" -e "s|%n|$f|g")
+        printf '%s\n' "$out"
+    done
+    exit 0
+fi
+if [ "$1" = "-f" ]; then
+    shift; shift
+    for f do printf '4096 1000000 500000\n'; done
+    exit 0
+fi
+exit 1
+STUB
+            ;;
         none)
             printf '#!/bin/sh\nexit 127\n' > "$dir/stat"
             ;;
@@ -328,7 +354,7 @@ STUB
     # The stub owns the whole PATH. Prepending leaves the real one reachable
     # by anything that resolves a second time, and then the test is about the
     # machine rather than about the stub.
-    for t in find sort head printf mktemp rm cat chmod sh; do
+    for t in find sort head printf mktemp rm cat chmod sh sed grep; do
         [[ -e "$dir/$t" ]] && continue
         local real; real="$(command -v "$t" 2>/dev/null)" || continue
         ln -sf "$real" "$dir/$t"
@@ -395,5 +421,20 @@ it_reads_a_real_mtime_and_size_through_whichever_stat_it_picked() {
     assert_ne "$got" ""
     assert_eq "${got#* }" "10"
     [[ "${got%% *}" =~ ^[0-9]+$ ]] || _test_failed "mtime is not a number: [${got%% *}]"
+    rm -rf "$d"
+}
+
+#[test]
+it_is_not_fooled_by_a_stat_whose_wrong_flag_prints_numbers() {
+    # The control for the two picks above, and the reason the detection writes
+    # a file of known size rather than looking for a leading digit.
+    #
+    # This `stat` is GNU: `-c` is the format flag and `-f` asks about the file
+    # system. Its `-f` output happens to begin with a block size. A probe that
+    # accepted "the first field is a number" picks `-f` here and is wrong about
+    # every stamp afterwards, on the platform where it matters.
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-stat.XXXXXX")"
+    _stat_stub "$d" gnu-numeric
+    assert_eq "$(_stat_flag_under "$d")" "-c"
     rm -rf "$d"
 }

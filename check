@@ -21,7 +21,14 @@
 set -uo pipefail
 
 # Bootstrap nutshell (this is an entry point script)
-. "${BASH_SOURCE[0]%/*}/init"
+#
+# `|| exit 1`, because `init` refuses to load on a bash older than 4 and its
+# `return` returns to whoever sourced it: it cannot stop them. Unchecked, this
+# printed the refusal, ran its whole body with no modules loaded, found no
+# checks to run, and reported PASSED. On macOS, under `/bin/bash`, which is the
+# machine the refusal exists for. `release` gates on this command.
+# shellcheck source=/dev/null
+. "${BASH_SOURCE[0]%/*}/init" || exit 1
 
 # Load nutshell modules
 use os log string validate toml fs
@@ -348,7 +355,17 @@ _run_custom_checks() {
 _print_summary() {
     echo ""
     echo -e "${BOLD}────────────────────────────────────────${NC}"
-    
+
+    # Zero checks is not a pass. The same reasoning as `lib/test.sh` refusing a
+    # file that yields no tests: a run that examined nothing has established
+    # nothing, and "All 0 checks passed" is the sentence a broken bootstrap
+    # prints on its way to exit 0.
+    if [[ $TOTAL_CHECKS -eq 0 ]]; then
+        echo -e "${RED}${BOLD}FAILED${NC} - no checks ran at all"
+        echo "  nothing was found to run. A gate that examined nothing has not passed."
+        return 1
+    fi
+
     if [[ $FAILED_CHECKS -gt 0 ]]; then
         echo -e "${RED}${BOLD}FAILED${NC} - $FAILED_CHECKS of $TOTAL_CHECKS checks failed"
         return 1

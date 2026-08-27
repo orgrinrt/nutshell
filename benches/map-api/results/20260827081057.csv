@@ -1,0 +1,3 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash  one associative array,2080,2291,within the noise,yes
+posix floor  encoded names,7494,7619,360%,yes

@@ -95,8 +95,65 @@ it_encodes_a_name_that_is_not_a_variable_name() {
     _deps_key pkg;        local b="$_dk"
     assert_ne "$a" "$b"
 
+    # Byte-wise, which is what makes the concatenation prefix-free. `printf
+    # '%d' "'c"` gives a codepoint and `%02x` is a minimum width, so a
+    # character above U+00FF produced four digits and one character could
+    # occupy the space of two: `€` and a space followed by `¬` both encoded to
+    # `20ac`, and the second name read the first's path.
+    local a b
+    _deps_key '€';  a="$_dk"
+    _deps_key ' ¬'; b="$_dk"
+    assert_ne "$a" "$b"
+    assert_eq "$a" "enc_e282ac"
+    assert_eq "$b" "enc_20c2ac"
+
+    # `é` is two bytes and the raw byte 0xe9 is one. They collided at `e9`.
+    _deps_key 'é'; assert_eq "$_dk" "enc_c3a9"
+
+    # Every encoded name is an even number of hex digits, which is the property
+    # the fixed width buys and the thing a variable width breaks.
+    local n v
+    for v in 'a-b' '7z' 'pkg-config' '€' 'é' 'a b' 'x.y'; do
+        _deps_key "$v"
+        n="${_dk#enc_}"
+        assert_eq "$(( ${#n} % 2 ))" "0"
+    done
+
     # And an empty name is not a name at all.
     assert_fails _deps_key ""
+}
+
+#[test]
+it_does_not_let_two_tool_names_reach_one_variable() {
+    # The property the whole scheme rests on, checked as a property rather than
+    # on the pair that motivated it. Every name here must reach its own
+    # variable; any two landing on one is a silent wrong-path bug in
+    # `deps_path` and `deps_run`, which are public.
+    local seen="" v k
+    for v in sed grep_pcre _x a1 pkg-config git-lfs 7z 'a b' 'x.y' 'a+b' \
+             '€' ' ¬' 'é' 'enc_706b67' pkg 'enc_' 'a' 'aa' 'a-' '-a'; do
+        _deps_key "$v" || continue
+        k="$_dk"
+        assert_not_contains "$seen" "|${k}|"
+        seen="${seen}|${k}|"
+    done
+}
+
+#[test]
+it_refuses_a_capability_name_that_is_not_a_variable_name() {
+    # Capabilities are internal literals and are refused rather than encoded,
+    # because `_TOOL_CAN_NAMES` is a space-separated list that `deps_caps`
+    # splits. An encoded name and a raw one in one list disagree the moment
+    # either holds a space, and `deps_caps` then emits two rows with empty
+    # values.
+    assert_fails _deps_can_set "a b" 1
+    assert_fails _deps_can_set "a-b" 1
+    assert_fails _deps_can_set "" 1
+    assert_ok    _deps_can_set nut_test_cap 1
+    assert_contains "$(deps_caps)" "nut_test_cap=1"
+    # Every row still has a value, which is what a raw name in an encoded
+    # table would have broken.
+    assert_not_contains "$(deps_caps)" "="$'\n'
 }
 
 #[test]

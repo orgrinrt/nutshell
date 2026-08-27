@@ -168,14 +168,42 @@ _deps_key() {
         *[!A-Za-z0-9_]* ) : ;;
         * ) _dk="$1"; return 0 ;;
     esac
+    # Bytes, not characters, and that is what `LC_ALL=C` is for.
+    #
+    # `printf '%d' "'c"` gives a codepoint and `%02x` is a minimum width rather
+    # than a fixed one, so a character above U+00FF produces four hex digits
+    # and the concatenation stops being prefix-free. `€` is `20ac`; so is a
+    # space followed by `¬`. Two names, one variable, and the second reads the
+    # first's path. Under `LC_ALL=C` both the character walk and the numeric
+    # conversion go byte-wise, every byte is exactly two digits, and the
+    # property holds.
+    _dk_loc="${LC_ALL:-}"
+    LC_ALL=C
     _dk="enc_"
     _dk_in="$1"
     while [ -n "$_dk_in" ]; do
         _dk_c="${_dk_in%"${_dk_in#?}"}"
         _dk_in="${_dk_in#?}"
-        _dk="${_dk}$(printf '%02x' "$(printf '%d' "'$_dk_c")")"
+        _deps_hex "$_dk_c"
+        _dk="${_dk}${_dh}"
     done
+    LC_ALL="$_dk_loc"
+    [ -n "$_dk_loc" ] || unset LC_ALL
     return 0
+}
+
+# One byte as two hex digits, without a fork.
+#
+# It ran two command substitutions per byte, which is the pattern taken out of
+# `lib/map.sh` in the same branch. The table covers what a tool name actually
+# holds; anything else falls back to the fork and is rare enough not to matter.
+_deps_hex() {
+    case "$1" in
+        -) _dh=2d ;;  .) _dh=2e ;;  +) _dh=2b ;;  '~') _dh=7e ;;
+        0) _dh=30 ;;  1) _dh=31 ;;  2) _dh=32 ;;  3) _dh=33 ;;  4) _dh=34 ;;
+        5) _dh=35 ;;  6) _dh=36 ;;  7) _dh=37 ;;  8) _dh=38 ;;  9) _dh=39 ;;
+        *) _dh="$(printf '%02x' "$(printf '%d' "'$1")")" ;;
+    esac
 }
 
 # _deps_get <destvar> <table> <name>
@@ -201,7 +229,17 @@ _deps_set() {
 # than `deps_caps` used to give: it listed what had been set, and an absent
 # capability was absent rather than false.
 _deps_can_set() {
-    _deps_key "$1" || return 1
+    # A capability name has to be a variable name already, and every one this
+    # module has is an internal literal like `grep_pcre`. It is not encoded,
+    # because `_TOOL_CAN_NAMES` is a space-separated list and `deps_caps`
+    # splits it: an encoded name and a raw one in the same list disagree the
+    # moment either holds a space, and `deps_caps` then emits two rows with
+    # empty values. Tools are caller-supplied and get encoded; capabilities are
+    # ours and get refused.
+    case "${1:-}" in
+        "" | *[!A-Za-z0-9_]* | [0-9]* ) return 1 ;;
+    esac
+    _dk="$1"
     case " $_TOOL_CAN_NAMES " in
         *" $1 "*) : ;;
         *) _TOOL_CAN_NAMES="${_TOOL_CAN_NAMES} $1" ;;

@@ -219,3 +219,73 @@ it_reports_a_count_larger_than_the_excluded_scope() {
     assert_ok test "$extra" -gt 0
     assert_ok test "$(( base + extra ))" -gt "$base"
 }
+
+#[test]
+# A module on the floor is one that RUNS there, not one that parses there.
+#
+# This is the distinction the check itself was missing, and it is worth an
+# end-to-end test because every other test here is about the instrument. To a
+# POSIX shell `[[ -n x ]]` is a command name with three arguments, so it parses
+# anywhere and then reports `[[: not found`. `printf -v` is worse: it reports
+# an illegal option, carries on, and leaves the variable empty.
+#
+# So the assertion is that `os.sh` sourced by a real POSIX shell defines its
+# functions and they answer, which is the only claim that means anything.
+it_runs_a_floor_module_rather_than_merely_parsing_it() {
+    local sh; sh="$(_posix_shell)" || { skip "no posix shell here"; return 0; }
+    local root="${BASH_SOURCE[0]%/*}/.."
+
+    # Every function in it, not one. The first version of this called only
+    # `os_name`, and putting a `[[` back into `os_is_macos` left it passing:
+    # a probe that does not reach the broken line reports nothing wrong with
+    # it, and the bashisms are spread one per predicate here.
+    local probe='
+        . "$1"/lib/os.sh || exit 1
+        printf "%s|%s|" "$(os_name)" "$(os_arch)"
+        os_is_linux   && printf "L" || printf "-"
+        os_is_macos   && printf "M" || printf "-"
+        os_is_windows && printf "W" || printf "-"
+        os_is_wsl     && printf "S" || printf "-"
+    '
+    local got want
+    got="$("$sh" -c "$probe" _ "$root" 2>&1)"
+    assert_not_contains "$got" "not found"
+    assert_not_contains "$got" "Bad substitution"
+    assert_ne "$got" ""
+
+    # And it agrees with the same module under bash, because a floor
+    # implementation that runs and answers differently is worse than one that
+    # does not run. This is what the mutation has to break.
+    want="$(bash -c "$probe" _ "$root" 2>/dev/null)"
+    assert_eq "$got" "$want"
+}
+
+#[test]
+# `nut_once` is the quiet one, so it gets its own case.
+#
+# It reads `BASH_SOURCE` and uses `printf -v`. Under a POSIX shell it is not
+# found, the `|| return 0` beside it returns from the whole file, and the
+# module defines nothing while reporting success: the source succeeds, the
+# functions are absent, and nothing says so.
+#
+# The check has to call that out, or a file using it reads as floor-ready and
+# is not.
+it_reads_nut_once_as_something_the_floor_cannot_run() {
+    local f; f="$(_pf_tmp)"
+    printf 'nut_once || return 0\nfoo() { echo hi; }\n' > "$f"
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_ne "$hits" "" "nut_once was not reported"
+    assert_contains "$hits" "nut_once"
+}
+
+#[test]
+# The control for the case above: a file with the guard the floor modules use
+# instead must come back clean, or the check flags everything and says nothing.
+it_reads_an_own_guard_as_fine() {
+    local f; f="$(_pf_tmp)"
+    printf '[ -n "${_NUTSHELL_X_SH:-}" ] && return 0\n_NUTSHELL_X_SH=1\nfoo() { echo hi; }\n' > "$f"
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_eq "$hits" ""
+}

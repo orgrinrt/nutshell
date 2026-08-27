@@ -174,7 +174,7 @@ log_open() {
 # Close the step, with how it went: ok, warn, fail, or nothing for silence.
 # Usage: log_close ok "3 partitions"
 log_close() {
-    (( LOG_DEPTH > 0 )) && LOG_DEPTH=$(( LOG_DEPTH - 1 ))
+    [ "$LOG_DEPTH" -gt 0 ] && LOG_DEPTH=$(( LOG_DEPTH - 1 ))
     local how="${1:-}"; shift 2>/dev/null || true
     case "$how" in
         ok)   log_ok   "$@" ;;

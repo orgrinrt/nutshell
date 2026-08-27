@@ -25,7 +25,14 @@
 #   git_changed_files "$base" | while read -r f; do ...; done
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success. That is worse than failing, because the caller has no way
+# to tell.
+[ -n "${_NUTSHELL_GIT_SH:-}" ] && return 0
+_NUTSHELL_GIT_SH=1
 
 use log
 
@@ -114,7 +121,7 @@ git_changed_files() {
 # Usage: git_changed dev docs -> returns 0 when anything under it changed
 git_changed() {
     local base="$1"; shift
-    [[ -n "$(git_changed_files "$base" "$@")" ]]
+    [ -n "$(git_changed_files "$base" "$@")" ]
 }
 
 # git_added_lines <base> <pathspec>
@@ -145,7 +152,7 @@ git_file_age_days() {
     local file_at head_at
     file_at=$(git log -1 --format=%ct -- "$path" 2>/dev/null)
     head_at=$(git log -1 --format=%ct 2>/dev/null)
-    [[ -z "$file_at" || -z "$head_at" ]] && { printf '0'; return 1; }
+    { [ -z "$file_at" ] || [ -z "$head_at" ]; } && { printf '0'; return 1; }
     printf '%d' $(( (head_at - file_at) / 86400 ))
 }
 

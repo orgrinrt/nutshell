@@ -134,6 +134,20 @@ _shell_gated_files() {
 # can pass the parse and be broken on the floor in a way no test on a bash
 # machine will ever see.
 #
+# `nut_once` is nutshell's own, and it is the quietest of the lot: it reads
+# `BASH_SOURCE` and uses `printf -v`, so under a POSIX shell it is not found,
+# the `|| return 0` beside it returns from the whole file, and the module
+# defines nothing while reporting success. A caller has no way to tell. The
+# floor files carry a guard of their own instead, which is two lines.
+#
+# `[[` and `((` matter most and are the two a parser cannot see at all. To a
+# POSIX shell `[[ -n x ]]` is a command name and three arguments, so it parses
+# anywhere and then reports `[[: not found`; `(( x > 1 ))` parses as nested
+# subshells and runs `x` as a command. Only the forms carrying bash-only syntax
+# inside them, `=~` and a C-style `for`, reach the parser at all. That is how a
+# file full of `[[` was counted as reading fine, and it is most of the gap
+# between what this check used to report and what actually runs.
+#
 # Reported beside the parse failures rather than folded into them, because they
 # are a different fact about the file: it reads, and it does not work.
 _posix_bashisms() {
@@ -142,6 +156,8 @@ _posix_bashisms() {
     # which loses a real finding now and then; the alternative is parsing shell
     # to run a warning, and this check never blocks.
     sed -e 's/#.*$//' "$file" 2>/dev/null | grep -noE \
+        -e '\[\[' \
+        -e '(^|[[:space:];&|])\(\(' \
         -e 'printf[[:space:]]+-v' \
         -e '(^|[[:space:];&|(])declare[[:space:]]' \
         -e 'local[[:space:]]+-[aAin]' \
@@ -151,6 +167,7 @@ _posix_bashisms() {
         -e "\\$'" \
         -e 'BASH_[A-Z]' \
         -e '(mapfile|readarray)[[:space:]]' \
+        -e '(^|[[:space:];&|])nut_once([[:space:]]|$)' \
         -e 'read[[:space:]]+-[a-zA-Z]*[nNdt]([[:space:]]|$)' \
         2>/dev/null | sed -e 's/^\([0-9]*\):[[:space:]]*/\1: /' | head -6
 }

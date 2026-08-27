@@ -24,7 +24,14 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success. That is worse than failing, because the caller has no way
+# to tell.
+[ -n "${_NUTSHELL_XDG_SH:-}" ] && return 0
+_NUTSHELL_XDG_SH=1
 
 # -----------------------------------------------------------------------------
 # Dependencies

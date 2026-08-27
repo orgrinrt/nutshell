@@ -112,3 +112,63 @@ it_exempts_nothing_when_nothing_is_configured() {
     assert_fails _is_exempt "lib/anything.sh"
     assert_fails _is_exempt ""
 }
+
+# --- a file behind a shell predicate is not counted --------------------------
+#
+# The question is which modules a POSIX shell cannot load, not which files it
+# cannot parse. Those stopped being the same thing the moment a module could
+# carry a variant: the bash file of a module with a floor will never parse
+# under dash and never has to.
+#
+# Counting it makes the number go up when a floor is added, which is the number
+# moving the wrong way while the library gets better.
+
+_pf_lib() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-pf.XXXXXX")"
+    printf '%s' "$1" > "$d/lib.nut"
+    printf '%s' "$d"
+}
+
+#[test]
+it_discounts_a_file_reached_only_behind_a_shell_predicate() {
+    local d; d="$(_pf_lib 'string  lib/string.sh        when=shell:bash4
+string  lib/string.posix.sh
+other   lib/other.sh')"
+    local got; got="$(_shell_gated_files "$d")"
+    assert_eq "$got" "lib/string.sh"
+    rm -rf "$d"
+}
+
+#[test]
+it_counts_a_file_reached_behind_a_tool_predicate() {
+    # `have:` is not `shell:`. A row predicated on a tool is still sourced on a
+    # POSIX shell wherever that tool exists, so it has to parse there, and
+    # discounting it would hide a real gap.
+    local d; d="$(_pf_lib 'text  lib/text.fast.sh  when=have:grep
+text  lib/text.sh')"
+    assert_empty "$(_shell_gated_files "$d")"
+    rm -rf "$d"
+}
+
+#[test]
+it_discounts_nothing_in_a_manifest_with_no_predicates() {
+    # The control. A matcher that returned every file would empty the report
+    # and read as a floor that is already reached.
+    local d; d="$(_pf_lib 'one  lib/one.sh
+two  lib/two.sh  internal')"
+    assert_empty "$(_shell_gated_files "$d")"
+    rm -rf "$d"
+}
+
+#[test]
+it_reads_a_shell_predicate_written_after_a_visibility() {
+    # The trailing columns are words, not positions, and this reader has to
+    # agree with the resolver about that or the two disagree about which file
+    # a POSIX shell ever sees.
+    local d; d="$(_pf_lib 'a  lib/a.sh  internal when=shell:bash4
+b  lib/b.sh  when=shell:bash internal')"
+    local got; got="$(_shell_gated_files "$d")"
+    assert_contains "$got" "lib/a.sh"
+    assert_contains "$got" "lib/b.sh"
+    rm -rf "$d"
+}

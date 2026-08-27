@@ -72,7 +72,18 @@ str_replace() {
     local to="${3:-}"
     
     [[ -z "$from" ]] && { echo "$str"; return 0; }
-    echo "${str//$from/$to}"
+    # The needle is quoted, so it is a literal.
+    #
+    # Unquoted, `${str//$from/$to}` reads it as a pattern, which is not what
+    # "replace all occurrences of a substring" says and not what a caller
+    # passing a needle out of a file means. `str_replace 'a*b' '*' '+'`
+    # returned `+`, because `*` matched the whole string; `a?c` matched `axc`;
+    # and `[b]` matched a bare `b`.
+    #
+    # Found by writing the POSIX floor beside this and comparing the two over
+    # the same inputs. The floor could not have this bug: it has no `${x//}`
+    # and cuts at the first literal occurrence instead.
+    echo "${str//"$from"/$to}"
 }
 
 #[pub]

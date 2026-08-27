@@ -85,6 +85,34 @@ _is_exempt() {
     return 1
 }
 
+# Files the manifest reaches only behind a `shell:` predicate.
+#
+# The question this check exists to answer is which modules a POSIX shell
+# cannot load, not which files it cannot parse. Those stopped being the same
+# thing the moment a module could carry a variant: `lib/string.sh` will never
+# parse under dash and never has to, because `lib/string.posix.sh` is what a
+# POSIX shell is given.
+#
+# Counting the file would make the number go **up** when a floor is added,
+# which is the number moving the wrong way while the library gets better, and
+# is the kind of thing people then stop reading.
+#
+# Only `shell:` counts. A row predicated on `have:` is still sourced on a POSIX
+# shell wherever that tool exists, so it has to parse there.
+_shell_gated_files() {
+    local root="$1" name file rest word
+    [[ -r "${root}/lib.nut" ]] || return 0
+    while read -r name file rest || [[ -n "$name" ]]; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        [[ -n "$file" ]] || continue
+        for word in $rest; do
+            case "$word" in
+                when=*shell:*) printf '%s\n' "$file" ;;
+            esac
+        done
+    done < "${root}/lib.nut"
+}
+
 test_posix_floor() {
     log_header "POSIX floor"
 
@@ -99,15 +127,21 @@ test_posix_floor() {
     fi
     log_info "checking with ${sh}"
 
-    local files file rel total=0 unreadable=0 exempt=0 why
+    local files file rel total=0 unreadable=0 exempt=0 gated=0 why
     declare -a bad=()
     files="$(get_script_files)"
+
+    local -A shell_gated=()
+    while IFS= read -r rel; do
+        [[ -n "$rel" ]] && shell_gated["$rel"]=1
+    done < <(_shell_gated_files "$REPO_ROOT")
 
     while IFS= read -r file; do
         [[ -z "$file" || ! -f "$file" ]] && continue
         rel="${file#$REPO_ROOT/}"
         total=$(( total + 1 ))
         if _is_exempt "$rel"; then exempt=$(( exempt + 1 )); continue; fi
+        if [[ -n "${shell_gated[$rel]:-}" ]]; then gated=$(( gated + 1 )); continue; fi
 
         why="$("$sh" -n "$file" 2>&1 | head -1)"
         if [[ -n "$why" ]]; then
@@ -119,11 +153,12 @@ test_posix_floor() {
     done <<< "$files"
 
     echo ""
-    log_info "${unreadable} of $(( total - exempt )) cannot be read by ${sh}"
+    log_info "${unreadable} of $(( total - exempt - gated )) cannot be read by ${sh}"
+    [[ "$gated" -gt 0 ]] && log_info "${gated} behind a shell: predicate, so never sourced there"
     [[ "$exempt" -gt 0 ]] && log_info "${exempt} exempt by config"
 
-    TESTS_RUN=$(( total - exempt ))
-    TESTS_PASSED=$(( total - exempt - unreadable ))
+    TESTS_RUN=$(( total - exempt - gated ))
+    TESTS_PASSED=$(( total - exempt - gated - unreadable ))
     TESTS_WARNED=$unreadable
     WARNED_TESTS=("${bad[@]}")
 

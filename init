@@ -399,6 +399,51 @@ _nut_when() {
     return 0
 }
 
+# _lib_nut_files <root>
+#
+# Every file a library declares, one per line, relative as written.
+#
+# One module may name several, which is what a `when=` row is, so this is not
+# the same list as `_lib_nut_modules` and a reader wanting "is this file part
+# of the library" wants this one. Deriving a module name from a path and
+# looking that up says no for every variant: `lib/string.posix.sh` is not a
+# module called `string.posix`, it is one of the files module `string` can be.
+#
+# Here rather than in each checker because three of them asked the question
+# separately and all three got a different wrong answer the day a variant
+# appeared.
+_lib_nut_files() {
+    local root="$1" name file _rest
+    [[ -r "${root}/lib.nut" ]] || return 1
+    while read -r name file _rest || [[ -n "$name" ]]; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        [[ -n "$file" ]] && printf '%s\n' "$file"
+    done < "${root}/lib.nut"
+}
+
+# _lib_nut_variants_of <root> <file>
+#
+# The other files declared for whichever module declares this one, this one
+# excluded. Empty when the file is not a variant, which is the common case.
+#
+# What a checker wants when two files legitimately hold the same function
+# names, or when one appears to call into the other: they are one module
+# written twice for two shells, not two modules.
+_lib_nut_variants_of() {
+    local root="$1" want="$2" name file _rest owner=""
+    [[ -r "${root}/lib.nut" ]] || return 1
+    while read -r name file _rest || [[ -n "$name" ]]; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        [[ "$file" == "$want" ]] && { owner="$name"; break; }
+    done < "${root}/lib.nut"
+    [[ -n "$owner" ]] || return 1
+    while read -r name file _rest || [[ -n "$name" ]]; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        [[ "$name" == "$owner" && "$file" != "$want" ]] && printf '%s\n' "$file"
+    done < "${root}/lib.nut"
+    return 0
+}
+
 # _lib_nut_modules <root>
 #
 # Every module a library declares, one per line. For the checker, and for an

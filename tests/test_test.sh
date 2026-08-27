@@ -72,3 +72,45 @@ it_says_when_a_test_asserted_nothing() {
     out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/asserts_nothing_test.sh 2>&1)"
     assert_contains "$out" "asserted nothing"
 }
+
+#[test]
+# What the verdict says when a test stops without reaching its end.
+#
+# It said only "the test did not finish", which is not diagnosable, and this
+# repo has an intermittent failure of exactly that shape: four tests in
+# `deps_test.sh` that fail together under a full suite run and pass when run on
+# their own. Twice now, with no more to go on than that sentence.
+#
+# The tally distinguishes two different faults. Empty means the body never
+# reached its first assertion; a partial one means it stopped part way and says
+# how far it got. A missing marker file is a third thing again and is about the
+# harness rather than the test.
+it_says_how_far_a_test_got_before_it_stopped() {
+    local d; d="$(mktemp -d)"
+    # The attribute is assembled rather than written. Discovery greps the
+    # source for `#[test]`, and it does not know a heredoc from code: written
+    # literally here, the probe's function is registered as a test of *this*
+    # file, where it does not exist, and the run reports a command not found.
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_dies_after_one_assertion() {\n'
+        printf '    assert_eq 1 1\n'
+        printf '    exit 3\n'
+        printf '}\n'
+    } > "$d/zz_probe_test.sh"
+    # The nested run gets a clean environment. `_TEST_MARK_DIR` and
+    # `_TEST_MARK` are exported, so a child harness writes its markers into the
+    # parent's directory and the parent then reads the child's tests as its
+    # own: the first version of this test reported the probe's deliberate
+    # failure as a failure of this file.
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_probe_test.sh" 2>&1)"
+    rm -rf "$d"
+
+    assert_contains "$out" "did not finish"
+    # The part that was missing: which state it was in.
+    assert_contains "$out" "stopped part way"
+    assert_contains "$out" "'a'"
+}

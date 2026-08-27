@@ -9,7 +9,12 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and so
+# needs bash. Under a POSIX shell `nut_once` is not found and the `|| return 0`
+# after it fires on every load: the module reports success and defines nothing,
+# which is the quietest way a floor module can fail.
+[ -n "${_NUTSHELL_VALIDATE_SH:-}" ] && return 0
+_NUTSHELL_VALIDATE_SH=1
 
 # -----------------------------------------------------------------------------
 # Dependencies
@@ -34,8 +39,16 @@ use log
 # Usage: is_set "varname" -> returns 0 (true) or 1 (false)
 is_set() {
     local varname="${1:-}"
-    [[ -z "$varname" ]] && return 1
-    [[ -n "${!varname+x}" ]] && [[ -n "${!varname}" ]]
+    [ -z "$varname" ] && return 1
+    # The name reaches `eval`, so it is checked before it does. `${!name}` did
+    # the indirection without one and POSIX has no equivalent; what POSIX has
+    # is `eval`, and `eval` will run whatever it is handed. A shell variable
+    # name is `[A-Za-z_][A-Za-z0-9_]*` and anything else is a caller passing a
+    # command, so it answers no rather than running it.
+    case "$varname" in
+        ''|*[!A-Za-z0-9_]*|[0-9]*) return 1 ;;
+    esac
+    eval "[ -n \"\${${varname}+x}\" ] && [ -n \"\${${varname}}\" ]"
 }
 
 #[pub]
@@ -43,8 +56,14 @@ is_set() {
 # Usage: is_empty "varname" -> returns 0 (true) or 1 (false)
 is_empty() {
     local varname="${1:-}"
-    [[ -z "$varname" ]] && return 0
-    [[ -z "${!varname+x}" ]] || [[ -z "${!varname}" ]]
+    [ -z "$varname" ] && return 0
+    # Validated for the same reason as `is_set`, and answering yes rather than
+    # no: a name that cannot name a variable names no variable, and a variable
+    # that does not exist is empty.
+    case "$varname" in
+        ''|*[!A-Za-z0-9_]*|[0-9]*) return 0 ;;
+    esac
+    eval "[ -z \"\${${varname}+x}\" ] || [ -z \"\${${varname}}\" ]"
 }
 
 # -----------------------------------------------------------------------------
@@ -56,7 +75,7 @@ is_empty() {
 # Check if a command is available
 # Usage: has_command "git" -> returns 0 (true) or 1 (false)
 has_command() {
-    command -v "${1:-}" &>/dev/null
+    command -v "${1:-}" >/dev/null 2>&1
 }
 
 # -----------------------------------------------------------------------------
@@ -67,8 +86,10 @@ has_command() {
 # Check if value is an integer (positive or negative)
 # Usage: is_integer "-42" -> returns 0 (true)
 is_integer() {
-    local val="${1:-}"
-    [[ "$val" =~ ^-?[0-9]+$ ]]
+    local val="${1:-}" d="${1:-}"
+    case "$d" in -*) d="${d#-}" ;; esac
+    case "$d" in ''|*[!0-9]*) return 1 ;; esac
+    return 0
 }
 
 #[pub]
@@ -76,7 +97,8 @@ is_integer() {
 # Usage: is_positive_integer "42" -> returns 0 (true)
 is_positive_integer() {
     local val="${1:-}"
-    [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -gt 0 ]]
+    case "$val" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$val" -gt 0 ]
 }
 
 #[pub]
@@ -84,7 +106,8 @@ is_positive_integer() {
 # Usage: is_non_negative_integer "0" -> returns 0 (true)
 is_non_negative_integer() {
     local val="${1:-}"
-    [[ "$val" =~ ^[0-9]+$ ]]
+    case "$val" in ''|*[!0-9]*) return 1 ;; esac
+    return 0
 }
 
 #[pub]
@@ -132,7 +155,14 @@ is_falsy() {
 # Usage: is_url "https://example.com" -> returns 0 (true)
 is_url() {
     local val="${1:-}"
-    [[ "$val" =~ ^https?://[^[:space:]]+$ ]]
+    case "$val" in
+        http://?*|https://?*) ;;
+        *) return 1 ;;
+    esac
+    # `[^[:space:]]+` in the old pattern. A tab counts, which is why this is
+    # not a test for a plain space.
+    case "$val" in *[[:space:]]*) return 1 ;; esac
+    return 0
 }
 
 #[pub]
@@ -140,20 +170,21 @@ is_url() {
 # Usage: is_email "user@example.com" -> returns 0 (true)
 is_email() {
     local val="${1:-}"
-    [[ "$val" == *@* ]] || return 1
+    case "$val" in *@*) ;; *) return 1 ;; esac
 
     local local_part="${val%@*}" domain="${val##*@}"
 
     # More than one @, or nothing on one side of it.
-    [[ "$local_part" == *@* ]] && return 1
-    [[ -z "$local_part" || -z "$domain" ]] && return 1
-    [[ "$local_part" == *[[:space:]]* ]] && return 1
+    case "$local_part" in *@*) return 1 ;; esac
+    [ -z "$local_part" ] && return 1
+    [ -z "$domain" ] && return 1
+    case "$local_part" in *[[:space:]]*) return 1 ;; esac
 
     # The domain is a hostname, judged by the one function that knows what one
     # is. The pattern this replaced matched `[^@[:space:]]+\.[^@[:space:]]+`,
     # which accepts `b..c`: a dot can sit inside either half, so an empty label
     # was invisible to it.
-    [[ "$domain" == *.* ]] || return 1
+    case "$domain" in *.*) ;; *) return 1 ;; esac
     is_hostname "$domain"
 }
 
@@ -161,21 +192,26 @@ is_email() {
 # Check if value is a valid IPv4 address
 # Usage: is_ipv4 "192.168.1.1" -> returns 0 (true)
 is_ipv4() {
-    local val="${1:-}"
-    local IFS='.'
-    local -a octets
-    read -ra octets <<< "$val"
-    
-    [[ ${#octets[@]} -ne 4 ]] && return 1
-    
-    local octet
-    for octet in "${octets[@]}"; do
-        [[ ! "$octet" =~ ^[0-9]+$ ]] && return 1
-        [[ "$octet" -lt 0 || "$octet" -gt 255 ]] && return 1
-        # Check for leading zeros (invalid in strict IP)
-        [[ "${#octet}" -gt 1 && "${octet:0:1}" == "0" ]] && return 1
+    local val="${1:-}" rest="${1:-}" octet n=0 more=1
+    [ -n "$val" ] || return 1
+
+    # Chopped on the dots rather than read into an array. `read -ra` needs an
+    # array and a here-string and POSIX has neither, and splitting on `$IFS`
+    # with `for` would also swallow an empty octet, which `1.2..3` needs kept
+    # so it can be refused.
+    while [ "$more" -eq 1 ]; do
+        case "$rest" in
+            *.*) octet="${rest%%.*}"; rest="${rest#*.}" ;;
+            *)   octet="$rest"; more=0 ;;
+        esac
+        n=$(( n + 1 ))
+        [ "$n" -gt 4 ] && return 1
+        case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+        [ "$octet" -gt 255 ] && return 1
+        # A leading zero is not a strict IP. `0` on its own is fine.
+        case "$octet" in 0?*) return 1 ;; esac
     done
-    return 0
+    [ "$n" -eq 4 ]
 }
 
 #[pub]
@@ -183,7 +219,7 @@ is_ipv4() {
 # Usage: is_ipv6 "::1" -> returns 0 (true)
 is_ipv6() {
     local val="${1:-}"
-    [[ -z "$val" ]] && return 1
+    [ -z "$val" ] && return 1
 
     # Counted, not pattern-matched. The pattern this replaced allowed a group
     # of zero to four hex digits anywhere, which accepts `:::::` and `1:2:3`:
@@ -197,57 +233,62 @@ is_ipv6() {
     # trailing empty field while the count keeps it, so `1:2:3:4:5:6:7:` came
     # out as eight groups with seven of them checked, and `::1:` and `1::2:3:`
     # went the same way. Checked here rather than left to the split.
-    [[ "$val" == :* && "$val" != ::* ]] && return 1
-    [[ "$val" == *: && "$val" != *:: ]] && return 1
+    case "$val" in ::*) ;; :*) return 1 ;; esac
+    case "$val" in *::) ;; *:) return 1 ;; esac
 
     # The IPv4-mapped form, `::ffff:192.168.1.1`. The dotted part is one
     # address occupying the last two groups.
     local mapped=0
-    if [[ "$val" == *.* ]]; then
+    case "$val" in *.*)
         local quad="${val##*:}"
         is_ipv4 "$quad" || return 1
         val="${val%:*}:"
         mapped=2
         # Trimming left a trailing colon that is not `::`; put the shape back
         # so the rest reads it as a compression or as a separator.
-        [[ "$val" == *:: ]] || val="${val%:}"
-    fi
+        case "$val" in *::) ;; *) val="${val%:}" ;; esac
+        ;;
+    esac
 
     local head tail
-    if [[ "$val" == *::* ]]; then
+    if case "$val" in *::*) true ;; *) false ;; esac; then
         # Once only. `1::2::3` says nothing about where the zeroes go.
-        [[ "${val%%::*}" == *::* || "${val#*::}" == *::* ]] && return 1
+        case "${val%%::*}" in *::*) return 1 ;; esac
+        case "${val#*::}"  in *::*) return 1 ;; esac
         head="${val%%::*}"
         tail="${val#*::}"
     else
         head="$val"
         tail=""
         # No `::`, so every one of the eight has to be written.
-        [[ $(( $(_v6_count "$head") + mapped )) -eq 8 ]] || return 1
+        [ $(( $(_v6_count "$head") + mapped )) -eq 8 ] || return 1
         _v6_groups_ok "$head"
         return $?
     fi
 
     local n=$(( $(_v6_count "$head") + $(_v6_count "$tail") + mapped ))
-    [[ "$n" -le 7 ]] || return 1
+    [ "$n" -le 7 ] || return 1
     _v6_groups_ok "$head" || return 1
     _v6_groups_ok "$tail"
 }
 
 # _v6_count <segment> -> how many colon-separated groups it holds
 _v6_count() {
-    [[ -z "$1" ]] && { printf '0'; return 0; }
+    [ -z "$1" ] && { printf '0'; return 0; }
     local rest="${1//[^:]/}"
     printf '%d' $(( ${#rest} + 1 ))
 }
 
 # _v6_groups_ok <segment> -> every group is one to four hex digits
 _v6_groups_ok() {
-    [[ -z "$1" ]] && return 0
+    [ -z "$1" ] && return 0
     local group
     local IFS=':'
     for group in $1; do
-        [[ "$group" =~ ^[0-9a-fA-F]{1,4}$ ]] || return 1
+        # `^[0-9a-fA-F]{1,4}$`: one to four hex digits, so the charset and the
+        # length are two checks rather than one pattern.
+        case "$group" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+        [ "${#group}" -le 4 ] || return 1
     done
     return 0
 }
@@ -265,7 +306,8 @@ is_ip() {
 # Usage: is_port "8080" -> returns 0 (true)
 is_port() {
     local val="${1:-}"
-    [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -ge 1 ]] && [[ "$val" -le 65535 ]]
+    case "$val" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$val" -ge 1 ] && [ "$val" -le 65535 ]
 }
 
 #[pub]
@@ -277,16 +319,28 @@ is_hostname() {
     # Length first. The pattern alone accepts a single label of any length, so
     # a 300-character name passed, and a name that cannot be resolved is not a
     # hostname whatever it is made of. RFC 1035: 253 for the name, 63 a label.
-    [[ -z "$val" || "${#val}" -gt 253 ]] && return 1
+    [ -z "$val" ] && return 1
+    [ "${#val}" -gt 253 ] && return 1
 
-    local label
+    # The old pattern said the same thing about the whole name in one line, and
+    # said it per label is what it amounts to: alphanumeric and hyphens, and
+    # neither end a hyphen. Checked per label because the function was already
+    # walking them for the length, and because a pattern that long is read by
+    # nobody.
+    #
+    # `$val` unquoted with `IFS='.'` splits on dots. A trailing dot yields no
+    # final field, so `a.` passes here and passed the old pattern too.
+    local label first last
     local IFS='.'
     for label in $val; do
-        [[ "${#label}" -ge 1 && "${#label}" -le 63 ]] || return 1
+        [ "${#label}" -ge 1 ] && [ "${#label}" -le 63 ] || return 1
+        case "$label" in *[!a-zA-Z0-9-]*) return 1 ;; esac
+        first="${label%"${label#?}"}"
+        last="${label#"${label%?}"}"
+        case "$first" in *[!a-zA-Z0-9]*) return 1 ;; esac
+        case "$last"  in *[!a-zA-Z0-9]*) return 1 ;; esac
     done
-
-    # Alphanumeric and hyphens, no label starting or ending on a hyphen.
-    [[ "$val" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -313,7 +367,7 @@ require_file() {
     local path="${1:-}"
     local msg="${2:-Required file '$path' not found}"
     
-    if [[ ! -f "$path" ]]; then
+    if [ ! -f "$path" ]; then
         log_fatal "$msg"
     fi
 }
@@ -325,7 +379,7 @@ require_dir() {
     local path="${1:-}"
     local msg="${2:-Required directory '$path' not found}"
     
-    if [[ ! -d "$path" ]]; then
+    if [ ! -d "$path" ]; then
         log_fatal "$msg"
     fi
 }
@@ -349,7 +403,7 @@ require_value() {
     local val="${1:-}"
     local msg="${2:-Value cannot be empty}"
     
-    if [[ -z "$val" ]]; then
+    if [ -z "$val" ]; then
         log_fatal "$msg"
     fi
 }
@@ -380,7 +434,7 @@ ensure_value() {
     local val="${1:-}"
     local msg="${2:-Value is empty}"
     
-    if [[ -z "$val" ]]; then
+    if [ -z "$val" ]; then
         log_warn "$msg"
         return 1
     fi
@@ -394,7 +448,7 @@ ensure_file() {
     local path="${1:-}"
     local msg="${2:-File '$path' not found}"
     
-    if [[ ! -f "$path" ]]; then
+    if [ ! -f "$path" ]; then
         log_warn "$msg"
         return 1
     fi
@@ -408,7 +462,7 @@ ensure_dir() {
     local path="${1:-}"
     local msg="${2:-Directory '$path' not found}"
     
-    if [[ ! -d "$path" ]]; then
+    if [ ! -d "$path" ]; then
         log_warn "$msg"
         return 1
     fi

@@ -66,10 +66,10 @@ _extern_manifest() {
     # which unit is asking rather than which process was started. Same
     # anchoring `super::` uses, for the same reason.
     for start in "${_NUT_ASKING_FROM:-}" "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
-        [[ -z "$start" ]] && continue
+        [ -z "$start" ] && continue
         dir="$start"
-        while [[ "$dir" != "/" && -n "$dir" ]]; do
-            [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
+        while [ "$dir" != "/" ] && [ -n "$dir" ]; do
+            [ -f "$dir/nut.toml" ] && { printf '%s' "$dir/nut.toml"; return 0; }
             dir="$(dirname "$dir")"
         done
     done
@@ -86,7 +86,7 @@ _extern_manifest() {
 # project on the machine actually live, and losing it offline breaks all of
 # them at once. `NUTSHELL_STORE` overrides it.
 _extern_cache_root() {
-    if [[ -n "${NUTSHELL_STORE:-}" ]]; then
+    if [ -n "${NUTSHELL_STORE:-}" ]; then
         printf '%s/externs' "${NUTSHELL_STORE%/}"
         return 0
     fi
@@ -119,7 +119,7 @@ _extern_lock_path() {
 extern_locked() {
     local name="$1" lock
     lock="$(_extern_lock_path)" || return 1
-    [[ -f "$lock" ]] || return 1
+    [ -f "$lock" ] || return 1
     toml_get "$lock" "deps.${name}.commit" 2>/dev/null
 }
 
@@ -142,13 +142,17 @@ extern_lock_write() {
         printf '# records what the head was and is rewritten whenever it moves.\n'
 
         # Every other entry, carried across unchanged.
-        if [[ -f "$lock" ]]; then
-            local other
+        if [ -f "$lock" ]; then
+            local other others
+            others="$(grep -o '^\[deps\.[^]]*\]' "$lock" 2>/dev/null \
+                      | sed 's/^\[deps\.//; s/\]$//')"
             while IFS= read -r other; do
-                [[ -z "$other" || "$other" == "$name" ]] && continue
+                { [ -z "$other" ] || [ "$other" = "$name" ]; } && continue
                 existing="$(toml_get "$lock" "deps.${other}.commit" 2>/dev/null)" || continue
                 printf '\n[deps.%s]\ncommit = "%s"\n' "$other" "$existing"
-            done < <(grep -o '^\[deps\.[^]]*\]' "$lock" 2>/dev/null | sed 's/^\[deps\.//; s/\]$//')
+            done <<EOF
+$others
+EOF
         fi
 
         printf '\n[deps.%s]\ncommit = "%s"\n' "$name" "$commit"
@@ -189,14 +193,18 @@ extern_declared() {
 # Left in place rather than deleted, because `extern_forget` is a public door
 # onto it and removing that is a change for consumers. Marked so the next
 # person to optimise this path does not find it and believe it.
-declare -gA _EXTERN_RESOLVED=()
+# A `map` rather than an associative array, which is bash's. It holds one
+# resolved directory per dependency name, so a `use` of a module from a unit
+# already resolved costs a lookup rather than the whole walk again.
+use map
+map_new _EXTERN_RESOLVED
 
 #[pub]
 # Forget what has been resolved. For a caller that has changed a lockfile and
 # wants the next lookup to see it, and for tests.
 # Usage: extern_forget [name]
 extern_forget() {
-    if [[ -n "${1:-}" ]]; then unset '_EXTERN_RESOLVED[$1]'; else _EXTERN_RESOLVED=(); fi
+    if [ -n "${1:-}" ]; then map_del _EXTERN_RESOLVED "$1"; else map_clear _EXTERN_RESOLVED; fi
 }
 
 #[pub]
@@ -204,15 +212,17 @@ extern_forget() {
 extern_path() {
     local name="$1" spec url ref mirror commit dir out
 
-    if [[ -n "${_EXTERN_RESOLVED[$name]:-}" ]]; then
+    local _er=""
+    map_read _er _EXTERN_RESOLVED "$name"
+    if [ -n "$_er" ]; then
         # Still checked, because a cached path whose checkout has been removed
         # is worse than no cache: the caller gets a directory git will not
         # answer for and no explanation.
-        if _extern_is_repo "${_EXTERN_RESOLVED[$name]}"; then
-            printf '%s' "${_EXTERN_RESOLVED[$name]}"
+        if _extern_is_repo "$_er"; then
+            printf '%s' "$_er"
             return 0
         fi
-        unset '_EXTERN_RESOLVED[$name]'
+        map_del _EXTERN_RESOLVED "$name"
     fi
     spec="$(extern_declared "$name")" || return 1
     url="${spec%% *}"
@@ -229,14 +239,14 @@ extern_path() {
         kind="${out%% *}"; resolved="${out#* }"
     fi
 
-    if [[ "$kind" == "moving" ]]; then
+    if [ "$kind" = "moving" ]; then
         commit="$resolved"
         extern_lock_write "$name" "$commit"
     else
         commit="$(extern_locked "$name")" || commit=""
-        if [[ -z "$commit" ]]; then
+        if [ -z "$commit" ]; then
             commit="${resolved:-$(_extern_ref_commit "$mirror" "$ref")}" || return 1
-            [[ -n "$commit" ]] || return 1
+            [ -n "$commit" ] || return 1
             extern_lock_write "$name" "$commit"
         fi
     fi
@@ -247,11 +257,11 @@ extern_path() {
     # handed the caller a path that git refuses to answer any question about,
     # permanently, with nothing to do about it but find the cache by hand.
     if ! _extern_is_repo "$dir"; then
-        [[ -e "$dir" ]] && git -C "$mirror" worktree prune 2>/dev/null
+        [ -e "$dir" ] && git -C "$mirror" worktree prune 2>/dev/null
         _extern_guard "$dir" _extern_lay_out "$name" "$mirror" "$url" "$commit" "$dir" || return 1
     fi
 
-    _EXTERN_RESOLVED["$name"]="$dir"
+    map_set _EXTERN_RESOLVED "$name" "$dir"
     printf '%s' "$dir"
 }
 
@@ -346,22 +356,23 @@ _extern_guard() {
         # per-user, so a permission refusal is not a concern here.
         local holder
         holder="$(cat "${lock}/pid" 2>/dev/null)"
-        if [[ "$holder" =~ ^[0-9]+$ ]] && ! kill -0 "$holder" 2>/dev/null; then
+        case "$holder" in ''|*[!0-9]*) holder="" ;; esac
+        if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
             rm -rf "$lock"
             continue
         fi
 
         # A lock with no pid in it: brand new, mid-write, or left by hand.
         # Those age out on the clock instead.
-        if [[ -d "$lock" ]] &&
-           [[ -z "$(find "$lock" -maxdepth 0 -mmin "-${_EXTERN_LOCK_STALE_MINUTES}" 2>/dev/null)" ]]; then
+        if [ -d "$lock" ] &&
+           [ -z "$(find "$lock" -maxdepth 0 -mmin "-${_EXTERN_LOCK_STALE_MINUTES}" 2>/dev/null)" ]; then
             rm -rf "$lock"
             continue
         fi
 
         sleep 1
         waited=$((waited + 1))
-        if [[ "$waited" -ge "$_EXTERN_LOCK_WAIT_SECONDS" ]]; then
+        if [ "$waited" -ge "$_EXTERN_LOCK_WAIT_SECONDS" ]; then
             log_error "waited ${waited}s for another process to lay out ${dir}"
             log_error "if nothing else is running, remove ${lock}"
             return 1
@@ -382,15 +393,15 @@ _extern_guard() {
     if ! _extern_is_repo "$dir"; then
         # Anything already here is the wreckage of an attempt that did not
         # finish, and git will not clone into a directory that is not empty.
-        [[ -e "$dir" ]] && rm -rf "$dir"
+        [ -e "$dir" ] && rm -rf "$dir"
 
         "$@" || rc=$?
 
         # The command reporting success is not the same as the directory being
         # usable, and the difference is what a later call would inherit.
-        if [[ "$rc" -eq 0 ]] && ! _extern_is_repo "$dir"; then
+        if [ "$rc" -eq 0 ] && ! _extern_is_repo "$dir"; then
             rc=1
-            [[ -e "$dir" ]] && rm -rf "$dir"
+            [ -e "$dir" ] && rm -rf "$dir"
         fi
     fi
     # Not rmdir: the lock holds the pid file now, and rmdir on a non-empty
@@ -445,7 +456,7 @@ _extern_mirror() {
 # enough that a script in a loop does not talk to the network every time, short
 # enough that somebody who just pushed sees it on the next run.
 
-declare -gi EXTERN_BRANCH_TTL="${EXTERN_BRANCH_TTL:-3600}"
+EXTERN_BRANCH_TTL="${EXTERN_BRANCH_TTL:-3600}"
 
 # What the remote calls this ref. Prints "heads <sha>" or "tags <sha>", and
 # nothing when the remote has neither.
@@ -455,13 +466,21 @@ declare -gi EXTERN_BRANCH_TTL="${EXTERN_BRANCH_TTL:-3600}"
 # them. A branch wins where both exist: it is the one somebody meant to track.
 _extern_remote_ref() {
     local url="$1" ref="$2" line sha
-    [[ -n "$ref" ]] || return 1
+    [ -n "$ref" ] || return 1
 
+    # Gathered first, then walked from a here-document. The loop cannot go on
+    # the right of a pipe: it `return`s from this function on a match, and in a
+    # subshell that returns from the subshell instead, so the function would
+    # carry on past the answer it had already found.
+    local heads
+    heads="$(git ls-remote "$url" "refs/heads/${ref}" 2>/dev/null)"
     while IFS= read -r line; do
-        [[ "$line" == *"refs/heads/${ref}" ]] || continue
+        case "$line" in *"refs/heads/${ref}") ;; *) continue ;; esac
         sha="${line%%[[:space:]]*}"
-        [[ -n "$sha" ]] && { printf 'heads %s' "$sha"; return 0; }
-    done < <(git ls-remote "$url" "refs/heads/${ref}" 2>/dev/null)
+        [ -n "$sha" ] && { printf 'heads %s' "$sha"; return 0; }
+    done <<EOF
+$heads
+EOF
 
     # `^{}` is the commit an annotated tag points at, and it is the one to
     # build from; the bare line is the tag object itself.
@@ -476,16 +495,23 @@ _extern_remote_ref() {
     # Two exact patterns rather than a glob, so nothing but those two rows
     # can come back and the `case` below has nothing to filter out. A glob
     # would also return `0.1.0-rc1`, which is a door with no reason to open.
-    local peeled="" plain=""
+    # Gathered first for the same reason as the heads loop above, and with one
+    # more: the body sets `peeled` and `plain` and the code after this reads
+    # them, so on the right of a pipe both would be set in a subshell and read
+    # back empty here.
+    local peeled="" plain="" tags
+    tags="$(git ls-remote "$url" "refs/tags/${ref}" "refs/tags/${ref}^{}" 2>/dev/null)"
     while IFS= read -r line; do
         sha="${line%%[[:space:]]*}"
         case "$line" in
             *"refs/tags/${ref}^{}") peeled="$sha" ;;
             *"refs/tags/${ref}")    plain="$sha"  ;;
         esac
-    done < <(git ls-remote "$url" "refs/tags/${ref}" "refs/tags/${ref}^{}" 2>/dev/null)
-    [[ -n "$peeled" ]] && { printf 'tags %s' "$peeled"; return 0; }
-    [[ -n "$plain" ]]  && { printf 'tags %s' "$plain";  return 0; }
+    done <<EOF
+$tags
+EOF
+    [ -n "$peeled" ] && { printf 'tags %s' "$peeled"; return 0; }
+    [ -n "$plain" ]  && { printf 'tags %s' "$plain";  return 0; }
     return 1
 }
 
@@ -496,9 +522,9 @@ _extern_resolution_path() {
 
 _extern_read_resolution() {
     local f="$1" ts sha
-    [[ -r "$f" ]] || return 1
+    [ -r "$f" ] || return 1
     { IFS= read -r ts; IFS= read -r sha; } < "$f" || return 1
-    [[ -n "$sha" ]] || return 1
+    [ -n "$sha" ] || return 1
     printf '%s %s' "${ts:-0}" "$sha"
 }
 
@@ -507,9 +533,9 @@ _extern_fresh_resolution() {
     local out ts sha now
     out="$(_extern_read_resolution "$1")" || return 1
     ts="${out%% *}"; sha="${out#* }"
-    [[ "$ts" =~ ^[0-9]+$ ]] || return 1
+    case "$ts" in ''|*[!0-9]*) return 1 ;; esac
     now="$(date -u +%s 2>/dev/null)" || return 1
-    (( now - ts <= EXTERN_BRANCH_TTL )) || return 1
+    [ "$(( now - ts ))" -le "$EXTERN_BRANCH_TTL" ] || return 1
     printf '%s' "$sha"
 }
 
@@ -546,7 +572,13 @@ extern_resolve_ref() {
     local url="$1" ref="$2" out kind sha f
 
     # A revision is itself, and asking a remote about it tells nobody anything.
-    if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    # Forty hex digits and nothing else. There is no `=~` here, so the length
+    # is checked and then the content.
+    _is_sha=0
+    if [ "${#ref}" -eq 40 ]; then
+        case "$ref" in *[!0-9a-fA-F]*) ;; *) _is_sha=1 ;; esac
+    fi
+    if [ "$_is_sha" -eq 1 ]; then
         printf 'fixed %s' "$ref"
         return 0
     fi
@@ -559,7 +591,7 @@ extern_resolve_ref() {
 
     if out="$(_extern_remote_ref "$url" "$ref")"; then
         kind="${out%% *}"; sha="${out#* }"
-        if [[ "$kind" == "heads" ]]; then
+        if [ "$kind" = "heads" ]; then
             _extern_remember_resolution "$f" "$sha"
             printf 'moving %s' "$sha"
         else
@@ -581,7 +613,7 @@ extern_resolve_ref() {
 # a tool whose whole point is working on a machine that is broken.
 _extern_refresh() {
     local mirror="$1" ref="$2"
-    [[ -n "$ref" ]] || return 0
+    [ -n "$ref" ] || return 0
     # `--depth 1` because the mirror is only ever read at one commit, and the
     # clone that made it was shallow too.
     git -C "$mirror" fetch --quiet --depth 1 origin "$ref" 2>/dev/null || return 0
@@ -594,7 +626,7 @@ _extern_refresh() {
 _extern_ref_commit() {
     local mirror="$1" ref="$2" c
     for c in FETCH_HEAD "origin/${ref}" "$ref" HEAD; do
-        [[ -n "$ref" || "$c" == "HEAD" ]] || continue
+        { [ -n "$ref" ] || [ "$c" = "HEAD" ]; } || continue
         if git -C "$mirror" rev-parse --verify --quiet "${c}^{commit}" >/dev/null 2>&1; then
             git -C "$mirror" rev-parse "${c}^{commit}" 2>/dev/null && return 0
         fi
@@ -636,11 +668,12 @@ extern_resolve() {
     local spec="$1" name rest root candidate
     name="${spec%%::*}"
     rest="${spec#*::}"
-    [[ "$name" == "$spec" ]] && return 1
+    [ "$name" = "$spec" ] && return 1
 
     # `::` separates modules the whole way down. A `/` is refused rather than
     # handed to the filesystem, which is what made it work by accident.
-    if [[ "$rest" == */* ]]; then
+    _has_slash=0; case "$rest" in */*) _has_slash=1 ;; esac
+    if [ "$_has_slash" -eq 1 ]; then
         log_error "'${spec}' separates modules with '/'; use '::': ${spec//\//::}"
         return 1
     fi
@@ -653,10 +686,10 @@ extern_resolve() {
     # from nowhere else. Falling back to a search would put the guessing back
     # underneath the declaration, where a wrong entry resolves anyway and
     # nothing says so.
-    if [[ -r "${root}/lib.nut" ]]; then
+    if [ -r "${root}/lib.nut" ]; then
         local from_nut
         if from_nut="$(_lib_nut_lookup "$root" "$declared" public)"; then
-            [[ -f "$from_nut" ]] && { printf '%s' "$from_nut"; return 0; }
+            [ -f "$from_nut" ] && { printf '%s' "$from_nut"; return 0; }
             log_error "${name}'s lib.nut declares '${declared}' at ${from_nut#$root/}, which is not there"
             return 1
         fi
@@ -668,7 +701,7 @@ extern_resolve() {
     # and a flat `lib/<mod>.sh` like nutshell's own. Nothing else is guessed at,
     # because a resolver that searches widely finds the wrong file eventually.
     for candidate in "${root}/libs/${rest}.sh" "${root}/lib/${rest}.sh" "${root}/${rest}.sh"; do
-        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+        [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
     done
 
     log_error "${name} has no module '${rest}'"

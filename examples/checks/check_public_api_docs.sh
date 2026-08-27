@@ -26,6 +26,7 @@ set -uo pipefail
 
 # Load the check-runner framework (provides cfg_*, log_*, etc.)
 use check-runner
+use attr
 
 # =============================================================================
 # CONFIG-DRIVEN PARAMETERS
@@ -97,8 +98,14 @@ _pad_load() {
         # Where each function is defined, recorded on the one pass rather than
         # searched for per lookup. Searching was 440 functions times 376 lines
         # of regex per file, which is the same shape as the greps it replaced.
-        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\( ]]; then
-            local n="${BASH_REMATCH[2]}"
+        # `ATTR_DEFINES_PATTERN`, so this agrees with `attr` and `srcfile`
+        # about what a definition is. The pattern here was its own, and it
+        # required parentheses, so `function name {` was invisible to it: a
+        # `#[pub]` on one of those was never looked up at all and the check
+        # passed over it in silence. That is the same drift the shared pattern
+        # was made to end, in a third reader nobody moved across.
+        if [[ "$line" =~ $ATTR_DEFINES_PATTERN ]]; then
+            local n="${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}"
             [[ -n "${_PAD_AT["${file}:${n}"]:-}" ]] || _PAD_AT["${file}:${n}"]=$((i + 1))
         fi
     done
@@ -164,6 +171,52 @@ docblock_has_element() {
     # read as its own, so the needle is lowered and compared as text.
     local hay="${docblock,,}" needle="${element,,}"
     [[ "$hay" == *"$needle"* ]]
+}
+
+# Whether a docblock belongs to the function it landed on.
+#
+# Attributes attach downward, so a `#[pub]` block sitting above a private
+# helper documents the helper. Where a docblock's `Usage:` names some other
+# function that is defined *later in the same file*, the block was written for
+# that one and something got inserted between them.
+#
+# Two things go wrong at once and neither is visible on its own. The named
+# function ends up undocumented, and the helper ends up marked public. Both
+# read as fine, because each of the two lines involved is correct where it sits.
+#
+# Only a `Usage:` whose first token is a bare name counts. `Usage: exit
+# "$(doctor_exit)"` is an invocation example and names `exit`, which defines
+# nothing, so it is not a mismatch.
+#
+# Prints the name the block was written for, and returns 0, when it is orphaned.
+docblock_orphaned_from() {
+    local file="$1" landed_on="$2" docblock="$3"
+    local line named at_named at_landed
+    local -a mentions=()
+
+    # Collected first, because a block may carry several `Usage:` lines and one
+    # of them naming this definition settles it. Deciding on the first line
+    # that did not match would call a two-form block an orphan of its own
+    # alternative spelling.
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*#[[:space:]]*Usage:[[:space:]]*([a-zA-Z_][a-zA-Z0-9_-]*)([[:space:]]|$) ]] \
+            || continue
+        named="${BASH_REMATCH[1]}"
+        [[ "$named" == "$landed_on" ]] && return 1
+        mentions+=("$named")
+    done <<< "$docblock"
+
+    for named in ${mentions[@]+"${mentions[@]}"}; do
+        at_named="$(_pad_defined_at "$file" "$named")" || continue
+        at_landed="$(_pad_defined_at "$file" "$landed_on")" || continue
+        # Later in the file, so the block was passed over on its way down.
+        # Earlier means the block refers back to something, which is prose.
+        [[ "$at_named" -gt "$at_landed" ]] || continue
+
+        printf '%s' "$named"
+        return 0
+    done
+    return 1
 }
 
 # Count comment lines in docblock
@@ -261,12 +314,22 @@ test_public_api_docs() {
             local has_warn=0
             local missing_required=""
             local missing_recommended=""
-            
+
+            # A block that documents a different function is worse than a
+            # missing one, because it reads as present from either end.
+            local orphan_of=""
+            if orphan_of="$(docblock_orphaned_from "$file" "$func_name" "$docblock")"; then
+                has_error=1
+                missing_required="the docblock is written for ${orphan_of}(), which is defined below this"
+            fi
+
             # Check minimum doc lines
             local doc_lines
             doc_lines=$(count_doc_lines "$docblock")
             
-            if [[ $doc_lines -lt $MIN_DOC_LINES ]]; then
+            if [[ -n "$orphan_of" ]]; then
+                : # already reported, and the count below would overwrite why
+            elif [[ $doc_lines -lt $MIN_DOC_LINES ]]; then
                 has_error=1
                 missing_required="insufficient documentation ($doc_lines lines, need $MIN_DOC_LINES)"
             else
@@ -394,6 +457,10 @@ main() {
     exit_with_status
 }
 
+# `NUT_CHECK_LOAD_ONLY` is the one way in for a test that wants the docblock
+# readers without a whole run over a repository, the same door
+# `check_function_duplication.sh` carries for the same reason.
+#
 # A check script is an entry point, so it runs.
 #
 # This used to be guarded by `[[ "${BASH_SOURCE[0]}" == "${0}" ]]`, the ordinary
@@ -403,4 +470,4 @@ main() {
 # the interpreter and `BASH_SOURCE[0]` is this file, and `main` was never
 # called. Six of the eight built-in checks exited 0 having done nothing, and
 # `./check` read that as a pass and printed one.
-main "$@"
+[[ -n "${NUT_CHECK_LOAD_ONLY:-}" ]] || main "$@"

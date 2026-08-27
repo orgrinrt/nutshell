@@ -130,30 +130,31 @@ _pf_lib() {
 }
 
 #[test]
-it_discounts_a_file_reached_only_behind_a_shell_predicate() {
-    local d; d="$(_pf_lib 'string  lib/string.sh        when=shell:bash4
+it_discounts_a_file_reached_only_behind_a_shell_gate() {
+    local d; d="$(_pf_lib '#[shell(bash4)]
+string  lib/string.sh
 string  lib/string.posix.sh
 other   lib/other.sh')"
-    local got; got="$(_shell_gated_files "$d")"
-    assert_eq "$got" "lib/string.sh"
+    assert_eq "$(_shell_gated_files "$d")" "lib/string.sh"
     rm -rf "$d"
 }
 
 #[test]
-it_counts_a_file_reached_behind_a_tool_predicate() {
-    # `have:` is not `shell:`. A row predicated on a tool is still sourced on a
-    # POSIX shell wherever that tool exists, so it has to parse there, and
-    # discounting it would hide a real gap.
-    local d; d="$(_pf_lib 'text  lib/text.fast.sh  when=have:grep
+it_counts_a_file_reached_behind_a_tool_gate() {
+    # `has(bin(...))` is not `shell(...)`. A row gated on a tool is still
+    # sourced on a POSIX shell wherever that tool exists, so it has to parse
+    # there, and discounting it would hide a real gap.
+    local d; d="$(_pf_lib '#[has(bin(grep))]
+text  lib/text.fast.sh
 text  lib/text.sh')"
     assert_empty "$(_shell_gated_files "$d")"
     rm -rf "$d"
 }
 
 #[test]
-it_discounts_nothing_in_a_manifest_with_no_predicates() {
-    # The control. A matcher that returned every file would empty the report
-    # and read as a floor that is already reached.
+it_discounts_nothing_in_a_manifest_with_no_gates() {
+    # The control. A matcher returning every file would empty the report and
+    # read as a floor that is already reached.
     local d; d="$(_pf_lib 'one  lib/one.sh
 two  lib/two.sh  internal')"
     assert_empty "$(_shell_gated_files "$d")"
@@ -161,14 +162,60 @@ two  lib/two.sh  internal')"
 }
 
 #[test]
-it_reads_a_shell_predicate_written_after_a_visibility() {
-    # The trailing columns are words, not positions, and this reader has to
-    # agree with the resolver about that or the two disagree about which file
-    # a POSIX shell ever sees.
-    local d; d="$(_pf_lib 'a  lib/a.sh  internal when=shell:bash4
-b  lib/b.sh  when=shell:bash internal')"
-    local got; got="$(_shell_gated_files "$d")"
-    assert_contains "$got" "lib/a.sh"
-    assert_contains "$got" "lib/b.sh"
+it_does_not_carry_a_gate_past_the_row_it_applies_to() {
+    # A gate attaches to the next declaration and stops. Carried on, one shell
+    # gate near the top would discount every file under it and the number
+    # would read as a floor already reached.
+    local d; d="$(_pf_lib '#[shell(bash4)]
+a  lib/a.sh
+b  lib/b.sh')"
+    assert_eq "$(_shell_gated_files "$d")" "lib/a.sh"
     rm -rf "$d"
+}
+
+#[test]
+it_does_not_read_an_ordinary_comment_as_a_gate() {
+    local d; d="$(_pf_lib '# prose about the next one
+a  lib/a.sh')"
+    assert_empty "$(_shell_gated_files "$d")"
+    rm -rf "$d"
+}
+
+# --- the impl modules are in scope -------------------------------------------
+#
+# `get_script_files` honours the project's excludes, and this project excludes
+# `/impl/` from its quality checks: those files are repetitive by design, one
+# per tool, so a duplication or size finding about them says nothing.
+#
+# The POSIX question is not a quality question. An impl module is sourced at
+# run time by the module that chose it, on whatever shell is running, so it has
+# to parse there like anything else. Excluded, twelve of them were invisible
+# and the number read as smaller than it was.
+
+#[test]
+it_scans_the_impl_modules_that_the_project_excludes() {
+    local sh; sh="$(_posix_shell)" || return 0
+    local files
+    files="$(get_script_files)"
+    # The exclusion is real, so this is what the check is working around.
+    assert_eq "$(grep -c '/impl/' <<<"$files" || true)" "0"
+
+    # And there are impl modules to find.
+    local extra
+    extra="$(find "$REPO_ROOT/lib" -type f -name '*.sh' -path '*/impl/*' 2>/dev/null)"
+    assert_ne "$extra" ""
+    assert_ok test "$(grep -c . <<<"$extra")" -gt 5
+}
+
+#[test]
+it_reports_a_count_larger_than_the_excluded_scope() {
+    # The property, rather than the mechanism: whatever the check scans has to
+    # be more than what `get_script_files` hands it, or the widening is not
+    # doing anything and the number is the old one under a new name.
+    local sh; sh="$(_posix_shell)" || return 0
+    local base extra
+    base="$(get_script_files | grep -c . || true)"
+    extra="$(find "$REPO_ROOT/lib" -type f -name '*.sh' -path '*/impl/*' 2>/dev/null | grep -c . || true)"
+    assert_ok test "$extra" -gt 0
+    assert_ok test "$(( base + extra ))" -gt "$base"
 }

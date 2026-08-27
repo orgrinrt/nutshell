@@ -14,9 +14,27 @@ text                     lib/text.fast.sh
 text                     lib/text.sh
 ```
 
-The `when=` column is retired in favour of this. Two spellings for one idea was
-an extra layer, and the attribute form is the one the rest of the library
-already speaks.
+Built. The `when=` column is gone.
+
+`#` already means comment in this format, so a reader that knows nothing about
+gates skips them and the file stays what it was. That is the same trick `attr`
+uses for `#[pub]` in a shell file, and it is why the shape is a comment rather
+than a new column.
+
+Gates attach downward and accumulate, the way several `#[cfg]` lines do above
+one `mod`. Every one in a run has to hold. A gate stops at the declaration it
+applies to; carried past it, one false gate near the top would hide every row
+under it.
+
+The vocabulary is four attributes and nothing else:
+
+    shell(bash)      the running shell is bash, any version
+    shell(bash4)     bash 4 or newer
+    has(bin(grep))   that command is on PATH
+    has(env(NAME))   that variable is set and not empty
+
+An unknown one does not hold, and `nut-declare --check` reports it, because a
+gate the resolver refuses is a variant that silently never loads.
 
 ## Why the shell gate cannot move into the file
 

@@ -36,21 +36,3 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
         _text_replace_sed_impl "$@"
     }
 fi
-
-# When executed directly: run with provided arguments
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Minimal environment setup for standalone execution
-    if [[ -z "${_TOOL_PATH[sed]:-}" ]]; then
-        declare -A _TOOL_PATH=()
-        declare -A _TOOL_VARIANT=()
-        _TOOL_PATH[sed]="$(command -v sed 2>/dev/null || echo "sed")"
-        # Simple variant detection
-        if "${_TOOL_PATH[sed]}" --version 2>/dev/null | grep -q "GNU"; then
-            _TOOL_VARIANT[sed]="gnu"
-        else
-            _TOOL_VARIANT[sed]="bsd"
-        fi
-    fi
-    
-    _text_replace_sed_impl "$@"
-fi

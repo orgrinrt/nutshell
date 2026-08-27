@@ -35,14 +35,3 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
         _text_replace_perl_impl "$@"
     }
 fi
-
-# When executed directly: run with provided arguments
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Minimal environment setup for standalone execution
-    if [[ -z "${_TOOL_PATH[perl]:-}" ]]; then
-        declare -A _TOOL_PATH=()
-        _TOOL_PATH[perl]="$(command -v perl 2>/dev/null || echo "perl")"
-    fi
-    
-    _text_replace_perl_impl "$@"
-fi

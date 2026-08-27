@@ -30,7 +30,8 @@ os                       lib/os.sh
 priv                     lib/priv.sh
 prompt                   lib/prompt.sh
 srcfile                  lib/srcfile.sh
-string                   lib/string.sh        when=shell:bash4
+#[shell(bash4)]
+string                   lib/string.sh
 string                   lib/string.posix.sh
 test                     lib/test.sh
 text                     lib/text.sh

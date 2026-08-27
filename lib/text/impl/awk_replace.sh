@@ -51,15 +51,3 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
         _text_replace_awk_impl "$@"
     }
 fi
-
-# When executed directly: run with provided arguments
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Minimal environment setup for standalone execution
-    if [[ -z "${_TOOL_PATH[awk]:-}" ]]; then
-        declare -A _TOOL_PATH=()
-        _TOOL_PATH[awk]="$(command -v awk 2>/dev/null || echo "awk")"
-        _TOOL_PATH[mktemp]="$(command -v mktemp 2>/dev/null || echo "mktemp")"
-    fi
-    
-    _text_replace_awk_impl "$@"
-fi

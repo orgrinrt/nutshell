@@ -143,34 +143,30 @@ case "$MODE" in
         # not lose it, and a line that is not a declaration is reported rather
         # than crashing on an unset positional.
         while read -r dname dfile drest || [[ -n "$dname" ]]; do
-            [[ -z "$dname" || "${dname:0:1}" == "#" ]] && continue
+            [[ -z "$dname" ]] && continue
+
+            # A gate is a comment line in attribute shape, above the
+            # declaration it applies to, the way `#[cfg(...)]` sits above a
+            # `mod` in Rust. Checked here so a typo is something somebody can
+            # see: `_nut_gate` refuses one it does not know, and a refused gate
+            # is a variant that silently never loads.
+            if [[ "${dname:0:2}" == "#[" ]]; then
+                dg="${dname#\#[}"; dg="${dg%]}"
+                case "$dg" in
+                    shell\(bash\)|shell\(bash4\)) ;;
+                    has\(bin\(?*\)\)|has\(env\(?*\)\)) ;;
+                    *) printf 'unknown gate: %s\n' "$dname"; rc=1 ;;
+                esac
+                continue
+            fi
+            [[ "${dname:0:1}" == "#" ]] && continue
+
             if [[ -z "$dfile" ]]; then
                 printf 'not a declaration: %s\n' "$dname"; rc=1; continue
             fi
-            # The trailing columns are words rather than positions, the same
-            # way the resolver reads them, or the two disagree about what a
-            # row says. Read by position, `when=shell:bash4` was reported as
-            # an unknown visibility.
             for dword in $drest; do
                 case "$dword" in
                     internal) ;;
-                    when=*)
-                        # The predicate's words too, because `_nut_when` refuses
-                        # one it does not know and a refused predicate is a
-                        # variant that silently never loads. Caught here it is a
-                        # typo somebody can see.
-                        _dp="${dword#when=}"
-                        while [ -n "$_dp" ]; do
-                            case "$_dp" in
-                                *+*) dpart="${_dp%%+*}"; _dp="${_dp#*+}" ;;
-                                *)   dpart="$_dp"; _dp="" ;;
-                            esac
-                            case "$dpart" in
-                                have:?*|env:?*|shell:bash|shell:bash4) ;;
-                                *) printf 'unknown predicate on %s: %s\n' "$dname" "$dpart"; rc=1 ;;
-                            esac
-                        done
-                        ;;
                     *) printf 'unknown word on %s: %s\n' "$dname" "$dword"; rc=1 ;;
                 esac
             done
@@ -180,7 +176,7 @@ case "$MODE" in
         done < "$ROOT/lib.nut"
         # By file, not by the name the path suggests.
         #
-        # A module may name several files, which is what a `when=` row is, and
+        # A module may name several files, which is what a gate attribute does, and
         # `lib/string.posix.sh` is not a module called `string.posix`: it is
         # one of the files module `string` can be. Asked by derived name, every
         # variant reads as an undeclared file.

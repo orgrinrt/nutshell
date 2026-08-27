@@ -58,7 +58,7 @@ _NUTSHELL_ROOT="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 
 # Export for use by modules
 export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
-export NUTSHELL_VERSION="0.4.2"
+export NUTSHELL_VERSION="0.5.0"
 
 # Script identity belongs to the interpreter invocation, not to ancestry. The
 # interpreter exports NUTSHELL_SCRIPT and NUTSHELL_SCRIPT_DIR after this file

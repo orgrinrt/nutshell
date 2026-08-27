@@ -317,7 +317,7 @@ _lib_nut_lookup() {
         # and the way `#[cfg(...)]` does above a `mod` in Rust. A run of them
         # all has to hold.
         if [[ "${name:0:2}" == "#[" ]]; then
-            word="${name#\#[}"; word="${word%]}"
+            word="${name#\#\[}"; word="${word%]}"
             gates+="${word} "
             continue
         fi
@@ -463,7 +463,7 @@ _nut_features_load() {
     [ "$_NUT_FEATURES_READY" = "1" ] && return 0
     _NUT_FEATURES_READY=1
 
-    local toml="${_NUTSHELL_ROOT}/nut.toml" line insec=0 key rest want
+    local toml="${_NUTSHELL_ROOT}/nut.toml" line insec=0 seen=0 key rest want
     _NUT_FEATURES=""
 
     want=""
@@ -480,11 +480,18 @@ _nut_features_load() {
     # `<name> = [...]` inside `[features]`, one per line. A feature whose list
     # names others turns those on too, which is the one bit of cargo's model
     # that is not just a set.
-    local names="" lists="" n
+    local names="" lists="" n more
     while IFS= read -r line || [ -n "$line" ]; do
+        # Leading space is legal TOML. Without this an indented `[features]`
+        # was not a table at all, so every feature came back undeclared and
+        # every module gated on one silently did not load.
+        line="${line#"${line%%[![:space:]]*}"}"
         case "$line" in
-            \[features\]*) insec=1; continue ;;
-            \[*\]*) insec=0; continue ;;
+            \[features\]*) insec=1; seen=1; continue ;;
+            # Stop at the end of the section rather than reading to the end of
+            # the file. `[features]` sits at line 51 of 329 here, and walking
+            # the remaining 278 in shell was most of what a parse cost.
+            \[*\]*) [ "$seen" = "1" ] && break; insec=0; continue ;;
         esac
         [ "$insec" = "1" ] || continue
         case "$line" in ''|'#'*) continue ;; esac
@@ -492,9 +499,37 @@ _nut_features_load() {
         key="${line%%=*}"; rest="${line#*=}"
         key="${key%"${key##*[![:space:]]}"}"; key="${key#"${key%%[![:space:]]*}"}"
         case "$key" in ''|*[!A-Za-z0-9_-]*) continue ;; esac
+        # A value may span lines, which is legal and was being read as an empty
+        # list: `default = [` on its own line took everything after the `[`,
+        # found nothing, and dropped every entry the list actually named.
+        case "$rest" in
+            *\[*)
+                while :; do
+                    case "$rest" in *\]*) break ;; esac
+                    IFS= read -r more || break
+                    rest="${rest} ${more}"
+                done ;;
+        esac
         # The list, with the brackets, quotes and commas taken out.
-        rest="${rest#*[}"; rest="${rest%%]*}"
-        rest="$(printf '%s' "$rest" | tr -d '"'"'"',' )"
+        #
+        # Chopped rather than handed to `tr`. The substitution and the pipe and
+        # the exec came to 9.2ms per parse, on a file with two rows in it, and
+        # this runs on every lookup of a feature-gated module. A commit that
+        # measured a full twelve-module load at 363ms was spending 28 of them
+        # here. The loop below leaves the process.
+        rest="${rest#*\[}"; rest="${rest%%]*}"
+        n=""
+        while [ -n "$rest" ]; do
+            case "$rest" in
+                [\"\',]*) rest="${rest#?}"; continue ;;
+            esac
+            n="${n}${rest%%[\"\',]*}"
+            case "$rest" in
+                *[\"\',]*) rest="${rest#*[\"\',]}" ;;
+                *) rest="" ;;
+            esac
+        done
+        rest="$n"
         names="${names} ${key}"
         lists="${lists}|${key}=${rest}"
     done < "$toml"
@@ -507,6 +542,14 @@ _nut_features_load() {
         added=0
         for cur in $queue; do
             case " $_NUT_FEATURES " in *" $cur "*) continue ;; esac
+            # A name nothing declares is reported, the way `_nut_gate` reports
+            # a gate it does not know and for the same reason: a feature that
+            # is a typo turns nothing on, and the module gated on the correct
+            # spelling is then simply absent with nothing said about it.
+            case " $names " in
+                *" $cur "*) ;;
+                *) printf 'nutshell: unknown feature %s\n' "$cur" >&2 ;;
+            esac
             _NUT_FEATURES="${_NUT_FEATURES} ${cur}"
             added=1
             case "$lists" in

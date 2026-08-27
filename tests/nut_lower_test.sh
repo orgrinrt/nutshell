@@ -384,3 +384,105 @@ it_produces_a_posix_artifact_from_a_bash_machine() {
     assert_fails "$sh" -n "$_LOW_OUT"
     _lower_done
 }
+
+# Every module the manifest offers on its own, one closure each. The whole
+# matrix rather than a chosen few, because choosing which closures to lower is
+# choosing which ones not to find out about, and the two tests above lower
+# exactly the two that were known to work.
+# A script that loads nothing, so a closure below is exactly the module asked
+# for and whatever it needs. `$_WORK` is a bench workload with `use` lines of
+# its own, and lowering against it put five extra modules into every closure,
+# which made the counts a fact about that workload rather than about the module.
+_nl_bare_script() {
+    local f; f="$(mktemp "${TMPDIR:-/tmp}/nut-bare.XXXXXX")"
+    printf '#!/usr/bin/env nutshell\ntrue\n' > "$f"
+    printf '%s' "$f"
+}
+
+_nl_all_modules() {
+    awk '!/^#/ && NF>=2 && $3!="internal" {print $1}' \
+        "${BASH_SOURCE[0]%/*}/../lib.nut" | grep -v '::' | sort -u
+}
+
+#[test]
+# The honest statement of what removing `init` bought, which is not what the
+# source comment first claimed.
+#
+# It is necessary and not sufficient. The preamble no longer keeps a POSIX
+# shell out; the closure still can, because one unconverted module in the set
+# is enough. What holds regardless of how many are converted is that the thing
+# refusing is never the preamble: a failure always lands inside a module, past
+# line 12.
+#
+# That property is the one worth pinning. The count below moves as modules get
+# converted; this does not, and it is what would break if the preamble ever
+# regained a bashism.
+it_never_fails_inside_its_own_preamble() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    local out; out="$(mktemp "${TMPDIR:-/tmp}/nut-pre.XXXXXX")"
+    local bare; bare="$(_nl_bare_script)"
+    local m pre err ln checked=0
+
+    local inside=""
+    for m in $(_nl_all_modules); do
+        "$_LOWER" "$bare" --use "$m" --no-shake -o "$out" >/dev/null 2>&1 || continue
+        pre="$(grep -n '^use() { return 0; }' "$out" | cut -d: -f1)"
+        [ -n "$pre" ] || { inside="${inside} ${m}(no-preamble)"; continue; }
+        err="$("$sh" -n "$out" 2>&1 | head -1)"
+        [ -n "$err" ] || continue
+        ln="$(printf '%s' "$err" | sed -n 's/.*: \([0-9][0-9]*\): .*/\1/p')"
+        [ -n "$ln" ] || continue
+        checked=$((checked + 1))
+        [ "$ln" -le "$pre" ] && inside="${inside} ${m}@${ln}(preamble ends ${pre})"
+    done
+    rm -f "$out" "$bare"
+
+    # Named rather than counted, so a failure says which closure and where.
+    assert_eq "$inside" "" "a closure failed inside the preamble"
+    # The control. With no closure failing to parse the loop compared nothing,
+    # and this would keep passing through a regression that broke every one.
+    assert_ne "$checked" "0" "no closure failed to parse, so nothing was checked"
+}
+
+#[test]
+# A ratchet on how many closures a POSIX shell will take, so the number can
+# only move one way.
+#
+# Six of twenty-eight today. That is a fact about the eighteen unconverted
+# modules rather than about the lowering, and it is written down here because
+# it was previously asserted nowhere: the two tests above lower `os` and
+# `string`, which are two of the six that pass.
+#
+# Raise the floor when modules land. Never lower it.
+it_ratchets_how_many_closures_reach_the_floor() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    local out; out="$(mktemp "${TMPDIR:-/tmp}/nut-cnt.XXXXXX")"
+    local bare; bare="$(_nl_bare_script)"
+    local m shaken=0 whole=0 total=0
+
+    for m in $(_nl_all_modules); do
+        "$_LOWER" "$bare" --use "$m" -o "$out" >/dev/null 2>&1 || continue
+        total=$((total + 1))
+        "$sh" -n "$out" 2>/dev/null && shaken=$((shaken + 1))
+        "$_LOWER" "$bare" --use "$m" --no-shake -o "$out" >/dev/null 2>&1 || continue
+        "$sh" -n "$out" 2>/dev/null && whole=$((whole + 1))
+    done
+    rm -f "$out" "$bare"
+
+    assert_ne "$total" "0" "no module lowered at all"
+
+    # Spelled as comparisons rather than bare counts, so a failure names the
+    # number it got and the number it owed instead of reporting that 4 is not 6.
+    local v="ok"; [ "$shaken" -lt 6 ] && v="only ${shaken} of ${total} shaken"
+    assert_eq "$v" "ok" "the shaken floor dropped below six"
+
+    v="ok"; [ "$whole" -lt 5 ] && v="only ${whole} of ${total} whole"
+    assert_eq "$v" "ok" "the unshaken floor dropped below five"
+
+    # Dropping what nothing calls can only help a POSIX shell, never hurt it:
+    # an unconverted function nobody reaches stops being a parse error when it
+    # stops being in the file. Six against five today, and the direction is the
+    # part that has to hold.
+    v="ok"; [ "$shaken" -lt "$whole" ] && v="shaken ${shaken} < whole ${whole}"
+    assert_eq "$v" "ok" "shaking made fewer closures parse, which it cannot do"
+}

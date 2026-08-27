@@ -151,7 +151,7 @@ case "$MODE" in
             # see: `_nut_gate` refuses one it does not know, and a refused gate
             # is a variant that silently never loads.
             if [[ "${dname:0:2}" == "#[" ]]; then
-                dg="${dname#\#[}"; dg="${dg%]}"
+                dg="${dname#\#\[}"; dg="${dg%]}"
                 case "$dg" in
                     shell\(bash\)|shell\(bash4\)) ;;
                     has\(bin\(?*\)\)|has\(env\(?*\)\)) ;;

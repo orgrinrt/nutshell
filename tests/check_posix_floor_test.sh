@@ -289,3 +289,87 @@ it_reads_an_own_guard_as_fine() {
     rm -f "$f"
     assert_eq "$hits" ""
 }
+
+#[test]
+# An unclosed `[` in a strip pattern. The one rule in the scan that catches a
+# divergence rather than a refusal: `${v#[}` strips in bash and does nothing at
+# all in dash, which reads the `[` as opening a bracket expression and never
+# finds its `]`. Neither shell says a word, so the file passes `dash -n`, runs,
+# and answers wrong.
+#
+# Three sites in this repo carried the bare form. One was `nut-declare` reading
+# nutshell's own attribute syntax, which is how a gate name would have come
+# back with the `#[` still attached.
+it_reports_an_unclosed_bracket_in_a_strip_pattern() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'BAD'
+a="${v#[}"
+b="${v#\#[}"
+c="${v%%[}"
+BAD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_ne "$hits" "" "an unclosed bracket in a strip pattern was not reported"
+}
+
+#[test]
+# The control, and it is the one that carries the rule. Both portable spellings
+# and an ordinary bracket expression have to come back clean: a rule that also
+# flags `${x%%[!A-Za-z0-9]*}` flags most parameter expansions in the library
+# and gets switched off within a day.
+it_reads_the_portable_bracket_spellings_as_fine() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'GOOD'
+a="${v#\[}"
+b="${v#"["}"
+c="${v%%[!A-Za-z0-9]*}"
+d="${v%%[[:space:]]*}"
+GOOD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_eq "$hits" ""
+}
+
+#[test]
+# The `#` spelling specifically, which is the one all three real sites used and
+# the one the scan could not see at all until the comment stripper learned to
+# protect a strip operator. Split from the case above because that one passes
+# on its `%%` line alone, so it went green while the spelling that mattered was
+# still invisible.
+it_reports_an_unclosed_bracket_in_a_hash_strip_pattern() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'BAD'
+a="${v#[}"
+BAD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_ne "$hits" "" "the hash spelling was not reported"
+}
+
+#[test]
+# What protecting the operator recovers, which is more than its own rule. Every
+# other pattern in the scan was blind to anything sharing a line with a strip
+# expansion, because the strip ate the rest of the line.
+it_still_sees_a_bashism_after_a_strip_expansion_on_one_line() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'BAD'
+a="${v#foo}" ; [[ -n "$a" ]] && echo hi
+BAD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_contains "$hits" "[["
+}
+
+#[test]
+# And the control: a real comment is still a comment, including one that quotes
+# the very construct the rule looks for. Without this the fix could have been
+# "stop stripping comments", which flags every example in every doc block.
+it_still_reads_a_real_comment_as_a_comment() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'GOOD'
+a="text"   # an ordinary comment mentioning ${v#[} and [[ and $((1+1))
+GOOD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_eq "$hits" ""
+}

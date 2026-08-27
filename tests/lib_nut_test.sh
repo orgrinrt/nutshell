@@ -537,11 +537,13 @@ it_resolves_the_feature_set_the_way_cargo_does() {
 }
 
 #[test]
-# An unknown or malformed feature name is off rather than an error.
+# A feature nobody asked for is off, and a gate naming one is simply false.
 #
-# A gate that errors takes the module with it; a feature nobody declared is
-# simply not enabled, which is what cargo does and what keeps a typo from
-# looking like a broken manifest.
+# A gate that errors takes the module with it, so a name that was never
+# requested is not an error: it is a question with the answer no. Asking for a
+# name nothing declares is the other case and is reported, which is the test
+# below this one. Silence here is also the control for that report: it must not
+# fire on every gate that happens to name something absent.
 it_treats_an_undeclared_feature_as_off() {
     local root="${BASH_SOURCE[0]%/*}/.."
     local out
@@ -552,4 +554,92 @@ it_treats_an_undeclared_feature_as_off() {
     assert_eq "$out" "OFF
 OFF
 OFF"
+}
+
+# A manifest of our own to parse, beside a copy of `init`, so a case can be
+# written without editing the repository's own `nut.toml`.
+_ln_features() {
+    local d; d="$(mktemp -d)"
+    cp "${BASH_SOURCE[0]%/*}/../init" "$d/init"
+    printf '%s' "$1" > "$d/nut.toml"
+    printf '%s' "$d"
+}
+
+# What the set comes out as for that manifest, with stderr folded in so a
+# report is visible to the assertion rather than silently dropped.
+_ln_set() {
+    local d="$1"; shift
+    env "$@" bash -c '. "$1"/init >/dev/null 2>&1
+        _nut_feature_on __probe__
+        printf "%s" "$_NUT_FEATURES"' _ "$d" 2>&1
+}
+
+#[test]
+# A list written across several lines, which is ordinary TOML and was being
+# read as empty: the parse took everything after the `[`, found nothing on that
+# line, and dropped every name the list actually held. A feature that turns
+# others on then turned none of them on, and the modules gated on those were
+# absent with nothing said.
+it_reads_a_feature_list_written_across_lines() {
+    local d; d="$(_ln_features '[features]
+default = [
+  "a",
+  "b"
+]
+a = []
+b = []
+')"
+    local out; out="$(_ln_set "$d")"
+    rm -rf "$d"
+    assert_contains "$out" " a "
+    assert_contains "$out" " b "
+}
+
+#[test]
+# An indented table header, which is also ordinary TOML. Without trimming the
+# line first, `  [features]` was not a table at all, so every feature in the
+# file was undeclared at once.
+it_reads_an_indented_features_table() {
+    local d; d="$(_ln_features '  [features]
+  default = ["a"]
+  a = []
+')"
+    local out; out="$(_ln_set "$d")"
+    rm -rf "$d"
+    assert_contains "$out" " a "
+}
+
+#[test]
+# Asking for a name the manifest does not declare is reported. Distinct from
+# the case above, where a gate merely names something absent: this one is a
+# `--features` argument or a `default` entry that is a typo, and the module
+# gated on the correct spelling is then missing for a reason nobody can see.
+#
+# Reported rather than fatal, matching `_nut_gate`'s own arm for a gate it does
+# not know. Cargo refuses outright here; this is one rung softer, because
+# `init` is sourced and a hard failure would take the caller's shell with it.
+it_reports_a_requested_feature_that_nothing_declares() {
+    local d; d="$(_ln_features '[features]
+default = ["a"]
+a = []
+')"
+    local out; out="$(_ln_set "$d" NUT_FEATURES=ghost)"
+    rm -rf "$d"
+    assert_contains "$out" "unknown feature ghost"
+}
+
+#[test]
+# The control for that report, and the one that decides whether it survives: a
+# manifest asking only for names it declares must be silent. A report that
+# fires on the ordinary case is noise on every load and gets deleted within a
+# week.
+it_says_nothing_when_every_requested_feature_is_declared() {
+    local d; d="$(_ln_features '[features]
+default = ["a", "b"]
+a = ["b"]
+b = []
+')"
+    local out; out="$(_ln_set "$d")"
+    rm -rf "$d"
+    assert_not_contains "$out" "unknown feature"
 }

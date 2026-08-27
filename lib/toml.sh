@@ -640,7 +640,7 @@ toml_array() {
     # Check if it's an array format: [ "a", "b", "c" ]
     if [[ "$value" =~ ^\[.*\]$ ]]; then
         # Remove brackets
-        value="${value#[}"
+        value="${value#\[}"
         value="${value%]}"
         value="$(str_trim "$value")"
         

@@ -90,6 +90,21 @@ bench_arm() {
     _BENCH_NOTE+=("${4:-}")
 }
 
+#[pub]
+# Clear the arms so a second case can be declared in the same file.
+#
+# Two workloads are two questions, and the agreement control is right to refuse
+# them as one comparison: arms that answer different strings are not competing.
+# A file that wants to ask both declares its arms, runs, resets, and declares
+# the next set. Nothing carries over, the title and the verify function
+# included, so the second case has to name its own and cannot inherit a
+# baseline from the first by accident.
+# Usage: bench_run; bench_reset; bench_case "the next question"
+bench_reset() {
+    _BENCH_LABEL=(); _BENCH_FN=(); _BENCH_CEIL=(); _BENCH_NOTE=()
+    BENCH_TITLE=""; BENCH_VERIFY=""; BENCH_SIZE=0
+}
+
 # One run of one arm, in milliseconds.
 _bench_once() {
     local fn="$1" start end

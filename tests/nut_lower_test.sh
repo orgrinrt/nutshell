@@ -335,3 +335,52 @@ it_keeps_the_bash_preamble_when_the_dispatch_is_left_to_run() {
     assert_eq "$(bash -c '. "$1" && os_name' _ "$_LOW_OUT" 2>&1)" "$(bash -c 'uname -s' | tr 'A-Z' 'a-z' | sed 's/darwin/macos/')"
     _lower_done
 }
+
+#[test]
+# The lowering takes the feature set, which is the point of having features.
+#
+# Three ordering mistakes made this look like it worked when it did not, so the
+# assertion is on the emitted file rather than on the flag being accepted: the
+# flags were first set after the closure had already been walked, so they were
+# accepted and changed nothing, which is the worst of the three possible
+# behaviours.
+it_lowers_the_half_the_features_ask_for() {
+    local on off
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake -o "$_LOW_OUT" 2>/dev/null
+    on="$(grep -o 'lib/string[a-z.]*\.sh' "$_LOW_OUT" | head -1)"
+    rm -f "$_LOW_OUT"
+
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake --no-default-features -o "$_LOW_OUT" 2>/dev/null
+    off="$(grep -o 'lib/string[a-z.]*\.sh' "$_LOW_OUT" | head -1)"
+
+    assert_ne "$on" "$off" "the feature flag changed nothing"
+    assert_contains "$off" "posix"
+    _lower_done
+}
+
+#[test]
+# And the file it produces runs where it was asked for.
+#
+# This is the end of the chain and the reason any of it matters: a machine with
+# bash could not produce a POSIX artifact before, because `#[shell(bash4)]`
+# asks the running shell and gets the right answer every time.
+it_produces_a_posix_artifact_from_a_bash_machine() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake --no-default-features -o "$_LOW_OUT" 2>/dev/null
+
+    assert_ok "$sh" -n "$_LOW_OUT"
+    local got; got="$("$sh" -c '. "$1" && str_upper hello' _ "$_LOW_OUT" 2>&1)"
+    assert_eq "$got" "HELLO"
+
+    # The control: with the feature on, the same closure is a bash artifact and
+    # the POSIX shell refuses it. Without this the test above would pass on a
+    # lowering that never had a bash half in it to begin with.
+    rm -f "$_LOW_OUT"
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake -o "$_LOW_OUT" 2>/dev/null
+    assert_fails "$sh" -n "$_LOW_OUT"
+    _lower_done
+}

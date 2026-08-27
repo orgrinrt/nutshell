@@ -429,10 +429,114 @@ _nut_gate() {
             esac
             [[ -n "${!name:-}" ]] || return 1
             return 0 ;;
+        feature\(*\))
+            name="${a#feature(}"; name="${name%)}"
+            case "$name" in
+                ''|*[!A-Za-z0-9_-]*) return 1 ;;
+            esac
+            _nut_feature_on "$name" ;;
         *)
             printf 'nutshell: unknown gate %s\n' "$a" >&2
             return 1 ;;
     esac
+}
+
+# Which features are on, worked out once from `nut.toml` and the environment.
+#
+# Read here rather than through `toml`, because a gate is what `use` consults
+# and `use` is what would load `toml`. A dozen lines of `[features]` parsing
+# beats a cycle.
+#
+# The shape is cargo's: a table of names, each a list of other names it turns
+# on, and a `default` set that `NUT_NO_DEFAULT_FEATURES` drops. `NUT_FEATURES`
+# adds to whatever is left, so the two compose the way `--features` and
+# `--no-default-features` do.
+_NUT_FEATURES=""
+_NUT_FEATURES_READY=0
+
+# Worked out on the first gate that asks, not while this file is sourced.
+#
+# That laziness is what lets a tool source `init`, parse its own flags, export
+# `NUT_FEATURES` and have the export count: nothing has read the set yet. Warm
+# it here and every such tool would need to know to forget it again.
+_nut_features_load() {
+    [ "$_NUT_FEATURES_READY" = "1" ] && return 0
+    _NUT_FEATURES_READY=1
+
+    local toml="${_NUTSHELL_ROOT}/nut.toml" line insec=0 key rest want
+    _NUT_FEATURES=""
+
+    want=""
+    if [ "${NUT_NO_DEFAULT_FEATURES:-0}" != "1" ]; then want="default"; fi
+    want="${want} ${NUT_FEATURES:-}"
+
+    # Nothing asked for and no defaults wanted: an empty set, which is a real
+    # answer rather than a reason to read the file.
+    case "$want" in
+        ' '|'') return 0 ;;
+    esac
+    [ -r "$toml" ] || { _NUT_FEATURES=" ${NUT_FEATURES:-} "; return 0; }
+
+    # `<name> = [...]` inside `[features]`, one per line. A feature whose list
+    # names others turns those on too, which is the one bit of cargo's model
+    # that is not just a set.
+    local names="" lists="" n
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            \[features\]*) insec=1; continue ;;
+            \[*\]*) insec=0; continue ;;
+        esac
+        [ "$insec" = "1" ] || continue
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in *=*) ;; *) continue ;; esac
+        key="${line%%=*}"; rest="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"; key="${key#"${key%%[![:space:]]*}"}"
+        case "$key" in ''|*[!A-Za-z0-9_-]*) continue ;; esac
+        # The list, with the brackets, quotes and commas taken out.
+        rest="${rest#*[}"; rest="${rest%%]*}"
+        rest="$(printf '%s' "$rest" | tr -d '"'"'"',' )"
+        names="${names} ${key}"
+        lists="${lists}|${key}=${rest}"
+    done < "$toml"
+
+    # Walk what was asked for, adding what each one names, until nothing new
+    # appears. A feature naming itself, or a cycle, terminates because a name
+    # already in the set is not added again.
+    local queue="$want" cur added=1
+    while [ "$added" = "1" ]; do
+        added=0
+        for cur in $queue; do
+            case " $_NUT_FEATURES " in *" $cur "*) continue ;; esac
+            _NUT_FEATURES="${_NUT_FEATURES} ${cur}"
+            added=1
+            case "$lists" in
+                *"|${cur}="*)
+                    n="${lists#*|${cur}=}"; n="${n%%|*}"
+                    queue="${queue} ${n}" ;;
+            esac
+        done
+    done
+    _NUT_FEATURES=" ${_NUT_FEATURES# } "
+    return 0
+}
+
+#[pub]
+# Whether a feature is on.
+# Usage: nut_feature_on bash -> returns 0 when enabled
+_nut_feature_on() {
+    _nut_features_load
+    case "$_NUT_FEATURES" in *" ${1} "*) return 0 ;; esac
+    return 1
+}
+
+#[pub]
+# Every feature that is on, one per line. For a tool that has to pass the set
+# on to something else.
+# Usage: nutshell_features
+nutshell_features() {
+    _nut_features_load
+    local f
+    for f in $_NUT_FEATURES; do printf '%s\n' "$f"; done
 }
 
 # _lib_nut_modules <root>

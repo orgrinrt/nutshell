@@ -28,7 +28,37 @@
 #
 # The fields are the ones cargo, npm and deno all agree on, because a package
 # manifest that invents its own vocabulary makes every reader learn it: name,
-# version, description, license, repository, keywords. `[lib]` and `[bin]` are
+# version, description, license, repository, keywords. `# Feature flags, the way cargo has them.
+#
+# A gate asks about the machine: which shell is running, whether a binary is on
+# PATH. A feature is a choice, and the difference matters when the answer is
+# being written into a file that runs somewhere else. Lowering on a machine
+# with bash takes the bash half of every `#[shell(bash4)]` pair, because that
+# gate asks the running shell and gets the right answer; selecting features is
+# how you ask for the other half anyway.
+#
+# The rules are cargo's. Enabling a feature only ever adds. `default` is a set
+# like any other and `NUT_NO_DEFAULT_FEATURES=1` drops it. `NUT_FEATURES` adds
+# to whatever is left. A row in `lib.nut` with no `#[feature(...)]` is always
+# in, so a manifest that declares none behaves as it did before this existed.
+#
+#   [features]
+#   default = ["bash"]
+#   bash    = []
+#
+# A feature's list names other features it turns on, which is the one part of
+# the model that is more than a set.
+[features]
+# The bash halves of the paired modules: `map`, `list`, `string` and the
+# prompt. On by default, because the machine this is developed on has bash and
+# the bash halves are faster where they run.
+#
+# `nut-lower --no-default-features` drops them, which is how a lowering made
+# here produces a file for a machine that has only a POSIX shell.
+default = ["bash"]
+bash = []
+
+[lib]` and `[bin]` are
 # cargo's shape, and `[bin]` is a map the way package.json's is.
 [package]
 name = "nutshell"

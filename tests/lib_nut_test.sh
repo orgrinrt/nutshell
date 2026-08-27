@@ -495,3 +495,61 @@ it_points_at_files_that_are_there() {
     assert_ok test -f "$ROOT_DIR/$(toml_get "$ROOT_DIR/nut.toml" lib.path)"
     assert_ok test -f "$ROOT_DIR/$(toml_get "$ROOT_DIR/nut.toml" bin.nutshell)"
 }
+
+#[test]
+# A feature is a choice; a gate is an observation about the machine.
+#
+# `#[shell(bash4)]` asks the running shell, so on a machine with bash a paired
+# module always answers with its bash half. That is the right answer to the
+# question the gate asks, and it makes producing a POSIX artifact from a
+# machine that has bash structurally impossible, which is why features exist.
+it_selects_a_paired_module_by_feature_rather_than_by_shell() {
+    local root="${BASH_SOURCE[0]%/*}/.."
+
+    # Defaults on: the bash half, which is also what the shell gate would say.
+    local on; on="$(bash -c '. "$1"/init >/dev/null 2>&1; _lib_nut_lookup "$1" map' _ "$root" 2>/dev/null)"
+    assert_contains "$on" "map.bash.sh"
+
+    # Defaults off: the floor half, on the same machine and the same shell.
+    local off
+    off="$(NUT_NO_DEFAULT_FEATURES=1 bash -c '. "$1"/init >/dev/null 2>&1; _lib_nut_lookup "$1" map' _ "$root" 2>/dev/null)"
+    assert_contains "$off" "map.sh"
+    assert_not_contains "$off" "bash.sh"
+    assert_ne "$on" "$off"
+}
+
+#[test]
+# The set follows cargo: `default` is a set like any other, `NUT_FEATURES` adds
+# to what is left, and a feature's list turns on what it names.
+it_resolves_the_feature_set_the_way_cargo_does() {
+    local root="${BASH_SOURCE[0]%/*}/.."
+    local plain off extra
+    plain="$(bash -c '. "$1"/init >/dev/null 2>&1; nutshell_features | sort | tr "\n" " "' _ "$root" 2>/dev/null)"
+    off="$(NUT_NO_DEFAULT_FEATURES=1 bash -c '. "$1"/init >/dev/null 2>&1; nutshell_features | tr "\n" " "' _ "$root" 2>/dev/null)"
+    extra="$(NUT_FEATURES=zzz bash -c '. "$1"/init >/dev/null 2>&1; nutshell_features | sort | tr "\n" " "' _ "$root" 2>/dev/null)"
+
+    assert_contains "$plain" "default"
+    assert_contains "$plain" "bash"
+    assert_eq "${off// /}" ""
+    assert_contains "$extra" "zzz"
+    # Additive: asking for one more does not drop what was already on.
+    assert_contains "$extra" "bash"
+}
+
+#[test]
+# An unknown or malformed feature name is off rather than an error.
+#
+# A gate that errors takes the module with it; a feature nobody declared is
+# simply not enabled, which is what cargo does and what keeps a typo from
+# looking like a broken manifest.
+it_treats_an_undeclared_feature_as_off() {
+    local root="${BASH_SOURCE[0]%/*}/.."
+    local out
+    out="$(bash -c '. "$1"/init >/dev/null 2>&1
+        _nut_gate "feature(nosuchfeature)" && echo ON || echo OFF
+        _nut_gate "feature()" && echo ON || echo OFF
+        _nut_gate "feature(has spaces)" && echo ON || echo OFF' _ "$root" 2>&1)"
+    assert_eq "$out" "OFF
+OFF
+OFF"
+}

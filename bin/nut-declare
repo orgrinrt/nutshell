@@ -155,6 +155,12 @@ case "$MODE" in
                 case "$dg" in
                     shell\(bash\)|shell\(bash4\)) ;;
                     has\(bin\(?*\)\)|has\(env\(?*\)\)) ;;
+                    # A feature is a choice out of `nut.toml`, not a question
+                    # about this machine. The name is checked for shape only:
+                    # whether it is declared is `nut.toml`'s business, and an
+                    # undeclared one is off rather than an error, which is what
+                    # keeps a typo from reading as a broken manifest.
+                    feature\(?*\)) ;;
                     *) printf 'unknown gate: %s\n' "$dname"; rc=1 ;;
                 esac
                 continue

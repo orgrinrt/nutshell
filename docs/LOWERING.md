@@ -43,7 +43,8 @@ gate the resolver refuses is a variant that silently never loads.
 
 ## Features are a choice; a gate is an observation
 
-**Op's, and the newest thing here. Drafted rather than ratified.**
+**Op's ask. Built; the shape below is what shipped, and the three open
+questions at the end of this section are still his.**
 
 `nut.toml` grows a `[features]` table, the way `Cargo.toml` has one:
 
@@ -63,6 +64,13 @@ map                      lib/map.sh
 
 The lowering selects them the way cargo does, with `--features` and
 `--no-default-features`, and the selection is what decides which row wins.
+`NUT_FEATURES` and `NUT_NO_DEFAULT_FEATURES` are the same two through the
+environment, which is how the lowering passes them down.
+
+The set is worked out on the first gate that asks, never while `init` is
+sourced. That laziness is load-bearing: a tool sources `init`, parses its own
+flags and exports the two variables, and the export counts because nothing has
+read the set yet.
 
 ### Why this is not the shell gate again
 

@@ -389,7 +389,7 @@ _nl_shake() {
 # --- the tool ----------------------------------------------------------------
 
 main() {
-    local entry="" out="" shake=1 list=0 extra="" prebind=1
+    local entry="" out="" shake=1 list=0 extra="" prebind=1 features="" nodefault=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help) _nl_usage; return 0 ;;
@@ -397,6 +397,8 @@ main() {
             --use) extra="${extra},${2:-}"; shift 2 ;;
             --no-shake) shake=0; shift ;;
             --no-prebind) prebind=0; shift ;;
+            --features) features="${2:-}"; shift 2 ;;
+            --no-default-features) nodefault=1; shift ;;
             --list) list=1; shift ;;
             -*) printf 'nut-lower: unknown option %s\n' "$1" >&2; return 64 ;;
             *) entry="$1"; shift ;;
@@ -405,6 +407,17 @@ main() {
 
     [[ -n "$entry" ]] || { _nl_usage >&2; return 64; }
     [[ -r "$entry" ]] || { printf 'nut-lower: cannot read %s\n' "$entry" >&2; return 1; }
+
+    # Before the closure is walked, because the walk is what resolves each
+    # module and the feature set is what decides which half of a pair it takes.
+    # Set after the walk they are accepted and change nothing, which is the
+    # worst of the three possible behaviours and is where they were first put.
+    #
+    # A gate asks the running shell, so on a machine with bash a
+    # `#[shell(bash4)]` pair always answers bash. The feature is how a lowering
+    # asks for the other half anyway, which is the whole point of having both.
+    [[ -n "$features" ]] && export NUT_FEATURES="$features"
+    [[ "$nodefault" -eq 1 ]] && export NUT_NO_DEFAULT_FEATURES=1
 
     local m
     while IFS= read -r m; do

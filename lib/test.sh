@@ -115,6 +115,23 @@ assert_contains() {
 }
 
 #[pub]
+# The negation, which was missing and cost three tests.
+#
+# Without it, `assert_not_contains` is an unknown command: it prints to stderr,
+# it does not register an assertion, and the test around it passes on whatever
+# else it happened to check. Three tests in this repo carried a line that did
+# nothing, and two of them reported a pass. The harness's own
+# "asserted nothing" guard caught the third, which is the only reason any of
+# them were found.
+#
+# Usage: assert_not_contains "$output" "PWNED"
+assert_not_contains() {
+    _test_asserted
+    [[ "$1" != *"$2"* ]] && return 0
+    _test_failed "expected NOT to find [$2]" "                in [$1]" ${3:+"     $3"}
+}
+
+#[pub]
 # Usage: assert_empty "$value" ["about"] -> 0 or 1
 assert_empty() {
     _test_asserted

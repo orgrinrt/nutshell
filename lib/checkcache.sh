@@ -66,6 +66,57 @@ declare -g _NUT_CACHE_FORMAT=2
 
 declare -gA _NUT_CACHE_STAMP=()
 declare -g  _NUT_CACHE_BASE=""
+declare -g  _NUT_CACHE_STAT=""
+
+# Which `stat` this machine has, decided once by what it prints rather than by
+# what it returns.
+#
+# BSD spells the format `-f` and GNU spells it `-c`. Choosing with
+# `stat -f ... || stat -c ...` looks right and is not: on GNU, `-f` is not a
+# format flag at all, it asks for file-system status, and it does not
+# recognise `%m`. It can therefore exit 0 having printed something that is not
+# an mtime, the `||` never fires, and every stamp on Linux is garbage that
+# compares equal to itself. Invalidation stops, silently, on the platform most
+# of this runs on.
+#
+# So the probe reads the answer back. A format is accepted when it produces a
+# line whose first field is a plain number, which neither flavour produces for
+# the other's spelling.
+#
+# Prints `-f` or `-c`, or nothing when neither works.
+_nut_cache_stat_flag() {
+    [[ -n "$_NUT_CACHE_STAT" ]] && { printf '%s' "${_NUT_CACHE_STAT#none}"; return 0; }
+
+    local probe="${NUTSHELL_ROOT:-.}/init" out
+    [[ -f "$probe" ]] || probe="${BASH_SOURCE[0]}"
+
+    local flag fmt
+    for flag in -f -c; do
+        case "$flag" in
+            -f) fmt='%m' ;;
+            -c) fmt='%Y' ;;
+        esac
+        out="$(stat "$flag" "$fmt" "$probe" 2>/dev/null)" || continue
+        out="${out%%[!0-9]*}"
+        if [[ -n "$out" ]]; then
+            _NUT_CACHE_STAT="$flag"
+            printf '%s' "$flag"
+            return 0
+        fi
+    done
+
+    _NUT_CACHE_STAT="none"
+    return 1
+}
+
+# The `<mtime> <size> <path>` format for whichever `stat` this is.
+_nut_cache_stat_fmt() {
+    case "$(_nut_cache_stat_flag)" in
+        -f) printf '%%m %%z %%N' ;;
+        -c) printf '%%Y %%s %%n' ;;
+        *)  return 1 ;;
+    esac
+}
 
 # `<mtime> <size>` for a set of paths, in one call.
 _nut_cache_stat_into() {
@@ -82,8 +133,10 @@ _nut_cache_stat_into() {
         [[ -n "$path" ]] || continue
         _NUT_CACHE_STAMP["$path"]="${mtime} ${size}"
     done < <(
-        if stat -f '%m %z %N' "$@" 2>/dev/null; then :
-        else stat -c '%Y %s %n' "$@" 2>/dev/null; fi
+        local flag fmt
+        flag="$(_nut_cache_stat_flag)" || exit 0
+        fmt="$(_nut_cache_stat_fmt)"   || exit 0
+        stat "$flag" "$fmt" "$@" 2>/dev/null
     )
     return 0
 }
@@ -118,9 +171,10 @@ _nut_cache_base() {
         # changes what a check reports while touching nothing else.
         #
         # One `find` and one batched `stat`, per run rather than per file.
-        newest="$(
-            find "$root/lib" "$root/init" -type f -exec stat -f '%m' {} + 2>/dev/null \
-            || find "$root/lib" "$root/init" -type f -exec stat -c '%Y' {} + 2>/dev/null
+        local flag fmt
+        flag="$(_nut_cache_stat_flag)" && case "$flag" in -f) fmt='%m' ;; *) fmt='%Y' ;; esac
+        [[ -n "${flag:-}" ]] && newest="$(
+            find "$root/lib" "$root/init" -type f -exec stat "$flag" "$fmt" {} + 2>/dev/null
         )"
         newest="$(printf '%s\n' "$newest" | sort -rn | head -1)"
     fi

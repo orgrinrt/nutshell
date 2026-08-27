@@ -972,3 +972,74 @@ it_does_not_wait_out_the_clock_for_a_parent_that_is_merely_absent() {
     # margin either way.
     assert_ok test "$(( end - start ))" -lt 5
 }
+
+# --- what a tag resolves to --------------------------------------------------
+#
+# An annotated tag is two objects: the tag, and the commit it points at.
+# `git ls-remote <url> refs/tags/x` returns only the first, and the peeled
+# `refs/tags/x^{}` row appears only when the pattern lets it. So a resolver
+# that asks for the exact ref and then handles `^{}` has code for a case it
+# never sees, which is what this had.
+#
+# The consequence is quiet. A lockfile pinning an annotated tag recorded the
+# tag object's sha, which is not a commit and can never equal any checkout's
+# `HEAD`, so nothing that compares them can ever agree. Found by tagging
+# the-whole-shebang `0.1.0` and reading the lock it produced.
+
+_ex_tagged_repo() {
+    local kind="$1"
+    local d; d="$(_ex_tmp tagrepo)"
+    git -C "$d" init -q -b main
+    git -C "$d" config user.email t@example.invalid
+    git -C "$d" config user.name  t
+    printf 'one\n' > "$d/f"
+    git -C "$d" add f
+    git -C "$d" commit -q -m one
+    case "$kind" in
+        annotated) git -C "$d" tag -a v1 -m "release v1" ;;
+        # Written as a ref rather than through `git tag`, which is what a
+        # lightweight tag is. This machine's config forces annotation, so
+        # `git tag v1` asks for a message and makes the other kind.
+        light)     git -C "$d" update-ref refs/tags/v1 "$(git -C "$d" rev-parse HEAD)" ;;
+    esac
+    printf '%s' "$d"
+}
+
+#[test]
+it_resolves_an_annotated_tag_to_the_commit_and_not_to_the_tag() {
+    local d; d="$(_ex_tagged_repo annotated)"
+    local want; want="$(git -C "$d" rev-parse 'v1^{}')"
+    local tagobj; tagobj="$(git -C "$d" rev-parse v1)"
+
+    # The control for the test itself: an annotated tag has to have two
+    # different shas, or this proves nothing about which one came back.
+    assert_ne "$tagobj" "$want"
+
+    local got; got="$(_extern_remote_ref "$d" v1)"
+    assert_eq "$got" "tags ${want}"
+}
+
+#[test]
+it_resolves_a_lightweight_tag_to_the_same_commit() {
+    # The control. A lightweight tag is the commit, so both readings agree and
+    # a resolver that always took the bare row would pass this. It is here so
+    # the fix above cannot be a change that only works for one shape.
+    local d; d="$(_ex_tagged_repo light)"
+    local want; want="$(git -C "$d" rev-parse 'v1^{}')"
+    assert_eq "$(git -C "$d" rev-parse v1)" "$want"
+    assert_eq "$(_extern_remote_ref "$d" v1)" "tags ${want}"
+}
+
+#[test]
+it_prefers_a_branch_over_a_tag_of_the_same_name() {
+    # Unchanged behaviour, pinned because the glob above widened what the tag
+    # query returns and this is the neighbouring decision.
+    local d; d="$(_ex_tagged_repo annotated)"
+    git -C "$d" checkout -q -b v1 2>/dev/null
+    printf 'two\n' > "$d/f"; git -C "$d" add f; git -C "$d" commit -q -m two
+    # By its full ref, because a branch and a tag of the same name make the
+    # short name ambiguous and git resolves it to the tag.
+    local head; head="$(git -C "$d" rev-parse refs/heads/v1)"
+
+    assert_eq "$(_extern_remote_ref "$d" v1)" "heads ${head}"
+}

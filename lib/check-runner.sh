@@ -555,9 +555,6 @@ get_script_files() {
 # ANNOTATION CHECKING
 # =============================================================================
 
-# Check if a function has a specific annotation
-#[pub]
-# Usage: has_annotation "file" "func_name" "annotation_pattern" -> returns 0/1
 # attr_name_of <annotation>
 #
 # The attribute name inside a configured marker: `#[pub]` gives `pub`. Prints
@@ -593,6 +590,9 @@ attr_name_of() {
 # The window was a second, quieter bug: ten lines is enough for a terse
 # function and not for a documented one, so whether an annotation was seen
 # depended on how much prose sat under it.
+#
+#[pub]
+# Usage: has_annotation "file" "func_name" "annotation_pattern" -> returns 0/1
 has_annotation() {
     local file="$1" func_name="$2" annotation="$3"
 

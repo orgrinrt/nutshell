@@ -404,6 +404,12 @@ nutshell_toolchains() {
         name="${d%/}"; name="${name##*/}"
         v="$(_nutshell_version_of "${d}init")" || continue
         [[ "$v" == "$name" ]] || continue
+        # And it has to say where it came from. An entry without the record
+        # was written by a nutshell that did not keep one, or by hand, and
+        # there is no way to tell whether it is the release it is named for.
+        # Skipping it means the next request refetches, which is the cheap and
+        # correct answer; keeping it means trusting a name.
+        [[ -f "${d}.fetched" ]] || continue
         printf '%s\n' "$v"
     done | _nutshell_sort_versions
 }
@@ -546,6 +552,35 @@ _nutshell_fetch() {
         printf 'nutshell: %s in %s reports itself as %s\n' "$want" "$remote" "${got:-nothing}" >&2
         _nutshell_remember_failure "$want"
         return 1
+    fi
+
+    # What this actually is, written before it is adopted, so the record moves
+    # into place with the content in one rename.
+    #
+    # A version string is not a content hash. Anything reporting `0.4.0` fills
+    # a `0.4.0` directory, and the tree on `dev` reports the next version for
+    # the whole stretch before that version is tagged. So a fetch during that
+    # stretch, or from a branch whose name shadows a tag, lands content that is
+    # not the release and passes every check afterwards, because the directory
+    # and the interpreter inside it agree.
+    #
+    # Observed: a `toolchains/0.4.0` holding a tree from before the tag, which
+    # nothing detected and which the store would have kept forever, since a
+    # directory that exists is adopted rather than replaced.
+    {
+        printf 'ref %s\n' "$want"
+        printf 'remote %s\n' "$remote"
+        printf 'commit %s\n' "$(git -C "$tmp" rev-parse HEAD 2>/dev/null)"
+    } > "${tmp}/.fetched" 2>/dev/null
+
+    # An entry already sitting there without a record cannot be trusted and
+    # cannot simply be adopted, because adoption keeps whoever got there first.
+    # It is moved aside rather than removed: something may be sourcing out of
+    # it right now, and a rename leaves an open file alone where a delete does
+    # not. What is left behind is invisible to `nutshell_toolchains`, since its
+    # name is not a version.
+    if [[ -d "$dir" && ! -f "${dir}/.fetched" ]]; then
+        mv "$dir" "${dir}.unrecorded.$$" 2>/dev/null || rm -rf "$tmp"
     fi
 
     _nutshell_adopt "$tmp" "$dir" || return 1

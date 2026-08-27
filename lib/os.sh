@@ -36,6 +36,7 @@ os_name() {
 
 #[pub]
 # Returns 0 (true) if running on Linux, 1 (false) otherwise
+# Usage: os_is_linux -> returns 0 on Linux, 1 elsewhere
 os_is_linux() {
     case "$(uname -s)" in Linux*) return 0 ;; esac
     return 1
@@ -51,6 +52,7 @@ os_is_macos() {
 
 #[pub]
 # Returns 0 (true) if running on Windows (via Cygwin/MSYS/MinGW), 1 (false) otherwise
+# Usage: os_is_windows -> returns 0 under Cygwin, MSYS or MinGW, 1 elsewhere
 os_is_windows() {
     case "$(uname -s)" in
         CYGWIN*|MINGW*|MSYS*) return 0 ;;
@@ -68,6 +70,7 @@ os_arch() {
 
 #[pub]
 # Returns 0 if running in WSL, 1 otherwise
+# Usage: os_is_wsl -> returns 0 under WSL, 1 elsewhere
 os_is_wsl() {
     [ -f /proc/version ] && grep -qi microsoft /proc/version 2>/dev/null
 }

@@ -321,8 +321,19 @@ color_wrap() {
     local color_var="${1:-}"
     local text="${2:-}"
     
-    # Get the color value from the variable name
-    local color="${!color_var:-}"
+    # `${!name}` is bash's indirect expansion and a fatal `Bad substitution`
+    # under a POSIX shell, which is worse than it sounds here: the file parses,
+    # so it counted as floor-ready, and every `color_wrap` call returned the
+    # empty string while the shell carried on at exit zero.
+    #
+    # The name is checked before it reaches `eval`, because it comes from the
+    # caller and `color_wrap 'X}; rm -rf /; :' ...` would otherwise be a command
+    # rather than a lookup.
+    local color=""
+    case "$color_var" in
+        ''|*[!A-Za-z0-9_]*|[0-9]*) color="" ;;
+        *) eval "color=\${${color_var}:-}" ;;
+    esac
     
     if [ -n "$color" ]; then
         printf '%s' "${color}${text}${NC}"

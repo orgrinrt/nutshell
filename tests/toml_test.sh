@@ -583,3 +583,28 @@ it_keeps_an_escape_that_names_no_character() {
     done
     rm -rf "$d"
 }
+
+#[test]
+# `_toml_utf8` writes through the names a caller is most likely to pick.
+#
+# It took `local cp="$1" out="$2"`, so a caller asking for its answer in `out`
+# or `cp` lost the write into the callee's own frame and still got a zero
+# return. `srcfile.sh` had been bitten by exactly this and defends against it
+# with prefixes; the same was owed here and was not done.
+#
+# The prefix is a convention rather than a guarantee, so the callee's own
+# `__tu_out` is deliberately not asserted: nothing can defend against that from
+# inside.
+it_writes_the_codepoint_through_a_callers_own_name() {
+    local name
+    for name in out cp result n i value; do
+        eval "local ${name}=untouched"
+        assert_ok _toml_utf8 65 "$name"
+        assert_eq "$(eval "printf '%s' \"\$${name}\"")" "A" \
+            "_toml_utf8 lost the answer into its own '${name}'"
+    done
+
+    # And a name that is not one is still refused rather than eval'd.
+    assert_fails _toml_utf8 65 '1bad'
+    assert_fails _toml_utf8 65 'v; echo X'
+}

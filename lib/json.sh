@@ -58,6 +58,15 @@ _JSON_TAB="$(printf '\t.')"; _JSON_TAB="${_JSON_TAB%.}"
 # copy of the loop in this library, which is worth one comment and not yet
 # worth a shared out-name form and a new dependency in two modules.
 _json_gsub() {
+    # An empty needle matches everywhere and the loop never shortens the
+    # remainder, so it appends forever. `str_replace` guards this on its first
+    # line and this copy did not, which is the cost of the second copy.
+    [ -n "$2" ] || { eval "$4=\$1"; return 0; }
+    # The out-name reaches `eval`, so it is checked the way every other
+    # out-name in this library is: `_json_gsub a b c 'v; echo X'` ran the echo.
+    case "$4" in
+        ''|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;;
+    esac
     _jg_rest="$1"; _jg_acc=""
     while :; do
         case "$_jg_rest" in

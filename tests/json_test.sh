@@ -280,3 +280,31 @@ it_escapes_a_lone_backslash_exactly_once() {
     local got; got="$(json_object k '\')"
     assert_eq "$got" '{"k":"\\"}'
 }
+
+#[test]
+# `_json_gsub` refuses an out-name that is not one, and does not hang.
+#
+# Both were real. An empty search string matches everywhere and never shortens
+# the remainder, so the loop appended forever; `str_replace` guards that on its
+# first line and this copy did not. And the out-name goes into an `eval`, so
+# `_json_gsub a b c 'v; echo X'` ran the echo.
+it_refuses_a_bad_out_name_and_an_empty_needle() {
+    local out=SENTINEL
+    # An empty needle returns the subject unchanged rather than looping.
+    assert_ok _json_gsub "abc" "" "X" out
+    assert_eq "$out" "abc"
+
+    # A name that is not a name is refused before it reaches `eval`.
+    assert_fails _json_gsub "abc" "b" "Z" 'v; echo INJECTED'
+    assert_fails _json_gsub "abc" "b" "Z" '1bad'
+    assert_fails _json_gsub "abc" "b" "Z" ''
+
+    # And nothing it refused was executed.
+    local out2; out2="$(_json_gsub "abc" "b" "Z" 'v; echo INJECTED' 2>&1)"
+    assert_not_contains "$out2" "INJECTED"
+
+    # The control: an ordinary call still works.
+    local ok=""
+    assert_ok _json_gsub "abc" "b" "Z" ok
+    assert_eq "$ok" "aZc"
+}

@@ -541,3 +541,25 @@ it_parses_under_a_posix_shell() {
     done
     skip "no strict POSIX shell on this machine to check against"
 }
+
+#[test]
+# The same two guards on `_tw_gsub`, which is the second copy of the loop.
+#
+# Kept as a separate test in a separate file on purpose: the copies drifted
+# once already, since `json.sh` cites `str_replace` by name while writing the
+# loop again without its empty-needle guard.
+it_refuses_a_bad_out_name_and_an_empty_needle() {
+    local out=SENTINEL
+    assert_ok _tw_gsub "abc" "" "X" out
+    assert_eq "$out" "abc"
+
+    assert_fails _tw_gsub "abc" "b" "Z" 'v; echo INJECTED'
+    assert_fails _tw_gsub "abc" "b" "Z" '1bad'
+
+    local out2; out2="$(_tw_gsub "abc" "b" "Z" 'v; echo INJECTED' 2>&1)"
+    assert_not_contains "$out2" "INJECTED"
+
+    local ok=""
+    assert_ok _tw_gsub "abc" "b" "Z" ok
+    assert_eq "$ok" "aZc"
+}

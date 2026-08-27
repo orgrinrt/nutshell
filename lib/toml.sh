@@ -152,23 +152,32 @@ _toml_clean_line() {
 # Refuses a surrogate half and anything past the last codepoint, because
 # neither has a UTF-8 encoding; the caller keeps the escape as typed.
 _toml_utf8() {
-    local cp="$1" out="$2"
-    [[ "$out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
-    (( cp < 0 || cp > 0x10FFFF )) && return 1
-    (( cp >= 0xD800 && cp <= 0xDFFF )) && return 1
-    if (( cp < 0x80 )); then
-        printf -v "$out" '%b' "$(printf '\\x%02x' "$cp")"
-    elif (( cp < 0x800 )); then
-        printf -v "$out" '%b' "$(printf '\\x%02x\\x%02x' \
-            $(( 0xC0 | (cp >> 6) )) $(( 0x80 | (cp & 0x3F) )))"
-    elif (( cp < 0x10000 )); then
-        printf -v "$out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x' \
-            $(( 0xE0 | (cp >> 12) )) $(( 0x80 | ((cp >> 6) & 0x3F) )) \
-            $(( 0x80 | (cp & 0x3F) )))"
+    # Prefixed locals, because the answer is written with `printf -v` and bash
+    # scopes dynamically: a local called `out` or `cp` shadows a caller asking
+    # for its own, the write lands in this frame and dies with it, and the
+    # caller still gets a zero return. `srcfile.sh` was bitten by exactly this
+    # and defends against it; the same treatment was owed here.
+    #
+    # It is a convention rather than a guarantee: a caller asking for its
+    # answer in `__tu_out` still loses it, and nothing can detect that from
+    # in here. The prefix makes the collision improbable, not impossible.
+    local __tu_cp="$1" __tu_out="$2"
+    [[ "$__tu_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+    (( __tu_cp < 0 || __tu_cp > 0x10FFFF )) && return 1
+    (( __tu_cp >= 0xD800 && __tu_cp <= 0xDFFF )) && return 1
+    if (( __tu_cp < 0x80 )); then
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x' "$__tu_cp")"
+    elif (( __tu_cp < 0x800 )); then
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x' \
+            $(( 0xC0 | (__tu_cp >> 6) )) $(( 0x80 | (__tu_cp & 0x3F) )))"
+    elif (( __tu_cp < 0x10000 )); then
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x' \
+            $(( 0xE0 | (__tu_cp >> 12) )) $(( 0x80 | ((__tu_cp >> 6) & 0x3F) )) \
+            $(( 0x80 | (__tu_cp & 0x3F) )))"
     else
-        printf -v "$out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
-            $(( 0xF0 | (cp >> 18) )) $(( 0x80 | ((cp >> 12) & 0x3F) )) \
-            $(( 0x80 | ((cp >> 6) & 0x3F) )) $(( 0x80 | (cp & 0x3F) )))"
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
+            $(( 0xF0 | (__tu_cp >> 18) )) $(( 0x80 | ((__tu_cp >> 12) & 0x3F) )) \
+            $(( 0x80 | ((__tu_cp >> 6) & 0x3F) )) $(( 0x80 | (__tu_cp & 0x3F) )))"
     fi
     return 0
 }

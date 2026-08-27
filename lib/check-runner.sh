@@ -82,6 +82,8 @@ declare -gA _CFG_CACHE=()
 declare -gA _CFG_MISS=()
 
 #[pub]
+# A value from the project config, or nothing.
+# Usage: cfg_get "tests.file_size.max_lines" -> prints the value, or fails
 cfg_get() {
     local key="$1"
     local value=""
@@ -432,7 +434,8 @@ declare -ga FAILED_TESTS=() 2>/dev/null || declare -a FAILED_TESTS=()
 declare -ga WARNED_TESTS=() 2>/dev/null || declare -a WARNED_TESTS=()
 
 #[pub]
-# Reset counters (useful when running multiple test files)
+# Reset counters, for a runner driving more than one check file.
+# Usage: reset_counters
 reset_counters() {
     TESTS_RUN=0
     TESTS_PASSED=0
@@ -447,6 +450,8 @@ reset_counters() {
 # =============================================================================
 
 #[pub]
+# A banner above a whole check.
+# Usage: log_header "POSIX floor"
 log_header() {
     echo ""
     echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════════════${NC}"
@@ -456,6 +461,8 @@ log_header() {
 }
 
 #[pub]
+# A divider inside a check, for its parts.
+# Usage: log_section "the files that parse"
 log_section() {
     echo ""
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────────${NC}"
@@ -464,11 +471,15 @@ log_section() {
 }
 
 #[pub]
+# Names the case about to run. Counts nothing.
+# Usage: log_test "reads every module"
 log_test() {
     echo -e "${BLUE}[TEST]${NC} $*"
 }
 
 #[pub]
+# One case passed. Counts toward run and passed.
+# Usage: log_pass "every module reads"
 log_pass() {
     TESTS_PASSED=$((TESTS_PASSED + 1))
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -487,6 +498,9 @@ log_pass() {
 }
 
 #[pub]
+# One case failed. Counts toward run and failed, and is repeated in the
+# summary at the end.
+# Usage: log_fail "lib/toml.sh cannot be read"
 log_fail() {
     echo -e "${RED}  ✗${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
@@ -495,6 +509,8 @@ log_fail() {
 }
 
 #[pub]
+# One case is worth reporting and does not fail the check.
+# Usage: log_test_warn "lib/toml.sh - 86 uses of [["
 log_test_warn() {
     echo -e "${YELLOW}  ⚠${NC} $*"
     TESTS_WARNED=$((TESTS_WARNED + 1))
@@ -502,11 +518,15 @@ log_test_warn() {
 }
 
 #[pub]
+# Something worth saying that is not a verdict. Counts nothing.
+# Usage: log_test_info "checking with dash"
 log_test_info() {
     echo -e "${BLUE}  ℹ${NC} $*"
 }
 
 #[pub]
+# One case was not run, and why. Counts nothing.
+# Usage: log_skip "no POSIX shell on this machine"
 log_skip() {
     echo -e "${MAGENTA}  ○${NC} $* (skipped)"
 }
@@ -535,6 +555,11 @@ declare -g _NUT_LIB_FILES_CACHED=""
 declare -g _NUT_LIB_FILES=""
 
 #[pub]
+# Every file the project counts as its own source, one per line.
+#
+# Found once and kept, because the callers ask per function and the tree does
+# not change while a check runs.
+# Usage: get_lib_files -> prints one path per line
 get_lib_files() {
     _framework_init
 
@@ -571,7 +596,7 @@ get_script_files() {
 # =============================================================================
 
 #[pub]
-# attr_name_of <annotation>
+# Usage: attr_name_of "#[pub]" -> "pub"
 #
 # The attribute name inside a configured marker: `#[pub]` gives `pub`. Prints
 # nothing when the marker is not in attribute shape, which is how a caller

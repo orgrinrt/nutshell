@@ -12,7 +12,9 @@ the fork, and where that sits is the answer.
 ## The result
 
 Forty calls per arm, on `Darwin arm64`, bash 5.3, compiled with `cc -O2`
-before anything was timed.
+before anything was timed. The figures are the best of seven repeats; the
+spreads are in the committed CSVs beside this file and one of them is wide
+(the N=10 forked arm runs 95 to 607).
 
 | N | in-shell | forked helper | resident helper |
 |---|---|---|---|
@@ -29,13 +31,22 @@ every size it is almost entirely the forking. A shell operation costs about
 2.4 microseconds, so the crossover for a forked helper sits near N=1000 and is
 visible in the table as the row where the two arms tie.
 
-**A pipe round trip to a helper already running costs about 0.125 ms, which is
-fifty shell operations.** The resident arm is flat at 5 ms at every size, and
-most of that 5 ms is the one start amortised over forty calls.
+**A pipe round trip to a helper already running costs at most 0.125 ms, and
+this bench cannot say how much less.** The resident arm reads 5 ms best and
+6 ms worst at every size from N=10 to N=10000, which is the harness floor: it
+does not move, so what is being measured is the resolution rather than the
+work. Divided over forty calls that is 0.125 ms each, and the true figure is
+somewhere below it, sharing the 5 ms with the one process start.
 
-So the two routes are not variations on one idea. **A fork is nineteen times
-more expensive than a pipe round trip**, and it is the fork, not the language
-on the other side of it, that decides whether a helper pays.
+An earlier version of this paragraph asserted the 0.125 ms as a measurement and
+then said in the next sentence that most of the 5 ms was the process start.
+Both cannot be true, and the second is the more likely of the two.
+
+So the comparison is a bound rather than a ratio. **A fork costs at least
+nineteen times a pipe round trip**, and it is the fork, not the language on the
+other side of it, that decides whether a helper pays. Nineteen is the floor of
+that ratio; the real one is larger and needs a bench with more calls per arm to
+pin, which is one number this file does not have.
 
 ## What that means for a helper written in C
 

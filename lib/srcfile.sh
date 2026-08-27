@@ -75,26 +75,54 @@ nut_file_lines() { printf '%s' "${_NUT_FILE_N[${1}]:-0}"; }
 
 #[pub]
 # The line a function is defined on, or nothing.
-# Usage: nut_defined_at <file> <function> -> prints a line number
+#
+# Name a variable and the answer goes there instead of to stdout. The lookup
+# itself is one array read; read through a command substitution it costs a
+# fork, which is a thousand times the read. On a checker asking this of every
+# function in the library it was most of what the checker cost.
+# Usage: nut_defined_at <file> <function> [out-name] -> prints a line number
 nut_defined_at() {
-    local at="${_NUT_FILE_AT["${1}:${2}"]:-}"
-    [[ -n "$at" ]] || return 1
-    printf '%s' "$at"
+    # Every local here is prefixed, because the out-name is written with
+    # `printf -v` and bash scopes dynamically: a local called `at` would
+    # shadow a caller asking for its own `at` and the answer would land in
+    # this frame and die with it. The caller cannot see that happen.
+    local __nd_at="${_NUT_FILE_AT["${1}:${2}"]:-}"
+    [[ -n "$__nd_at" ]] || return 1
+    if [[ -n "${3:-}" ]]; then
+        [[ "$3" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+        printf -v "$3" '%s' "$__nd_at"
+        return 0
+    fi
+    printf '%s' "$__nd_at"
 }
 
 #[pub]
 # Where a function's body ends: the first line that closes it at column one, or
 # closes it alone on its own line. The same heuristic the checks used, without
 # the `tail | grep | head | cut` it took four processes to express.
-# Usage: nut_ends_at <file> <function> -> prints a line number
+# Name a variable and the answer goes there instead of to stdout, as with
+# `nut_defined_at`.
+# Usage: nut_ends_at <file> <function> [out-name] -> prints a line number
 nut_ends_at() {
-    local file="$1" start end n line
-    start="$(nut_defined_at "$file" "$2")" || return 1
-    n="${_NUT_FILE_N[$file]:-0}"
-    for (( end = start + 1; end <= n; end++ )); do
-        line="${_NUT_FILE_BODY["${file}:${end}"]}"
-        [[ "$line" == "}" ]] && { printf '%s' "$end"; return 0; }
-        [[ "$line" =~ ^[[:space:]]*\}[[:space:]]*$ ]] && { printf '%s' "$end"; return 0; }
+    # Prefixed for the same reason as `nut_defined_at`, and it is not
+    # hypothetical here: the first version used `end`, and `nut_body_of` asks
+    # for its answer in a variable called `end`. The write landed in this
+    # frame, the caller read its own untouched local, and under `set -u` that
+    # surfaced as an unbound variable three tests away from the cause.
+    local __ne_file="$1" __ne_out="${3:-}" __ne_start __ne_end __ne_n __ne_line
+    [[ -z "$__ne_out" || "$__ne_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+    nut_defined_at "$__ne_file" "$2" __ne_start || return 1
+    __ne_n="${_NUT_FILE_N[$__ne_file]:-0}"
+    for (( __ne_end = __ne_start + 1; __ne_end <= __ne_n; __ne_end++ )); do
+        __ne_line="${_NUT_FILE_BODY["${__ne_file}:${__ne_end}"]}"
+        if [[ "$__ne_line" == "}" || "$__ne_line" =~ ^[[:space:]]*\}[[:space:]]*$ ]]; then
+            if [[ -n "$__ne_out" ]]; then
+                printf -v "$__ne_out" '%s' "$__ne_end"
+            else
+                printf '%s' "$__ne_end"
+            fi
+            return 0
+        fi
     done
     return 1
 }
@@ -106,11 +134,11 @@ nut_ends_at() {
 # what a seven-stage `grep -v` chain was doing per function.
 # Usage: nut_body_of <file> <function> <array-name>
 nut_body_of() {
-    local file="$1" fn="$2" out="$3" start end i line
+    local file="$1" fn="$2" out="$3" start=0 end=0 i line
     [[ "$out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
     eval "$out=()"
-    start="$(nut_defined_at "$file" "$fn")" || return 1
-    end="$(nut_ends_at "$file" "$fn")" || return 1
+    nut_defined_at "$file" "$fn" start || return 1
+    nut_ends_at "$file" "$fn" end || return 1
     for (( i = start + 1; i < end; i++ )); do
         line="${_NUT_FILE_BODY["${file}:${i}"]}"
         [[ "$line" =~ ^[[:space:]]*# ]] && continue

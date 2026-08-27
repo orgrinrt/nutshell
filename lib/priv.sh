@@ -136,9 +136,22 @@ priv_user_home() { _priv_learn_user; printf '%s' "$PRIV_HOME"; }
 #
 # Single quotes take everything literally, so the only character needing work
 # is the single quote itself: close, escape it outside the quotes, reopen.
+# One shell-quoted word, safe to hand to `su -c`.
+#
+# Walked rather than `${s//from/to}`, which is bash's. Every single quote
+# closes the quoting, escapes itself, and opens it again, which is the only
+# form that survives inside single quotes.
 _priv_sq() {
-    local s="${1:-}"
-    printf "'%s'" "${s//\'/\'\\\'\'}"
+    local s="${1:-}" out="" head
+    while :; do
+        case "$s" in
+            *\'*) head="${s%%\'*}"
+                  out="${out}${head}'\\''"
+                  s="${s#*\'}" ;;
+            *) break ;;
+        esac
+    done
+    printf "'%s'" "${out}${s}"
 }
 
 #[pub]
@@ -184,7 +197,7 @@ priv_as_user() {
             # back into one string. Every other route avoids that.
             su)
                 local q="" a
-                for a in "$@"; do q+="${q:+ }$(_priv_sq "$a")"; done
+                for a in "$@"; do q="${q}${q:+ }$(_priv_sq "$a")"; done
                 # No `-s`. That flag is util-linux; BSD and macOS `su` is
                 # `su [-] [-flm] [login [args]]` and refuses it, and this is
                 # the branch a busybox rescue console actually takes.

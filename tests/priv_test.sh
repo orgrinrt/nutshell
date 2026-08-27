@@ -573,3 +573,47 @@ it_runs_under_a_posix_shell() {
     # And the field cut actually found a home rather than an empty string.
     assert_not_contains "$got" "||"
 }
+
+#[test]
+# A quoted word survives being handed to a shell and read back.
+#
+# `_priv_sq` builds the argument list for `su -c`, which is a string a second
+# shell parses, so the only thing that matters is that what comes out the far
+# side is what went in. It was `${s//\'/...}`, which is bash's; the walk that
+# replaces it is easy to get subtly wrong in a way only an odd input shows.
+it_quotes_a_word_so_a_shell_reads_it_back_unchanged() {
+    local v got
+    for v in "plain" "it's" "a b" "'" "" "a'b'c" '$(echo PWNED)' '`echo PWNED2`' \
+             'back\slash' 'new
+line' '*' '~' '"' ; do
+        got="$(eval "printf '%s' $(_priv_sq "$v")")"
+        assert_eq "$got" "$v" "quoting did not survive a round trip for [${v}]"
+    done
+}
+
+#[test]
+# Nothing inside a quoted word is executed on the way through.
+#
+# The round trip above would pass on an input that ran and produced itself, so
+# this asserts on the side effect rather than the value.
+it_does_not_let_a_quoted_word_run_anything() {
+    local d; d="$(mktemp -d)"
+    local marker="$d/ran"
+
+    # A side effect, not the text. The first version of this asserted the
+    # output did not contain "PWNED", which fails on correct quoting: the word
+    # comes back as the literal `$(echo PWNED)`, and that string contains
+    # "PWNED". The assertion could not tell a working quote from a broken one.
+    eval "printf '%s' $(_priv_sq "\$(touch '$marker')")" >/dev/null 2>&1
+    assert_fails test -e "$marker"
+
+    eval "printf '%s' $(_priv_sq "\`touch '$marker'\`")" >/dev/null 2>&1
+    assert_fails test -e "$marker"
+
+    # The control: the same eval does run something when it is not quoted, so
+    # the two above are not passing because nothing was ever executed.
+    eval "printf '%s' \"\$(touch '$marker')\"" >/dev/null 2>&1
+    assert_ok test -e "$marker"
+
+    rm -rf "$d"
+}

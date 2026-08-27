@@ -248,7 +248,8 @@ _mg_merge_into() {
 
 # The module a file belongs to, from the manifest when there is one.
 #
-# A module may name several files, which is what a `when=` row is: `string.sh`
+# A module may name several files, which is what a gate attribute does:
+# `string.sh`
 # and `string.posix.sh` are one module written twice for two shells and only
 # one is ever loaded. Named from the path, the second becomes a module called
 # `string.posix` that calls fifteen functions from `string` and declares none

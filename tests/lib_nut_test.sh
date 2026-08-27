@@ -370,28 +370,29 @@ it_reports_a_visibility_it_does_not_understand() {
 }
 
 #[test]
-it_reports_a_predicate_it_does_not_understand() {
-    # A predicate `_nut_when` refuses is a variant that silently never loads,
-    # and the row looks fine. Caught here it is a typo somebody can see.
+it_reports_a_gate_it_does_not_understand() {
+    # A gate `_nut_gate` refuses is a variant that silently never loads, and
+    # the row looks fine. Caught here it is a typo somebody can see.
     local d out; d="$(mktemp -d)"
     mkdir -p "$d/lib"; : > "$d/lib/x.sh"
-    printf 'x lib/x.sh when=shel:bash4
-' > "$d/lib.nut"
+    printf '#[shel(bash4)]\nx lib/x.sh\n' > "$d/lib.nut"
     out="$("$DECLARE" --check "$d" 2>&1 || true)"
-    assert_ok grep -q 'unknown predicate' <<<"$out"
+    assert_ok grep -q 'unknown gate' <<<"$out"
     rm -rf "$d"
 }
 
 #[test]
-it_accepts_every_predicate_word_the_resolver_knows() {
+it_accepts_every_gate_the_resolver_knows() {
     # The control. A validator rejecting everything would pass the test above
     # and refuse every real manifest.
     local d out rc; d="$(mktemp -d)"
     mkdir -p "$d/lib"; : > "$d/lib/x.sh"
-    printf 'x lib/x.sh when=have:grep+shell:bash4
-y lib/x.sh when=env:HOME
-z lib/x.sh when=shell:bash
-' > "$d/lib.nut"
+    {
+        printf '#[shell(bash4)]\nx lib/x.sh\n'
+        printf '#[shell(bash)]\ny lib/x.sh\n'
+        printf '#[has(bin(grep))]\nz lib/x.sh\n'
+        printf '#[has(env(HOME))]\nw lib/x.sh\n'
+    } > "$d/lib.nut"
     rc=0; out="$("$DECLARE" --check "$d" 2>&1)" || rc=$?
     assert_eq "$rc" "0" "$out"
     rm -rf "$d"

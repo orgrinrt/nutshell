@@ -28,7 +28,15 @@
 # compare against depended on which tool happened to be installed.
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success.
+[ -n "${_NUTSHELL_JSON_IMPL_PYTHON_SH:-}" ] && return 0
+_NUTSHELL_JSON_IMPL_PYTHON_SH=1
+
+use deps
 
 # Get python command (python3 preferred)
 _json_python_cmd() {

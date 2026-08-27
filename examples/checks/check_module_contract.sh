@@ -75,8 +75,15 @@ report() {
             private)
                 fail "${a} calls ${b}, which ${c} keeps private"
                 note "Either mark it in ${c}.sh with #[pub] so anyone may call it,"
-                note "or #[pub(lib)] for modules in this library only, or reach"
+                note "#[pub(lib)] for modules in this library only, #[pub(super)]"
+                note "for the module above ${c} and what sits under it, or reach"
                 note "for something ${c} does export."
+                ;;
+            super_at_root)
+                fail "${c} marks ${b} #[pub(super)] and has no module above it"
+                note "There is no super for it to be visible to, so the marker"
+                note "reads as public and means private. Use #[pub(lib)] if the"
+                note "library may call it, or drop the marker if nothing should."
                 ;;
             unreachable)
                 fail "nothing declares ${a} and it exports nothing"

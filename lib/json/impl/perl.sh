@@ -27,7 +27,13 @@
 # One program, taking the operation and its arguments on argv.
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success.
+[ -n "${_NUTSHELL_JSON_IMPL_PERL_SH:-}" ] && return 0
+_NUTSHELL_JSON_IMPL_PERL_SH=1
 
 # _json_pl <operation> <arguments...>
 _json_pl() {

@@ -267,16 +267,27 @@ use() {
 # The third argument, when given, is the visibility a caller is allowed to
 # reach: `any` from inside the unit, `public` from outside it.
 #
-# A module may be declared more than once, each row carrying `when=<predicate>`,
-# and the first row whose predicate holds is the one sourced:
+# A module may be declared more than once, and the first row whose gates hold
+# is the one sourced. A gate is an attribute on the line above, the way
+# `#[cfg(...)]` sits above a `mod` in Rust:
 #
-#   text  lib/text.bash.sh   when=shell:bash4
-#   text  lib/text.grep.sh   when=have:grep
+#   #[shell(bash4)]
+#   text  lib/text.bash.sh
+#   #[has(bin(grep))]
+#   text  lib/text.grep.sh
 #   text  lib/text.sh
 #
-# The row with no predicate is the floor and always holds. It goes last,
-# because the order in the file is the order they are tried, and a floor above
-# a better row makes that row unreachable.
+# The row with no gates is the floor and always holds. It goes last, because
+# the order in the file is the order they are tried, and a floor above a better
+# row makes that row unreachable.
+#
+# `when=<predicate>` in the fourth column was the earlier form and is refused
+# rather than ignored. It had already stopped being read: everything after the
+# file became words with the last one taken as the visibility, so a row saying
+# `when=shell:nosuchshell` set the visibility to that string, failed to match
+# `internal`, and the module loaded on a machine whose predicate did not hold.
+# Silently, which is how this kind of thing always goes and is the same failure
+# the note further down describes being fixed once already.
 #
 # The decision is taken **before the file is sourced**, which is the whole
 # point of putting it here rather than inside a module. A file using a
@@ -325,6 +336,15 @@ _lib_nut_lookup() {
         # only way this kind of thing ever goes.
         vis=""
         for word in $rest; do
+            # The retired form, refused loudly. Ignoring it is what made a
+            # module load on a machine its predicate excluded.
+            if [[ "$word" == when=* ]]; then
+                printf 'nutshell: %s/lib.nut still uses `%s` on `%s`.\n' \
+                    "$root" "$word" "$name" >&2
+                printf '  Gates are an attribute on the line above the row now:\n' >&2
+                printf '    #[shell(bash4)]\n    %s  %s\n' "$name" "$file" >&2
+                return 1
+            fi
             vis="$word"
         done
 

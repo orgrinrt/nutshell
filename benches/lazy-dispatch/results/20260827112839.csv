@@ -1,0 +1,4 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+decided at first call,2728,3027,within the noise,yes
+tool table warmed,2670,2746,within the noise,yes
+implementation pre-bound,2395,2730,within the noise,yes

@@ -12,6 +12,7 @@
 nut_once || return 0
 
 use super::toml
+use string
 
 
 #[pub]

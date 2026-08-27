@@ -81,6 +81,9 @@ declare -ga NUT_INCLUDE_PATTERNS=() 2>/dev/null || declare -a NUT_INCLUDE_PATTER
 declare -gA _CFG_CACHE=()
 declare -gA _CFG_MISS=()
 
+#[pub]
+# A value from the project config, or nothing.
+# Usage: cfg_get "tests.file_size.max_lines" -> prints the value, or fails
 cfg_get() {
     local key="$1"
     local value=""
@@ -114,6 +117,7 @@ cfg_get() {
     return 1
 }
 
+#[pub]
 # Get a config value with explicit default if not found anywhere
 # Usage: cfg_get_or "key" "default"
 cfg_get_or() {
@@ -128,6 +132,7 @@ cfg_get_or() {
     fi
 }
 
+#[pub]
 # Check if a config value is truthy
 # For test sections: a table without explicit boolean is considered "true"
 # Usage: cfg_is_true "key"
@@ -168,6 +173,7 @@ cfg_is_true() {
     return 1
 }
 
+#[pub]
 # Check if a section exists in the config
 # The hand-rolled `grep -qE "^\[${section}\]"` this replaced interpolated the
 # name into a regex, so every `.` in a section name matched any character:
@@ -194,6 +200,7 @@ cfg_test_enabled() {
     cfg_is_true "tests.${test_name}"
 }
 
+#[pub]
 # Get array from config
 # Usage: cfg_get_array "key" arr
 cfg_get_array() {
@@ -426,7 +433,9 @@ TESTS_WARNED=0
 declare -ga FAILED_TESTS=() 2>/dev/null || declare -a FAILED_TESTS=()
 declare -ga WARNED_TESTS=() 2>/dev/null || declare -a WARNED_TESTS=()
 
-# Reset counters (useful when running multiple test files)
+#[pub]
+# Reset counters, for a runner driving more than one check file.
+# Usage: reset_counters
 reset_counters() {
     TESTS_RUN=0
     TESTS_PASSED=0
@@ -440,6 +449,9 @@ reset_counters() {
 # TEST LOGGING
 # =============================================================================
 
+#[pub]
+# A banner above a whole check.
+# Usage: log_header "POSIX floor"
 log_header() {
     echo ""
     echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════════════${NC}"
@@ -448,6 +460,9 @@ log_header() {
     echo ""
 }
 
+#[pub]
+# A divider inside a check, for its parts.
+# Usage: log_section "the files that parse"
 log_section() {
     echo ""
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────────${NC}"
@@ -455,10 +470,16 @@ log_section() {
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────────${NC}"
 }
 
+#[pub]
+# Names the case about to run. Counts nothing.
+# Usage: log_test "reads every module"
 log_test() {
     echo -e "${BLUE}[TEST]${NC} $*"
 }
 
+#[pub]
+# One case passed. Counts toward run and passed.
+# Usage: log_pass "every module reads"
 log_pass() {
     TESTS_PASSED=$((TESTS_PASSED + 1))
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -476,6 +497,10 @@ log_pass() {
     fi
 }
 
+#[pub]
+# One case failed. Counts toward run and failed, and is repeated in the
+# summary at the end.
+# Usage: log_fail "lib/toml.sh cannot be read"
 log_fail() {
     echo -e "${RED}  ✗${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
@@ -483,16 +508,25 @@ log_fail() {
     FAILED_TESTS+=("$*")
 }
 
+#[pub]
+# One case is worth reporting and does not fail the check.
+# Usage: log_test_warn "lib/toml.sh - 86 uses of [["
 log_test_warn() {
     echo -e "${YELLOW}  ⚠${NC} $*"
     TESTS_WARNED=$((TESTS_WARNED + 1))
     WARNED_TESTS+=("$*")
 }
 
+#[pub]
+# Something worth saying that is not a verdict. Counts nothing.
+# Usage: log_test_info "checking with dash"
 log_test_info() {
     echo -e "${BLUE}  ℹ${NC} $*"
 }
 
+#[pub]
+# One case was not run, and why. Counts nothing.
+# Usage: log_skip "no POSIX shell on this machine"
 log_skip() {
     echo -e "${MAGENTA}  ○${NC} $* (skipped)"
 }
@@ -520,6 +554,12 @@ _is_excluded() {
 declare -g _NUT_LIB_FILES_CACHED=""
 declare -g _NUT_LIB_FILES=""
 
+#[pub]
+# Every file the project counts as its own source, one per line.
+#
+# Found once and kept, because the callers ask per function and the tree does
+# not change while a check runs.
+# Usage: get_lib_files -> prints one path per line
 get_lib_files() {
     _framework_init
 
@@ -555,7 +595,8 @@ get_script_files() {
 # ANNOTATION CHECKING
 # =============================================================================
 
-# attr_name_of <annotation>
+#[pub]
+# Usage: attr_name_of "#[pub]" -> "pub"
 #
 # The attribute name inside a configured marker: `#[pub]` gives `pub`. Prints
 # nothing when the marker is not in attribute shape, which is how a caller

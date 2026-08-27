@@ -13,7 +13,8 @@
 # construct the running shell cannot parse fails at parse time and no `if`
 # inside it can help:
 #
-#     string  lib/string.sh        when=shell:bash4
+#     #[shell(bash4)]
+#     string  lib/string.sh
 #     string  lib/string.posix.sh
 #
 # **What is missing here, and it is one thing.** `str_split` writes into an

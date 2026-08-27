@@ -198,3 +198,193 @@ it_names_a_file_the_manifest_does_not_mention_by_its_stem() {
     assert_eq "$(_mg_module_of "/tmp/nowhere/zzz.sh" "$d")" "zzz"
     rm -rf "$d"
 }
+
+# --- the pub(super) rung -----------------------------------------------------
+
+# The layout `modgraph_build` expects: it takes the lib directory and reads the
+# manifest from its parent. And `MODGRAPH_NOCACHE`, or a second fixture with
+# the same directory name would be answered from the first one's cache.
+_mgs() {
+    _MGS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nut-mgs.XXXXXX")"
+    mkdir -p "$_MGS_DIR/lib/json/impl"
+    printf '%s\n' "$@" > "$_MGS_DIR/lib.nut"
+    export MODGRAPH_NOCACHE=1
+}
+_mgs_done() { rm -rf "$_MGS_DIR"; unset MODGRAPH_NOCACHE; }
+
+#[test]
+it_lets_any_module_above_call_a_pub_super_function() {
+    # `super` is the rung between `lib` and private: every module above the
+    # owner, and anything under the owner's immediate parent.
+    #
+    # Upward it is every ancestor rather than only the immediate parent, which
+    # is what Rust means. Here the immediate parent is often not a module at
+    # all: `json::impl` names no file, nothing can be written in it, and a
+    # strict reading would make this rung unusable in the one layout it exists
+    # for. `json` is what calls `json::impl::jq`, so `json` is the audience.
+    _mgs 'json             lib/json.sh' 'json::impl::jq   lib/json/impl/jq.sh'
+    cat > "$_MGS_DIR/lib/json/impl/jq.sh" <<'EOF'
+#[pub(super)]
+_jq_do() { :; }
+EOF
+    cat > "$_MGS_DIR/lib/json.sh" <<'EOF'
+use json::impl::jq
+json_get() {
+    _jq_do
+}
+EOF
+    modgraph_build "$_MGS_DIR/lib"
+    assert_eq "$(modgraph_visibility _jq_do)" "super"
+    assert_not_contains "$(modgraph_audit)" "private"
+    _mgs_done
+}
+
+#[test]
+it_lets_a_sibling_under_the_same_parent_call_it() {
+    _mgs 'json             lib/json.sh' \
+         'json::impl::jq   lib/json/impl/jq.sh' \
+         'json::impl::perl lib/json/impl/perl.sh'
+    cat > "$_MGS_DIR/lib/json/impl/jq.sh" <<'EOF'
+#[pub(super)]
+_jq_do() { :; }
+EOF
+    cat > "$_MGS_DIR/lib/json/impl/perl.sh" <<'EOF'
+use json::impl::jq
+_perl_do() {
+    _jq_do
+}
+EOF
+    printf 'json_get() { :; }\n' > "$_MGS_DIR/lib/json.sh"
+    modgraph_build "$_MGS_DIR/lib"
+    assert_not_contains "$(modgraph_audit)" "private"
+    _mgs_done
+}
+
+#[test]
+it_refuses_a_stranger_calling_a_pub_super_function() {
+    # The whole point of the rung. Without this it would be `pub(lib)` under a
+    # different name, and every one of these markers would mean nothing.
+    _mgs 'json             lib/json.sh' \
+         'json::impl::jq   lib/json/impl/jq.sh' \
+         'text             lib/text.sh'
+    cat > "$_MGS_DIR/lib/json/impl/jq.sh" <<'EOF'
+#[pub(super)]
+_jq_do() { :; }
+EOF
+    cat > "$_MGS_DIR/lib/text.sh" <<'EOF'
+use json::impl::jq
+text_go() {
+    _jq_do
+}
+EOF
+    printf 'json_get() { :; }\n' > "$_MGS_DIR/lib/json.sh"
+    modgraph_build "$_MGS_DIR/lib"
+    assert_contains "$(modgraph_audit)" "private"
+    _mgs_done
+}
+
+#[test]
+it_reports_a_pub_super_on_a_module_with_nothing_above_it() {
+    # There is no super for it to be visible to, so the marker reads as public
+    # and means private. Reported rather than silently treated as either.
+    _mgs 'alone            lib/alone.sh' 'other            lib/other.sh'
+    cat > "$_MGS_DIR/lib/alone.sh" <<'EOF'
+#[pub(super)]
+alone_do() { :; }
+EOF
+    cat > "$_MGS_DIR/lib/other.sh" <<'EOF'
+use alone
+other_go() {
+    alone_do
+}
+EOF
+    modgraph_build "$_MGS_DIR/lib"
+    assert_contains "$(modgraph_audit)" "super_at_root"
+    _mgs_done
+}
+
+#[test]
+it_still_refuses_an_unmarked_function_to_everyone() {
+    # The control. If `super` were being read as "visible", these tests would
+    # pass against a rule that accepts anything.
+    _mgs 'json             lib/json.sh' 'json::impl::jq   lib/json/impl/jq.sh'
+    printf '_jq_do() { :; }\n' > "$_MGS_DIR/lib/json/impl/jq.sh"
+    cat > "$_MGS_DIR/lib/json.sh" <<'EOF'
+use json::impl::jq
+json_get() {
+    _jq_do
+}
+EOF
+    modgraph_build "$_MGS_DIR/lib"
+    assert_eq "$(modgraph_visibility _jq_do)" ""
+    assert_contains "$(modgraph_audit)" "private"
+    _mgs_done
+}
+
+#[test]
+it_refuses_a_parent_reaching_into_a_childs_unmarked_function() {
+    # The direction that stays closed. A child may reach up into its ancestors
+    # without a marker, because it is part of them. A parent reaching down into
+    # a child needs the child to export, or the split into two files would
+    # quietly become one module with no boundary at all.
+    _mgs 'toml         lib/toml.sh' 'toml::json   lib/toml/json.sh'
+    mkdir -p "$_MGS_DIR/lib/toml"
+    printf '_json_helper() {\n    :\n}\n' > "$_MGS_DIR/lib/toml/json.sh"
+    cat > "$_MGS_DIR/lib/toml.sh" <<'EOF'
+use toml::json
+toml_get() {
+    _json_helper
+}
+EOF
+    modgraph_build "$_MGS_DIR/lib"
+    assert_contains "$(modgraph_audit)" "private"
+    _mgs_done
+}
+
+#[test]
+it_lets_a_child_reach_its_own_ancestor_without_a_marker() {
+    # The other direction. `toml::json` is `toml` written in a second file
+    # because one file would be too long, and calling `toml`'s own helpers is
+    # not reaching into a stranger. Two real findings in this library were
+    # exactly this and were not defects.
+    _mgs 'toml         lib/toml.sh' 'toml::json   lib/toml/json.sh'
+    mkdir -p "$_MGS_DIR/lib/toml"
+    printf '_toml_helper() {\n    :\n}\ntoml_get() {\n    :\n}\n' > "$_MGS_DIR/lib/toml.sh"
+    cat > "$_MGS_DIR/lib/toml/json.sh" <<'EOF'
+use super::toml
+toml_to_json() {
+    _toml_helper
+}
+EOF
+    modgraph_build "$_MGS_DIR/lib"
+    assert_not_contains "$(modgraph_audit)" "private"
+    _mgs_done
+}
+
+#[test]
+it_leaves_no_function_both_unmarked_and_without_an_underscore() {
+    # A function with no visibility marker is module-private, and a leading
+    # underscore is how this library says that in the name. One with neither
+    # is undecided: it reads as public to anybody scanning the file and the
+    # audit treats it as private, and nothing reconciles the two.
+    #
+    # There were nineteen. Sixteen in `check-runner`, which is the vocabulary a
+    # check is written against, and three in `os` that the README documents.
+    # All of them are public and now say so.
+    #
+    # This is the check that keeps it at zero. Without it the next one is
+    # invisible again, which is how the nineteen accumulated.
+    export MODGRAPH_NOCACHE=1
+    modgraph_build "${NUTSHELL_ROOT}/lib"
+
+    local mod fn undecided=""
+    for mod in "${_MG_MODULES[@]}"; do
+        for fn in ${_MG_DEFINES[$mod]:-}; do
+            case "$fn" in _*) continue ;; esac
+            [[ -n "$(modgraph_visibility "$fn")" ]] && continue
+            undecided="${undecided} ${mod}:${fn}"
+        done
+    done
+    unset MODGRAPH_NOCACHE
+    assert_eq "$undecided" "" "mark these #[pub], #[pub(lib)] or #[pub(super)], or give them a leading underscore"
+}

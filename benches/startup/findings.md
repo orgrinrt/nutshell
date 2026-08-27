@@ -1,71 +1,122 @@
-# What lowering saves at load time
+# What a lowered form saves at load time
 
 Three arms, all running the same workload and compared on its answer rather
 than on the loaded surface, because a shaken arm loads less by design.
 
+The lowering is `bin/nut-lower`, not a copy of it. This bench had its own until
+the tool existed, which is how the tool was found: every gotcha in it was
+discovered here, by getting it wrong and watching the harness refuse the run
+for arms that disagreed. Measuring a copy meant the numbers were not about the
+thing that ships.
+
+## The answer, and it is not the one this file used to give
+
+**Almost none of the load cost is what a shaker can remove.** `use deps` alone
+takes 209ms of a 225ms library load, and it is one thing: `_deps_init` scanning
+for eighteen tools with `command -v` when the module is sourced. Everything
+else together is about 16ms.
+
+So resolving `use` ahead of time is noise, which this file already said, and
+**dropping unreferenced function definitions is nearly noise as well**, which it
+did not.
+
 | arm | best ms | against the first |
 |---|---|---|
-| resolved through the manifest | 247 | |
-| lowered, `use` resolved already | 235 | within the noise |
-| lowered and shaken | 67 | **26%** |
+| resolved through the manifest | 248 | |
+| lowered, dispatch left to run | 221 | 89% |
+| lowered, `use` resolved already | 216 | 87% |
+| lowered and shaken | 217 | 87%, and the spreads nearly touch |
 
-Reproducible across runs. Six modules, a ten file closure.
+## Deciding the dispatch here is worth about 5ms on this workload, and that is per function
 
-## The answer
+The middle pair is the price of resolving the lazy dispatch at lower time
+rather than at first call: same concatenation, same closure, and the only
+difference is whether `fs_size` is the implementation when the file finishes
+loading or is still a stub that will go and fetch one.
 
-**Resolving `use` ahead of time does not pay.** Twelve milliseconds in two
-hundred and fifty, and the harness reports it as noise. The cost is parsing the
-files, not finding them.
+**5ms, and the spreads overlap, so on this workload it is inside the noise.**
 
-**Dropping what nothing calls does.** 3.7x, and it is the whole of the win.
-Statically, for one real program, 24 of the 165 functions it loads are
-reachable and 141 are not.
+That is not a small win hiding; it is one dispatched function. This workload
+calls exactly one, and `benches/lazy-dispatch` measures six at about 35ms, so
+the two agree at roughly **6ms per dispatched function a program actually
+touches**. A program calling one saves nothing worth measuring and a program
+calling all thirteen saves most of a tenth of a second.
 
-So the lowering worth building is a shaker. The resolution half is a
-simplification rather than an optimisation and should be argued for on those
-grounds if at all.
+**holds for:** bash 5.3, `Darwin arm64`, this workload's 6 modules and its one
+dispatched call, tools as this machine has them. Nothing here says what it
+costs where the winning implementation is a different one.
+
+The mechanism is asserted rather than timed in `tests/nut_lower_test.sh`:
+`nut_reload` is made a canary, and a dispatched function has to answer without
+it firing. That fails on the dispatch being present rather than on it being
+slow, and it carries the control that proves the canary is wired to something.
+
+## What the earlier 26% actually was
+
+This file used to report the shaken arm at 67ms against 247, a 3.7x win, and
+called it the value of dropping what nothing calls.
+
+It was the shaker dropping `_deps_init`. Nothing in the entry script names it,
+because it is called at file scope rather than from any function, so nothing
+seeded it as a root and the definition was cut while the call stayed. The
+lowered file then loaded with a dangling call, an empty tool table, and no
+eager scan, which is why it was fast.
+
+**The answers still agreed**, which is why neither the harness nor the tests
+caught it: `deps_has` resolves a tool it has not seen on demand, so an empty
+eager table produces the same results by a slower path per lookup. A broken
+artifact and a correct one are indistinguishable on this workload.
+
+Seeding roots from file-scope calls fixes the shaker, the tool table is
+populated again, and the win goes away with it.
+
+## Where the win actually is
+
+**In `deps.sh`, and it belongs to every program rather than to lowered ones.**
+The eager scan resolves eighteen tools at load whether or not the program asks
+about any of them, and `deps_has` already resolves on demand for anything not
+in that list. The scan exists to populate the capability table, which nothing
+needs until `deps_can` is called.
+
+Making it lazy is a change to one module, worth about 190ms of a 225ms load,
+and it needs no lowering at all. That is the next thing, and it is filed rather
+than done here because it is a design change to a module and this is a bench.
+
+A lowering could then bake in the answers it knows, which is what
+`benches/lazy-dispatch` prices at about 35ms per process. That is a real
+remaining win and it is an order of magnitude smaller than the one above.
 
 ## Four things a lowering has to do, each found by getting it wrong
 
-**Strip the per-file inclusion guards.** `nut_once` answers about the file
-being sourced, and concatenated every file is the same file: the first call
-registers it and every guard after says "already loaded" and returns from the
+These stand. Each produced a lowered file that loaded cleanly and answered
+nothing, and each is a test in `tests/nut_lower_test.sh`.
+
+**Strip the per-file inclusion guards.** `nut_once` answers about the file being
+sourced, and concatenated every file is the same file: the first call registers
+the lowered one and every guard after says already-loaded and returns from the
 whole thing. The lowered arm defined one module and nothing else.
 
-**Register what it contains rather than stubbing the resolver.**
-`use() { return 0; }` looks equivalent and is not, because `nut_reload` goes
-through `use`. `fs_size` answered nothing.
+**Register what it contains, keyed by canonical path.** `use` resolves the
+module, runs the path through `_nut_realpath`, and checks that. Keyed by module
+name instead, nothing matches and every `use` sources its file again: the
+answers stay correct and the work is done twice. The tests saw nothing and this
+bench saw it at once, as the shaken arm at 261ms against an expected 55.
 
 **Rewrite `super::` away.** It resolves relative to the file that wrote the
 call, through `BASH_SOURCE[1]`, and concatenated every call comes from the
-lowered file. In a temp directory with no manifest above it, that resolves to
-nothing. A lowering knows the unit at lower time, which is the point.
+lowered file.
 
 **Shake by cutting definitions out of the file, not by rebuilding from
-`declare -f`.** Rebuilt, the result is functions and nothing else: every
-module's file-scope initialisation goes. `deps.sh` populating its tool table at
-load time was the one that showed, and `fs_size` then read an empty variant
-table and chose no implementation.
+`declare -f`.** Rebuilt, the result is functions and nothing else and every
+module's file-scope initialisation goes.
 
-## What the shaker here is, and is not
+And a fifth, which is the one this round added: **seed the roots from file-scope
+calls as well as from the entry script**, or a module that does work when it
+loads has that work cut out from under it.
 
-It reads names rather than parsing shell, so a name in a comment or a string
-counts as a use. That over-retains, which is the safe direction, and makes 26%
-a **floor** on what a real pass could reach rather than a claim about what it
-would.
+## What is not established here
 
-What it cannot see is a name assembled at run time. Every `nut_reload` in this
-library is written literally for exactly that reason; two in `fs.sh` were not
-until today, and a shake would have kept one of the three stat implementations
-and dropped two, failing at first call on whichever machine has the other
-`stat`.
-
-The closure follows `nut_reload` targets as well as `use`. Following only `use`
-left the impl modules out and the harness refused the run.
-
-## What is not measured
-
-Whether the shake is safe for a program whose call graph is not visible: a
-caller reaching a library function through a variable, or a task file loaded by
-name at run time. hulilupteri does the second, so the number here does not
-transfer to it without checking that first.
+One host, one machine, bash 5.3, six modules and a ten file closure. The
+185ms is eighteen `command -v` calls, so a machine with a slower `PATH` lookup
+or a colder cache moves it, and the floor is where that matters most and is
+where it was not measured.

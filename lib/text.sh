@@ -17,24 +17,28 @@
 #   2. Single-tool implementations in order: sed > perl > awk
 # =============================================================================
 
-# Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success.
+[ -n "${_NUTSHELL_TEXT_SH:-}" ] && return 0
+_NUTSHELL_TEXT_SH=1
 
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_TEXT_DIR="${BASH_SOURCE[0]%/*}"
-# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
-[[ "$_NUTSHELL_TEXT_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_TEXT_DIR="."
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
 use deps
 
-# Path to impl directories
-readonly _TEXT_IMPL_DIR="${_NUTSHELL_TEXT_DIR}/text/impl"
-readonly _TEXT_COMBO_DIR="${_TEXT_IMPL_DIR}/combo"
+# The three variables that were here computed a path to the implementation
+# directory from `BASH_SOURCE`, and nothing read the one at the end of the
+# chain. They are from before the resolver, when an implementation was sourced
+# by path; it is loaded by name now, which is what makes the module contract
+# checkable at all.
 
 # -----------------------------------------------------------------------------
 # Module status
@@ -63,7 +67,7 @@ _TEXT_MATCH_IMPL=""
 # Usage: text_line_count "file" -> "42"
 text_line_count() {
     local file="${1:-}"
-    [[ ! -f "$file" ]] && { echo "0"; return 1; }
+    [ ! -f "$file" ] && { echo "0"; return 1; }
     wc -l < "$file" | tr -d ' '
 }
 
@@ -72,7 +76,7 @@ text_line_count() {
 # Usage: text_word_count "file" -> "123"
 text_word_count() {
     local file="${1:-}"
-    [[ ! -f "$file" ]] && { echo "0"; return 1; }
+    [ ! -f "$file" ] && { echo "0"; return 1; }
     wc -w < "$file" | tr -d ' '
 }
 
@@ -82,7 +86,7 @@ text_word_count() {
 text_head() {
     local file="${1:-}"
     local n="${2:-10}"
-    [[ ! -f "$file" ]] && return 1
+    [ ! -f "$file" ] && return 1
     head -n "$n" "$file"
 }
 
@@ -92,7 +96,7 @@ text_head() {
 text_tail() {
     local file="${1:-}"
     local n="${2:-10}"
-    [[ ! -f "$file" ]] && return 1
+    [ ! -f "$file" ] && return 1
     tail -n "$n" "$file"
 }
 
@@ -102,7 +106,7 @@ text_tail() {
 text_line() {
     local file="${1:-}"
     local num="${2:-1}"
-    [[ ! -f "$file" ]] && return 1
+    [ ! -f "$file" ] && return 1
     
     # Use sed if available, otherwise awk
     if deps_has "sed"; then
@@ -113,8 +117,8 @@ text_line() {
         # Pure bash fallback (slow for large files)
         local i=0
         while IFS= read -r line; do
-            ((i++))
-            if [[ $i -eq $num ]]; then
+            i=$(( i + 1 ))
+            if [ "$i" -eq "$num" ]; then
                 echo "$line"
                 return 0
             fi
@@ -130,16 +134,16 @@ text_lines() {
     local file="${1:-}"
     local start="${2:-1}"
     local end="${3:-}"
-    [[ ! -f "$file" ]] && return 1
+    [ ! -f "$file" ] && return 1
     
     if deps_has "sed"; then
-        if [[ -n "$end" ]]; then
+        if [ -n "$end" ]; then
             "${_TOOL_PATH_sed}" -n "${start},${end}p" "$file"
         else
             "${_TOOL_PATH_sed}" -n "${start}p" "$file"
         fi
     elif deps_has "awk"; then
-        if [[ -n "$end" ]]; then
+        if [ -n "$end" ]; then
             "${_TOOL_PATH_awk}" "NR>=${start} && NR<=${end}" "$file"
         else
             "${_TOOL_PATH_awk}" "NR==${start}" "$file"
@@ -324,7 +328,7 @@ text_extract_transform() {
             local replace="${3:-}"
             local file="${4:-}"
             
-            [[ ! -f "$file" ]] && return 1
+            [ ! -f "$file" ] && return 1
             
             if deps_has "grep" && deps_has "sed"; then
                 "${_TOOL_PATH_grep}" -E "$pattern" "$file" 2>/dev/null | \
@@ -358,7 +362,7 @@ text_count_in_matches() {
             local count_pattern="${2:-}"
             local file="${3:-}"
             
-            [[ ! -f "$file" ]] && { echo "0"; return 1; }
+            [ ! -f "$file" ] && { echo "0"; return 1; }
             
             if deps_has "grep"; then
                 "${_TOOL_PATH_grep}" -E "$filter" "$file" 2>/dev/null | \
@@ -383,7 +387,7 @@ text_count_in_matches() {
 text_append() {
     local line="${1:-}"
     local file="${2:-}"
-    [[ -z "$file" ]] && return 1
+    [ -z "$file" ] && return 1
     echo "$line" >> "$file"
 }
 
@@ -393,7 +397,7 @@ text_append() {
 text_prepend() {
     local line="${1:-}"
     local file="${2:-}"
-    [[ ! -f "$file" ]] && return 1
+    [ ! -f "$file" ] && return 1
     
     local temp
     if deps_has "mktemp"; then
@@ -414,7 +418,7 @@ text_between() {
     local file="${1:-}"
     local start="${2:-}"
     local end="${3:-}"
-    [[ ! -f "$file" || -z "$start" || -z "$end" ]] && return 1
+    { [ ! -f "$file" ] || [ -z "$start" ] || [ -z "$end" ]; } && return 1
     
     if deps_has "sed"; then
         "${_TOOL_PATH_sed}" -n "/${start}/,/${end}/p" "$file" | "${_TOOL_PATH_sed}" '1d;$d'
@@ -432,7 +436,7 @@ text_between() {
 # Usage: text_remove_blank "file" -> prints non-blank lines
 text_remove_blank() {
     local file="${1:-}"
-    [[ ! -f "$file" ]] && return 1
+    [ ! -f "$file" ] && return 1
     
     if deps_has "grep"; then
         "${_TOOL_PATH_grep}" -v '^[[:space:]]*$' "$file" || true
@@ -443,7 +447,9 @@ text_remove_blank() {
     else
         # Pure bash fallback
         while IFS= read -r line; do
-            [[ -n "${line// /}" ]] && echo "$line"
+            # `${line// /}` stripped spaces and not tabs, and where a blank
+            # line is dropped depends on that, so the `case` keeps it.
+            case "$line" in *[!" "]*) echo "$line" ;; esac
         done < "$file"
     fi
 }
@@ -453,7 +459,7 @@ text_remove_blank() {
 # Usage: text_remove_comments "file" -> prints non-comment lines
 text_remove_comments() {
     local file="${1:-}"
-    [[ ! -f "$file" ]] && return 1
+    [ ! -f "$file" ] && return 1
     
     if deps_has "grep"; then
         "${_TOOL_PATH_grep}" -v '^[[:space:]]*#' "$file" | "${_TOOL_PATH_grep}" -v '^[[:space:]]*$' || true
@@ -474,7 +480,7 @@ text_remove_comments() {
 # Check if text module is ready to use
 # Usage: text_ready -> returns 0 if ready, 1 if not
 text_ready() {
-    [[ "$_TEXT_READY" == "1" ]]
+    [ "$_TEXT_READY" = "1" ]
 }
 
 #[pub]

@@ -173,19 +173,30 @@ tw_load_usages() {
 }
 
 # Count usages of a function in a specific file (excluding the definition)
+# Name a variable and the answer goes there rather than to stdout, which is
+# the whole cost: the lookup is one array read and the fork around it is a
+# thousand times that.
 count_local_usages() {
-    local count="${_TW_LOCAL["${1}${_TW_SEP}${2}"]:-0}"
-    count=$(( count - 1 ))
-    (( count < 0 )) && count=0
-    printf '%s' "$count"
+    local __tw_c="${_TW_LOCAL["${1}${_TW_SEP}${2}"]:-0}"
+    __tw_c=$(( __tw_c - 1 ))
+    (( __tw_c < 0 )) && __tw_c=0
+    if [[ -n "${3:-}" ]]; then
+        [[ "$3" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+        printf -v "$3" '%s' "$__tw_c"; return 0
+    fi
+    printf '%s' "$__tw_c"
 }
 
 # Count usages of a function across all files
 count_global_usages() {
-    local total="${_TW_GLOBAL["${1:-}"]:-0}"
-    total=$(( total - 1 ))
-    (( total < 0 )) && total=0
-    printf '%s' "$total"
+    local __tw_t="${_TW_GLOBAL["${1:-}"]:-0}"
+    __tw_t=$(( __tw_t - 1 ))
+    (( __tw_t < 0 )) && __tw_t=0
+    if [[ -n "${2:-}" ]]; then
+        [[ "$2" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+        printf -v "$2" '%s' "$__tw_t"; return 0
+    fi
+    printf '%s' "$__tw_t"
 }
 
 # Extract meaningful code lines from a function body
@@ -198,6 +209,44 @@ get_meaningful_lines() {
 }
 
 # Count meaningful lines in a function
+# The three body measurements in one pass, into three variables.
+#
+# They were three functions, each read through a command substitution and each
+# extracting the body again: three forks and three extractions per function,
+# on every function in the library. Nothing about counting needed a subshell,
+# and nothing needed the body three times.
+#
+# Sets TW_LINES, TW_VARS and TW_TOKENS.
+_tw_measure_body() {
+    local -a __tw_body=()
+    TW_LINES=0; TW_VARS=0; TW_TOKENS=0
+    nut_body_of "$1" "$2" __tw_body || return 0
+    TW_LINES="${#__tw_body[@]}"
+
+    # A five-stage pipeline per function, in the shell instead. `grep -oE`,
+    # `sed`, `sort -u`, `wc` and `tr` is five processes to count distinct names
+    # in a handful of lines the shell is already holding.
+    local -A __tw_seen=()
+    local __tw_line __tw_rest __tw_name __tw_n=0
+    local -a __tw_words=()
+    for __tw_line in "${__tw_body[@]}"; do
+        __tw_rest="$__tw_line"
+        while [[ "$__tw_rest" =~ \$\{?([a-zA-Z_][a-zA-Z0-9_]*) ]]; do
+            __tw_name="${BASH_REMATCH[1]}"
+            __tw_seen["$__tw_name"]=1
+            __tw_rest="${__tw_rest#*"${BASH_REMATCH[0]}"}"
+        done
+        # Word splitting is the shell's own job; `tr | grep | wc | tr` is four
+        # processes to ask it.
+        # shellcheck disable=SC2206
+        __tw_words=($__tw_line)
+        __tw_n=$(( __tw_n + ${#__tw_words[@]} ))
+    done
+    TW_VARS="${#__tw_seen[@]}"
+    TW_TOKENS="$__tw_n"
+    return 0
+}
+
 count_meaningful_lines() {
     local -a __body=()
     nut_body_of "$1" "$2" __body || { printf '0'; return; }
@@ -264,7 +313,9 @@ analyze_function() {
     
     # Get metrics
     local line_count var_count token_count local_usages global_usages
-    line_count=$(count_meaningful_lines "$file" "$func_name")
+    local TW_LINES=0 TW_VARS=0 TW_TOKENS=0
+    _tw_measure_body "$file" "$func_name"
+    line_count="$TW_LINES"
     
     # Not a trivial wrapper if more than MAX_LINES
     if [[ $line_count -gt $MAX_LINES ]]; then
@@ -279,10 +330,10 @@ analyze_function() {
     fi
     
     # Calculate other metrics
-    var_count=$(count_variables_used "$file" "$func_name")
-    token_count=$(count_tokens "$file" "$func_name")
-    local_usages=$(count_local_usages "$file" "$func_name")
-    global_usages=$(count_global_usages "$func_name")
+    var_count="$TW_VARS"
+    token_count="$TW_TOKENS"
+    count_local_usages "$file" "$func_name" local_usages
+    count_global_usages "$func_name" global_usages
     
     # Check ergonomic passes (ANY of these = pass)
     if [[ $local_usages -ge $LOCAL_USAGE_THRESHOLD ]]; then

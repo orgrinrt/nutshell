@@ -202,3 +202,85 @@ it_writes_the_refusal_where_a_terminal_will_show_it() {
     assert_empty "$on_out"
     assert_contains "$on_err" "bash 4.0 or newer"
 }
+
+# --- the manifest's gate form ------------------------------------------------
+
+_mf() {
+    _MF_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nut-mf.XXXXXX")"
+    mkdir -p "$_MF_DIR/lib"
+    printf 'demo_who() { echo GATED; }\n' > "$_MF_DIR/lib/gated.sh"
+    printf 'demo_who() { echo FLOOR; }\n' > "$_MF_DIR/lib/floor.sh"
+    printf '%s\n' "$@" > "$_MF_DIR/lib.nut"
+}
+_mf_done() { rm -rf "$_MF_DIR"; }
+
+#[test]
+it_refuses_the_retired_when_column() {
+    # `when=` was the earlier gate form and had already stopped being read: the
+    # words after the file became the visibility, last one winning, so a row
+    # saying `when=shell:nosuchshell` set the visibility to that string, failed
+    # to match `internal`, and the module loaded on a machine its predicate
+    # excluded. Silently. Refusing is the only honest answer, because ignoring
+    # it is what caused that.
+    _mf 'demo   lib/gated.sh   when=shell:nosuchshell' 'demo   lib/floor.sh'
+    local out; out="$(_lib_nut_lookup "$_MF_DIR" demo 2>&1)"
+    local rc=$?
+    assert_ne "$rc" "0"
+    assert_contains "$out" "when="
+    assert_contains "$out" "#[shell(bash4)]"
+    assert_not_contains "$out" "gated.sh
+"
+    _mf_done
+}
+
+#[test]
+it_takes_the_first_row_whose_gate_holds() {
+    # A gate that cannot hold falls through to the row below, and the row with
+    # no gate is the floor.
+    _mf '#[shell(nosuchshell)]' 'demo   lib/gated.sh' 'demo   lib/floor.sh'
+    assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "floor.sh"
+    _mf_done
+
+    _mf '#[shell(bash4)]' 'demo   lib/gated.sh' 'demo   lib/floor.sh'
+    assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "gated.sh"
+    _mf_done
+
+    # No gate at all: the first row wins, which is what makes a floor above a
+    # better row hide it.
+    _mf 'demo   lib/gated.sh' 'demo   lib/floor.sh'
+    assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "gated.sh"
+    _mf_done
+}
+
+#[test]
+it_accumulates_gates_and_needs_all_of_them() {
+    # Attributes attach downward and a run of them all has to hold, the way
+    # `#[cfg(...)]` does above a `mod`.
+    _mf '#[shell(bash4)]' '#[has(bin(definitely_not_a_binary_xyzzy))]' \
+        'demo   lib/gated.sh' 'demo   lib/floor.sh'
+    assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "floor.sh"
+    _mf_done
+
+    _mf '#[shell(bash4)]' '#[has(bin(sh))]' 'demo   lib/gated.sh' 'demo   lib/floor.sh'
+    assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "gated.sh"
+    _mf_done
+}
+
+#[test]
+it_stops_a_run_of_gates_at_its_own_declaration() {
+    # A gate belongs to the next row and not to the one after it. Without that
+    # a single `#[shell(...)]` would gate the whole rest of the file, which is
+    # the failure nobody would see until a floor row went missing.
+    _mf '#[shell(nosuchshell)]' 'other  lib/gated.sh' 'demo   lib/floor.sh'
+    assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "floor.sh"
+    _mf_done
+}
+
+#[test]
+it_does_not_let_a_plain_comment_carry_a_gate() {
+    # A plain `#` line clears the pending run, so prose between a gate and its
+    # row breaks the attachment rather than silently keeping it.
+    _mf '#[shell(nosuchshell)]' '# just a comment' 'demo   lib/gated.sh' 'demo   lib/floor.sh'
+    assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "gated.sh"
+    _mf_done
+}

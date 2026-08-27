@@ -270,7 +270,19 @@ test_run() {
         tally="$(cat "$_TEST_MARK" 2>/dev/null)"
         rc=0
         if [[ "$tally" != *z* ]]; then
-            rc=1; why="the test did not finish"
+            # What the marker actually held, because "did not finish" alone is
+            # not diagnosable and this has fired intermittently on tests that
+            # pass when run on their own. An empty tally and a truncated one
+            # are different faults: empty says the test body never reached its
+            # first mark, and a partial one says it stopped part way.
+            rc=1
+            if [[ ! -e "$_TEST_MARK" ]]; then
+                why="the test did not finish (its marker file is gone: ${_TEST_MARK})"
+            elif [[ -z "$tally" ]]; then
+                why="the test did not finish (marker empty, so it stopped before the first assertion)"
+            else
+                why="the test did not finish (marker held '${tally}', so it stopped part way)"
+            fi
         elif [[ "$tally" == *f* ]]; then
             rc=1
         elif [[ "$tally" != *a* ]]; then

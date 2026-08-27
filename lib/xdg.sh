@@ -24,7 +24,14 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success. That is worse than failing, because the caller has no way
+# to tell.
+[ -n "${_NUTSHELL_XDG_SH:-}" ] && return 0
+_NUTSHELL_XDG_SH=1
 
 # -----------------------------------------------------------------------------
 # Dependencies
@@ -45,7 +52,7 @@ use os validate
 # Default: ~/.local/share (Linux), ~/Library/Application Support (macOS)
 # Usage: xdg_data_home -> prints path
 xdg_data_home() {
-    if [[ -n "${XDG_DATA_HOME:-}" ]]; then
+    if [ -n "${XDG_DATA_HOME:-}" ]; then
         echo "$XDG_DATA_HOME"
     elif os_is_macos; then
         echo "${HOME}/Library/Application Support"
@@ -59,7 +66,7 @@ xdg_data_home() {
 # Default: ~/.config (Linux), ~/Library/Preferences (macOS)
 # Usage: xdg_config_home -> prints path
 xdg_config_home() {
-    if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+    if [ -n "${XDG_CONFIG_HOME:-}" ]; then
         echo "$XDG_CONFIG_HOME"
     elif os_is_macos; then
         echo "${HOME}/Library/Preferences"
@@ -73,7 +80,7 @@ xdg_config_home() {
 # Default: ~/.local/state (Linux), ~/Library/Application Support (macOS)
 # Usage: xdg_state_home -> prints path
 xdg_state_home() {
-    if [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    if [ -n "${XDG_STATE_HOME:-}" ]; then
         echo "$XDG_STATE_HOME"
     elif os_is_macos; then
         echo "${HOME}/Library/Application Support"
@@ -87,7 +94,7 @@ xdg_state_home() {
 # Default: ~/.cache (Linux), ~/Library/Caches (macOS)
 # Usage: xdg_cache_home -> prints path
 xdg_cache_home() {
-    if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+    if [ -n "${XDG_CACHE_HOME:-}" ]; then
         echo "$XDG_CACHE_HOME"
     elif os_is_macos; then
         echo "${HOME}/Library/Caches"
@@ -101,7 +108,7 @@ xdg_cache_home() {
 # Default: $XDG_RUNTIME_DIR or $TMPDIR or /tmp
 # Usage: xdg_runtime_dir -> prints path
 xdg_runtime_dir() {
-    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
         echo "$XDG_RUNTIME_DIR"
     else
         echo "${TMPDIR:-/tmp}"
@@ -165,7 +172,7 @@ xdg_app_data_subdir() {
     local subdir="${1:-}"
     local base
     base="$(xdg_app_data)"
-    if [[ -n "$subdir" ]]; then
+    if [ -n "$subdir" ]; then
         echo "${base}/${subdir}"
     else
         echo "$base"
@@ -179,7 +186,7 @@ xdg_app_config_subdir() {
     local subdir="${1:-}"
     local base
     base="$(xdg_app_config)"
-    if [[ -n "$subdir" ]]; then
+    if [ -n "$subdir" ]; then
         echo "${base}/${subdir}"
     else
         echo "$base"
@@ -193,7 +200,7 @@ xdg_app_state_subdir() {
     local subdir="${1:-}"
     local base
     base="$(xdg_app_state)"
-    if [[ -n "$subdir" ]]; then
+    if [ -n "$subdir" ]; then
         echo "${base}/${subdir}"
     else
         echo "$base"
@@ -207,7 +214,7 @@ xdg_app_cache_subdir() {
     local subdir="${1:-}"
     local base
     base="$(xdg_app_cache)"
-    if [[ -n "$subdir" ]]; then
+    if [ -n "$subdir" ]; then
         echo "${base}/${subdir}"
     else
         echo "$base"
@@ -233,5 +240,5 @@ xdg_set_app_name() {
 # Check if app name is configured
 # Usage: xdg_has_app_name -> returns 0 if configured
 xdg_has_app_name() {
-    [[ -n "${XDG_APP_NAME:-}" ]]
+    [ -n "${XDG_APP_NAME:-}" ]
 }

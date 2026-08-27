@@ -137,6 +137,51 @@ _toml_clean_line() {
     str_trim "$out"
 }
 
+# A codepoint as UTF-8 bytes, into a named variable.
+#
+# Not `printf '\uXXXX'`, which is what this used to be. That escape is decoded
+# against the current locale, so under `LC_ALL=C` bash emits the escape text
+# unchanged and a value comes back as `caf\u00E9` with no error anywhere. The
+# C locale is what a container and a build machine tend to run, which makes it
+# exactly the case that must work.
+#
+# `\xNN` writes a byte and means the same thing everywhere, so the encoding is
+# done here in arithmetic and handed over as bytes. A shell string is a byte
+# string, so nothing downstream has to know.
+#
+# Refuses a surrogate half and anything past the last codepoint, because
+# neither has a UTF-8 encoding; the caller keeps the escape as typed.
+_toml_utf8() {
+    # Prefixed locals, because the answer is written with `printf -v` and bash
+    # scopes dynamically: a local called `out` or `cp` shadows a caller asking
+    # for its own, the write lands in this frame and dies with it, and the
+    # caller still gets a zero return. `srcfile.sh` was bitten by exactly this
+    # and defends against it; the same treatment was owed here.
+    #
+    # It is a convention rather than a guarantee: a caller asking for its
+    # answer in `__tu_out` still loses it, and nothing can detect that from
+    # in here. The prefix makes the collision improbable, not impossible.
+    local __tu_cp="$1" __tu_out="$2"
+    [[ "$__tu_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+    (( __tu_cp < 0 || __tu_cp > 0x10FFFF )) && return 1
+    (( __tu_cp >= 0xD800 && __tu_cp <= 0xDFFF )) && return 1
+    if (( __tu_cp < 0x80 )); then
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x' "$__tu_cp")"
+    elif (( __tu_cp < 0x800 )); then
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x' \
+            $(( 0xC0 | (__tu_cp >> 6) )) $(( 0x80 | (__tu_cp & 0x3F) )))"
+    elif (( __tu_cp < 0x10000 )); then
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x' \
+            $(( 0xE0 | (__tu_cp >> 12) )) $(( 0x80 | ((__tu_cp >> 6) & 0x3F) )) \
+            $(( 0x80 | (__tu_cp & 0x3F) )))"
+    else
+        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
+            $(( 0xF0 | (__tu_cp >> 18) )) $(( 0x80 | ((__tu_cp >> 12) & 0x3F) )) \
+            $(( 0x80 | ((__tu_cp >> 6) & 0x3F) )) $(( 0x80 | (__tu_cp & 0x3F) )))"
+    fi
+    return 0
+}
+
 # Decode the escapes a TOML basic string is allowed to carry.
 #
 # Only a basic string has them: a literal string is taken as typed, which is
@@ -169,15 +214,19 @@ _toml_unescape() {
             '"') out+='"' ;;
             "\\") out+="\\" ;;
             u|U)
-                # \uXXXX and \UXXXXXXXX. printf knows the escape; anything
-                # that is not the right number of hex digits is not one, and
-                # is kept as typed rather than silently eaten.
+                # \uXXXX and \UXXXXXXXX. Anything that is not the right
+                # number of hex digits is not one, and is kept as typed rather
+                # than silently eaten.
                 local n=4; [[ "$next" == "U" ]] && n=8
                 local hex="${s:i+1:n}"
                 if [[ "${#hex}" -eq "$n" && "$hex" =~ ^[0-9A-Fa-f]+$ ]]; then
-                    # shellcheck disable=SC2059
-                    out+="$(printf "\\$next$hex")"
-                    i=$(( i + n ))
+                    local __u_enc=""
+                    if _toml_utf8 "$(( 16#$hex ))" __u_enc; then
+                        out+="$__u_enc"
+                        i=$(( i + n ))
+                    else
+                        out+="\\$next"
+                    fi
                 else
                     out+="\\$next"
                 fi

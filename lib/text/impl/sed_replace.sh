@@ -16,13 +16,13 @@ _text_replace_sed_impl() {
     local replacement="${2:-}"
     local file="${3:-}"
     
-    [[ -z "$pattern" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$pattern" ] && return 1
+    [ ! -f "$file" ] && return 1
     
     local sed_path="${_TOOL_PATH_sed:-sed}"
     local variant="${_TOOL_VARIANT_sed:-unknown}"
     
-    if [[ "$variant" == "gnu" ]]; then
+    if [ "$variant" = "gnu" ]; then
         "$sed_path" -i "s/${pattern}/${replacement}/g" "$file"
     else
         # BSD sed requires '' after -i for no backup
@@ -30,9 +30,11 @@ _text_replace_sed_impl() {
     fi
 }
 
-# When sourced: redefine the public function
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    text_replace() {
-        _text_replace_sed_impl "$@"
-    }
-fi
+# Sourced, always: the resolver is the only thing that opens this file, and it
+# sources it. The `if [[ "${BASH_SOURCE[0]}" != "${0}" ]]` this replaces asked
+# whether that was so, which is a question with one answer and a bad
+# substitution under a POSIX shell, where there is no `BASH_SOURCE` to
+# subscript.
+text_replace() {
+    _text_replace_sed_impl "$@"
+}

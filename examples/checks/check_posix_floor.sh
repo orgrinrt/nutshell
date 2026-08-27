@@ -121,6 +121,85 @@ _shell_gated_files() {
     done < "${root}/lib.nut"
 }
 
+# Constructs a POSIX shell parses and then cannot run.
+#
+# Parsing is not running, and the gap between them is where this check was
+# quietly optimistic. `printf -v out ...` is a legal command line anywhere, so
+# `dash -n` accepts it; `dash` then reports an illegal option, **carries on**,
+# and leaves `out` empty. A frame drawn that way draws nothing and nobody is
+# told. `declare -gi x=0` is the same shape: not found, execution continues,
+# and the variable is simply not there.
+#
+# `${x//a/b}` at least fails loudly. The two above do not, which is why a file
+# can pass the parse and be broken on the floor in a way no test on a bash
+# machine will ever see.
+#
+# `x+=` is bash's append, for a string as much as for an array, and there is no
+# POSIX form of it: `x="${x}more"` is the whole replacement. A POSIX shell reads
+# the line as a command named `x+=...`, so it is a not-found rather than a wrong
+# answer.
+#
+# `echo -e` and `echo -n` are not POSIX and do not fail: POSIX `echo` has no
+# options, so it prints the flag as part of the text. A coloured line comes out
+# with `-e ` in front of it and everything still exits zero.
+#
+# `nut_once` is nutshell's own, and it is the quietest of the lot: it reads
+# `BASH_SOURCE` and uses `printf -v`, so under a POSIX shell it is not found,
+# the `|| return 0` beside it returns from the whole file, and the module
+# defines nothing while reporting success. A caller has no way to tell. The
+# floor files carry a guard of their own instead, which is two lines.
+#
+# `[[` and `((` matter most and are the two a parser cannot see at all. To a
+# POSIX shell `[[ -n x ]]` is a command name and three arguments, so it parses
+# anywhere and then reports `[[: not found`; `(( x > 1 ))` parses as nested
+# subshells and runs `x` as a command. Only the forms carrying bash-only syntax
+# inside them, `=~` and a C-style `for`, reach the parser at all. That is how a
+# file full of `[[` was counted as reading fine, and it is most of the gap
+# between what this check used to report and what actually runs.
+#
+# Reported beside the parse failures rather than folded into them, because they
+# are a different fact about the file: it reads, and it does not work.
+_posix_bashisms() {
+    local file="$1"
+    # Comments stripped first, crudely. A `#` inside a string is taken as one,
+    # which loses a real finding now and then; the alternative is parsing shell
+    # to run a warning, and this check never blocks.
+    #
+    # `[[` is matched only with whitespace after it, because bash's `[[` is a
+    # reserved word and always has some. Without that every `[[:space:]]` in a
+    # grep, sed or awk expression counted as a bashism, and this library is
+    # full of them: five in `text.sh` alone, every one inside a regex handed to
+    # another program.
+    #
+    # It over-reports the other way too, on a program written in another
+    # language and passed as a string. `json/impl/jq.sh` carries a jq program
+    # with `((` in it, which is jq's grouping and not shell arithmetic, and no
+    # pattern short of parsing tells the two apart. Left flagged rather than
+    # narrowed, because a narrower rule would miss real ones and this one only
+    # warns.
+    sed -e 's/#.*$//' "$file" 2>/dev/null | grep -noE \
+        -e '\[\[[[:space:]]' \
+        -e '(^|[[:space:];&|])\(\(' \
+        -e 'printf[[:space:]]+-v' \
+        -e '(^|[[:space:];&|(])declare[[:space:]]' \
+        -e 'local[[:space:]]+-[aAin]' \
+        -e '\$\{[A-Za-z_][A-Za-z0-9_]*//' \
+        -e '\$\{!' \
+        -e '\$\{[A-Za-z_][A-Za-z0-9_]*:[0-9]' \
+        -e 'set[[:space:]]+-o[[:space:]]+pipefail' \
+        -e '[^0-9&>]&>' \
+        -e '\$\{[A-Za-z_][A-Za-z0-9_]*(\^\^|,,)' \
+        -e '%[-0-9]*\*[sd]' \
+        -e "\\$'" \
+        -e 'BASH_[A-Z]' \
+        -e '(mapfile|readarray)[[:space:]]' \
+        -e '(^|[[:space:];&|])nut_once([[:space:]]|$)' \
+        -e '(^|[[:space:];&|])echo[[:space:]]+-[en]([[:space:]]|$)' \
+        -e '(^|[[:space:];&|])[A-Za-z_][A-Za-z0-9_]*\+=' \
+        -e 'read[[:space:]]+-[a-zA-Z]*[nNdt]([[:space:]]|$)' \
+        2>/dev/null | sed -e 's/^\([0-9]*\):[[:space:]]*/\1: /' | head -6
+}
+
 test_posix_floor() {
     log_header "POSIX floor"
 
@@ -173,8 +252,24 @@ test_posix_floor() {
         fi
     done <<< "$files"
 
+    # A second pass over the files that DID parse. The ones that did not are
+    # already counted, and saying they also contain a bashism adds nothing.
+    local unrunnable=0 hits
+    while IFS= read -r file; do
+        [[ -z "$file" || ! -f "$file" ]] && continue
+        rel="${file#$REPO_ROOT/}"
+        _is_exempt "$rel" && continue
+        [[ -n "${shell_gated[$rel]:-}" ]] && continue
+        "$sh" -n "$file" 2>/dev/null || continue
+        hits="$(_posix_bashisms "$file")"
+        [[ -n "$hits" ]] || continue
+        unrunnable=$(( unrunnable + 1 ))
+        log_test_warn "${rel} - parses, but $(printf '%s' "$hits" | head -1)"
+    done <<< "$files"
+
     echo ""
     log_info "${unreadable} of $(( total - exempt - gated )) cannot be read by ${sh}"
+    [[ "$unrunnable" -gt 0 ]] && log_info "${unrunnable} more parse but use something ${sh} cannot run"
     [[ "$gated" -gt 0 ]] && log_info "${gated} behind a shell: predicate, so never sourced there"
     [[ "$exempt" -gt 0 ]] && log_info "${exempt} exempt by config"
 

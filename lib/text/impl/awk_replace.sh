@@ -19,8 +19,8 @@ _text_replace_awk_impl() {
     local replacement="${2:-}"
     local file="${3:-}"
     
-    [[ -z "$pattern" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$pattern" ] && return 1
+    [ ! -f "$file" ] && return 1
     
     local awk_path="${_TOOL_PATH_awk:-awk}"
     local mktemp_path="${_TOOL_PATH_mktemp:-mktemp}"
@@ -37,7 +37,7 @@ _text_replace_awk_impl() {
         print
     }' "$file" > "$temp"
     
-    if [[ $? -eq 0 ]] && [[ -s "$temp" || ! -s "$file" ]]; then
+    if [ $? -eq 0 ] && { [ -s "$temp" ] || [ ! -s "$file" ]; }; then
         mv "$temp" "$file"
     else
         rm -f "$temp"
@@ -45,9 +45,11 @@ _text_replace_awk_impl() {
     fi
 }
 
-# When sourced: redefine the public function
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    text_replace() {
-        _text_replace_awk_impl "$@"
-    }
-fi
+# Sourced, always: the resolver is the only thing that opens this file, and it
+# sources it. The `if [[ "${BASH_SOURCE[0]}" != "${0}" ]]` this replaces asked
+# whether that was so, which is a question with one answer and a bad
+# substitution under a POSIX shell, where there is no `BASH_SOURCE` to
+# subscript.
+text_replace() {
+    _text_replace_awk_impl "$@"
+}

@@ -172,3 +172,63 @@ it_counts_the_same_tokens_the_pipeline_did() {
     assert_ne "$n" "0"
     rm -rf "$d"
 }
+
+#[test]
+# The out-name form, which exists so a caller can have the answer without a
+# fork around it. Same answers as printing, and it has to stay that way: the
+# printing form is what the tests above pin and what every existing caller
+# uses.
+it_answers_into_a_named_variable() {
+    local d; d="$(_cfc_tmp)"; local f; f="$(_cfc_file "$d")"
+    assert_ok nut_load_file "$f"
+
+    local where=0 stops=0
+    assert_ok nut_defined_at "$f" documented where
+    assert_eq "$where" "6"
+    assert_ok nut_ends_at "$f" documented stops
+    assert_eq "$stops" "9"
+
+    # Nothing is printed when a name was given, so a caller cannot get the
+    # answer twice and a caller that forgot the name gets no silent empty.
+    assert_eq "$(nut_defined_at "$f" documented where)" ""
+
+    # A name that is not one is refused rather than eval'd.
+    assert_fails nut_defined_at "$f" documented '1bad'
+    assert_fails nut_ends_at "$f" documented 'no; rm -rf /'
+
+    # A function that is not there still fails, and does not write.
+    local untouched=nope
+    assert_fails nut_defined_at "$f" no_such_function untouched
+    assert_eq "$untouched" "nope"
+    rm -rf "$d"
+}
+
+#[test]
+# The trap that `printf -v` sets for anyone writing one of these.
+#
+# bash scopes dynamically, so a local in the callee with the same name as the
+# out-variable shadows the caller's. The write lands in the callee's frame and
+# dies there, the caller reads its own untouched variable, and nothing reports
+# it. `nut_ends_at` had exactly this: it used `end` internally and `nut_body_of`
+# asks for `end`.
+#
+# So the names a caller is most likely to pick are the ones worth asserting.
+it_writes_through_names_the_callee_might_use_itself() {
+    local d; d="$(_cfc_tmp)"; local f; f="$(_cfc_file "$d")"
+    assert_ok nut_load_file "$f"
+
+    local name
+    for name in at start end n line file out fn i; do
+        local -n _probe="$name" 2>/dev/null || true
+        unset "$name"
+        eval "local ${name}=unset"
+        assert_ok nut_defined_at "$f" documented "$name"
+        assert_eq "$(eval "printf '%s' \"\$${name}\"")" "6" \
+            "nut_defined_at lost the answer into its own '${name}'"
+        eval "local ${name}=unset"
+        assert_ok nut_ends_at "$f" documented "$name"
+        assert_eq "$(eval "printf '%s' \"\$${name}\"")" "9" \
+            "nut_ends_at lost the answer into its own '${name}'"
+    done
+    rm -rf "$d"
+}

@@ -134,6 +134,10 @@ _shell_gated_files() {
 # can pass the parse and be broken on the floor in a way no test on a bash
 # machine will ever see.
 #
+# `echo -e` and `echo -n` are not POSIX and do not fail: POSIX `echo` has no
+# options, so it prints the flag as part of the text. A coloured line comes out
+# with `-e ` in front of it and everything still exits zero.
+#
 # `nut_once` is nutshell's own, and it is the quietest of the lot: it reads
 # `BASH_SOURCE` and uses `printf -v`, so under a POSIX shell it is not found,
 # the `|| return 0` beside it returns from the whole file, and the module
@@ -175,6 +179,7 @@ _posix_bashisms() {
         -e 'BASH_[A-Z]' \
         -e '(mapfile|readarray)[[:space:]]' \
         -e '(^|[[:space:];&|])nut_once([[:space:]]|$)' \
+        -e '(^|[[:space:];&|])echo[[:space:]]+-[en]([[:space:]]|$)' \
         -e 'read[[:space:]]+-[a-zA-Z]*[nNdt]([[:space:]]|$)' \
         2>/dev/null | sed -e 's/^\([0-9]*\):[[:space:]]*/\1: /' | head -6
 }

@@ -8,8 +8,8 @@ boundary and the `eval` a named list needs.
 
 | load | floor against bash, 400 | at 2000 |
 |---|---|---|
-| walked with `list_each` | 128% | 141% |
-| walked by the caller over `list_ref` | 161% | 423% |
+| walked with `list_each` | 123% | 132% |
+| walked by the caller over `list_ref` | 148% | 357% |
 
 **Use `list_each`.** It is cheaper at both sizes and the gap widens with the
 list, which is the opposite of what was expected when the surface was designed.
@@ -29,8 +29,8 @@ becomes quadratic and the technique's headline number stops applying.
 
 So the storage was inverted: one variable per position, with the string built on
 demand for a caller that wants to walk it. Push, index and length are each one
-operation regardless of length, and the same code then measured **128% and
-141%**, roughly flat.
+operation regardless of length, and the same code then measured **123% and
+132%**, roughly flat.
 
 **A technique measured on a local does not transfer to the same technique on a
 named thing**, and the name is not a detail: it is what forces the `eval`, and
@@ -61,6 +61,13 @@ slots took it to 165%.
 That fix is gone, because inverting the storage made the fan-out the storage.
 It is recorded here because it is the same mistake in miniature: work that does
 not change between calls, done at every call.
+
+## These numbers were re-taken
+
+A name check was later added to every entry point of both halves, and the
+tables above are from after it. The earlier ones, 128% and 141%, measured code
+that no longer exists. A number without its conditions does not travel, and the
+code it was taken against is one of its conditions.
 
 ## What is not established here
 

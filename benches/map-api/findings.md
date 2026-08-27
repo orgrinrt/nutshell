@@ -15,16 +15,16 @@ The floor is roughly twice bash, and the shape of the load moves it.
 
 | load | floor against bash |
 |---|---|
-| fill-heavy, reading through `map_get` | 208% |
-| fill-heavy, reading through `map_read` | 202% |
-| read-heavy | 188% |
+| fill-heavy, reading through `map_get` | 131% |
+| fill-heavy, reading through `map_read` | 126% |
+| read-heavy | 173% |
 
 Read-heavy is cheaper because the encoding is the cost and a read pays it once,
 where a set pays it and then maintains the key list.
 
 ## Getting there
 
-It started at 360% and three changes took it to 208%, each one an instance of a
+It started at 360% and four changes took it to 131%, each one an instance of a
 finding `benches/maps` had already recorded and the first implementation had
 then gone on to violate.
 
@@ -40,6 +40,12 @@ encoder already left its answer in a variable and the call sites read it now.
 one character per iteration. It takes the whole leading run of safe characters
 in one expansion instead, so a twenty-two character key is six passes rather
 than twenty-two, and a key needing no encoding leaves on the first.
+
+**A fork per character on the way back out, 208% to 131%.** The decoder ran two
+command substitutions per encoded character, which for keys of this shape is
+about ten forks per key. It was found by review, after the three above had been
+fixed and written up, in the same file that opens by saying the encoding must
+not fork.
 
 The lesson is not about maps. It is that `benches/maps` already said the
 encoding must not fork, in those words, and the implementation written against

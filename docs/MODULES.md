@@ -39,6 +39,27 @@ not by name from outside. The implementations under `impl/` are the case: the
 module above them picks one at runtime by what the machine has, and a consumer
 naming one directly is reaching past the thing whose job is to choose.
 
+### Gating a module
+
+An attribute line above a declaration gates it. The attributes attach downward
+and accumulate, and they stop at the declaration they precede.
+
+```
+#[shell(bash4)]
+tui::key                 libs/tui/key.sh
+```
+
+`#[shell(<name>)]` says the module needs that shell. It has to sit here rather
+than inside the file, because the file it gates is the file that fails to
+parse.
+
+`#[has(bin(<name>))]` says the module needs that binary on the path, and
+`#[has(env(<NAME>))]` that it needs that variable set. Those can also sit inline
+in the file, since a file needing `grep` still parses without it.
+
+A module whose gate does not hold resolves to absent rather than to an error.
+
+
 ## Why a declaration and not a search
 
 A module used to be found by trying `lib/<name>.sh`, then `libs/<name>.sh`,

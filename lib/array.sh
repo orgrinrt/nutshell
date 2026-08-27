@@ -33,15 +33,25 @@
 [ -n "${_NUTSHELL_ARRAY_SH:-}" ] && return 0
 _NUTSHELL_ARRAY_SH=1
 
-# `use` where nutshell is loaded, and a plain source where it is not, because
-# this file is on the floor and `use` is not. A POSIX shell sourcing this
-# directly gets the list beside it rather than an error and a half-defined
-# module.
+# `list` is required and is not resolved from here.
+#
+# The fallback that stood here reached for `BASH_SOURCE` inside the branch that
+# only runs when the shell is not bash, and in dash that is a fatal expansion
+# error rather than a fallback: sourcing this file aborted the caller with
+# status 2 and no message, which is worse than the silent no-op it replaced,
+# in exactly the shell it was written for. `dash -n` does not catch it, because
+# it is a runtime expansion rather than a parse error.
+#
+# There is no fix, only a different design: POSIX gives a sourced file no way to
+# find its own path, and `$0` is the caller. So this refuses instead. `map.sh`
+# and `list.sh` both demonstrate that a floor file is cleanest with nothing to
+# resolve, and this one has a real dependency, so it says so.
 if command -v use >/dev/null 2>&1; then
     use list
-elif [ -z "${_NUTSHELL_LIST_SH:-}" ]; then
-    . "${_NUT_ARRAY_DIR:-$(dirname -- "$0")}/list.sh" 2>/dev/null \
-        || . "$(dirname -- "${BASH_SOURCE[0]:-lib/array.sh}")/list.sh"
+elif ! command -v list_new >/dev/null 2>&1; then
+    printf 'array: needs `list`. Source lib/list.sh before this file, or use\n' >&2
+    printf '  nutshell, which resolves it.\n' >&2
+    return 1
 fi
 
 # -----------------------------------------------------------------------------
@@ -133,41 +143,30 @@ arr_filter() {
 # Over a list, rewritten in place
 # -----------------------------------------------------------------------------
 
-# A scratch list name for one of the rewrites below, and the refusal that makes
-# it safe.
+# The check that a caller passed a list, and not something else.
 #
-# The scratch was a hardcoded global. A list actually called that was silently
-# emptied and the function returned zero, because the copy back did
-# `list_new "$2"` on what was also `$1`. Deriving it from the caller's name
-# removes the collision for every name except one shaped like the derivation
-# itself, and that one is refused.
+# These three used to take a bash array through a nameref. That call shape now
+# names a list that does not exist, and without this they would treat it as an
+# empty list, report success, and leave the array untouched, which is the worst
+# outcome for a consumer upgrading: silent, and rc 0.
 #
-# The refusal also catches the other way this is called wrongly. These three
-# used to take a bash array through a nameref, and that call shape now names a
-# list that does not exist: without a check it would report success and leave
-# the array untouched, which is the worst failure available to a consumer
-# upgrading. A name with no list behind it is refused instead.
-_arr_scratch_for() {
-    case "${1:-}" in
-        '' | _arrtmp_* ) return 1 ;;
-    esac
-    # Through the public API, because the two halves of `list` store their
-    # counter in different places and reaching for either one directly makes
-    # this work under one shell and refuse every real list under the other.
-    list_exists "$1" || return 1
-    _as_tmp="_arrtmp_$1"
-    return 0
+# `list_exists` rather than reaching for either half's storage directly: the
+# two keep their counter in different places, and reaching for one makes this
+# work under one shell and refuse every real list under the other.
+_arr_is_list() {
+    [ -n "${1:-}" ] || return 1
+    list_exists "$1"
 }
 
 #[pub]
 # Drop repeats, keeping the first of each and the order of what is left.
 # Usage: arr_unique l
 arr_unique() {
-    _arr_scratch_for "${1:-}" || return 1
+    _arr_is_list "${1:-}" || return 1
     _au_n="$(list_len "$1")"
     [ "$_au_n" -le 1 ] && return 0
     _au_seen=""
-    list_new "$_as_tmp"
+    _au_keep=""
     _au_i=0
     while [ "$_au_i" -lt "$_au_n" ]; do
         list_read _au_e "$1" "$_au_i"
@@ -186,29 +185,29 @@ arr_unique() {
             *"${LIST_SEP}${_au_e}${LIST_SEP}"*) : ;;
             *)
                 _au_seen="${_au_seen}${_au_e}${LIST_SEP}"
-                list_push "$_as_tmp" "$_au_e"
+                _au_keep="${_au_keep}${_au_e}${LIST_SEP}"
                 ;;
         esac
         _au_i=$(( _au_i + 1 ))
     done
-    _arr_copy_over "$_as_tmp" "$1"
+    _arr_refill "$1" "$_au_keep"
 }
 
 #[pub]
 # Reverse it.
 # Usage: arr_reverse l
 arr_reverse() {
-    _arr_scratch_for "${1:-}" || return 1
+    _arr_is_list "${1:-}" || return 1
     _ar_n="$(list_len "$1")"
     [ "$_ar_n" -le 1 ] && return 0
-    list_new "$_as_tmp"
+    _ar_keep=""
     _ar_i=$(( _ar_n - 1 ))
     while [ "$_ar_i" -ge 0 ]; do
         list_read _ar_e "$1" "$_ar_i"
-        list_push "$_as_tmp" "$_ar_e"
+        _ar_keep="${_ar_keep}${_ar_e}${LIST_SEP}"
         _ar_i=$(( _ar_i - 1 ))
     done
-    _arr_copy_over "$_as_tmp" "$1"
+    _arr_refill "$1" "$_ar_keep"
 }
 
 #[pub]
@@ -222,7 +221,7 @@ arr_reverse() {
 #
 # Usage: arr_sort l
 arr_sort() {
-    _arr_scratch_for "${1:-}" || return 1
+    _arr_is_list "${1:-}" || return 1
     _as_n="$(list_len "$1")"
     [ "$_as_n" -le 1 ] && return 0
 
@@ -256,18 +255,27 @@ arr_sort() {
     rm -f "$_as_f"
 }
 
-# Move one list's contents over another and empty the source.
+# Empty a list and fill it from a separated string.
 #
-# The three above all build their answer somewhere else and then have to put it
-# back, and doing that by hand three times is how the three drift apart.
-_arr_copy_over() {
-    _ao_n="$(list_len "$1")"
-    list_new "$2"
-    _ao_i=0
-    while [ "$_ao_i" -lt "$_ao_n" ]; do
-        list_read _ao_e "$1" "$_ao_i"
-        list_push "$2" "$_ao_e"
-        _ao_i=$(( _ao_i + 1 ))
+# The answer is built in a local string rather than in a second list. A scratch
+# list needed a name, and any name it could have was one a caller might hold:
+# a hardcoded one ate a list called that, and one derived from the caller's ate
+# a list called the derivation. Closing that properly meant reserving the
+# scratch space in `list.sh`, at which point `array.sh` could not use it either,
+# which is the honest signal that the scratch should not have existed.
+#
+# The list refuses an element holding the separator, so splitting on it here
+# cannot break an element apart.
+_arr_refill() {
+    _ao_name="$1"; _ao_str="$2"
+    list_new "$_ao_name"
+    [ -n "$_ao_str" ] || return 0
+    _ao_ifs="$IFS"
+    set -f; IFS="$LIST_SEP"
+    # shellcheck disable=SC2086
+    set -- $_ao_str
+    IFS="$_ao_ifs"; set +f
+    for _ao_e in "$@"; do
+        list_push "$_ao_name" "$_ao_e"
     done
-    list_new "$1"
 }

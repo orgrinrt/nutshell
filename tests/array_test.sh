@@ -219,17 +219,32 @@ it_refuses_a_name_that_is_not_a_started_list() {
 }
 
 #[test]
-it_does_not_eat_a_list_named_like_its_own_scratch() {
-    # The scratch list was a hardcoded global, so a list actually called that
-    # was emptied and the function returned zero. It is derived from the
-    # caller's name now, and the one shape that would still collide is refused.
-    _l _arrtmp_x c a b
-    assert_fails arr_unique _arrtmp_x
-    assert_eq "$(_dump _arrtmp_x)" "c|a|b|"
+it_has_no_scratch_list_for_a_caller_to_collide_with() {
+    # The scratch was a hardcoded global, so a list called that was emptied and
+    # the call returned zero. Deriving it from the caller's name moved the
+    # collision rather than removing it: a caller holding `_arrtmp_x` was still
+    # emptied when somebody sorted `x`, and the test named for the defect
+    # picked a victim that could never collide, so it passed against it.
+    #
+    # There is no scratch list now. The answer is built in a local string, so
+    # there is no name for a caller to hold. This checks the property that
+    # replaced it: nothing outside the list under operation is touched, and the
+    # reserved space is not reachable as a name at all.
+    assert_fails list_new _arrtmp_anything
+    assert_fails list_new _arrtmp__t_l
+    assert_fails list_new _NUT_LIST_N_x
 
-    # And a normal list beside a scratch-shaped one is untouched.
+    # The shape that used to be eaten, as close as a caller can now get.
+    _l _t_l c a b a
+    _l arrtmp__t_l KEEP1 KEEP2
+    assert_ok arr_unique _t_l
+    assert_eq "$(_dump arrtmp__t_l)" "KEEP1|KEEP2|"
+    assert_eq "$(_dump _t_l)" "c|a|b|"
+
+    # And every other list in reach stays as it was, through all three.
     _l _t_l c a b
-    _l _arrtmp_other keep
-    arr_sort _t_l
-    assert_eq "$(_dump _arrtmp_other)" "keep|"
+    _l _t_other keep
+    arr_sort _t_l;    assert_eq "$(_dump _t_other)" "keep|"
+    arr_unique _t_l;  assert_eq "$(_dump _t_other)" "keep|"
+    arr_reverse _t_l; assert_eq "$(_dump _t_other)" "keep|"
 }

@@ -67,9 +67,19 @@ _list_name_ok() {
     case "${1:-}" in
         "" | *[!A-Za-z0-9_]* ) return 1 ;;
         [0-9]* ) return 1 ;;
+        _NUT_LIST_* | _arrtmp_* ) return 1 ;;
     esac
     return 0
 }
+# The names this module keeps its storage under are reserved.
+#
+# `_NUT_LIST_` is the module's, and `_arrtmp_` is `array.sh`'s scratch space.
+# Refusing both as container names is what makes the scratch unreachable:
+# deriving a scratch name from the caller's closed the collision one way and
+# left it open the other, so a caller holding a list called `_arrtmp_x` was
+# still emptied when somebody sorted `x`. Closing it here makes the property
+# structural rather than a convention two files have to keep agreeing about.
+
 
 # The separator. A unit separator, which is what it is for, and it is exported
 # because a caller walking `list_str` itself has to set `IFS` to it.
@@ -82,7 +92,7 @@ export LIST_SEP
 list_new() {
     _list_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] || return 1
-    eval "_lidx_${1}=0"
+    eval "_NUT_LIST_N_${1}=0"
 }
 
 #[pub]
@@ -98,7 +108,7 @@ list_new() {
 # Usage: list_exists args -> returns 0 when started
 list_exists() {
     _list_name_ok "${1:-}" || return 1
-    eval "_le_have=\"\${_lidx_${1}:-}\""
+    eval "_le_have=\"\${_NUT_LIST_N_${1}:-}\""
     [ -n "$_le_have" ]
 }
 
@@ -119,9 +129,9 @@ list_push() {
     case "$2" in
         *"$LIST_SEP"*) return 2 ;;
     esac
-    eval "_lp_n=\${_lidx_${1}:-0}"
-    eval "_lst_${1}_${_lp_n}=\$2"
-    eval "_lidx_${1}=$(( _lp_n + 1 ))"
+    eval "_lp_n=\${_NUT_LIST_N_${1}:-0}"
+    eval "_NUT_LIST_V_${1}_${_lp_n}=\$2"
+    eval "_NUT_LIST_N_${1}=$(( _lp_n + 1 ))"
 }
 
 #[pub]
@@ -130,7 +140,7 @@ list_push() {
 list_len() {
     _list_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] || return 1
-    eval "printf '%s' \"\${_lidx_$1:-0}\""
+    eval "printf '%s' \"\${_NUT_LIST_N_$1:-0}\""
 }
 
 #[pub]
@@ -162,9 +172,9 @@ list_read() {
     case "${3:-}" in
         '' | *[!0-9-]* | -*-* ) eval "$1=''"; return 1 ;;
     esac
-    eval "_lr_n=\${_lidx_${2}:-0}"
+    eval "_lr_n=\${_NUT_LIST_N_${2}:-0}"
     [ "$3" -ge 0 ] && [ "$3" -lt "$_lr_n" ] || { eval "$1=''"; return 1; }
-    eval "$1=\"\$_lst_${2}_${3}\""
+    eval "$1=\"\$_NUT_LIST_V_${2}_${3}\""
 }
 
 #[pub]
@@ -193,10 +203,10 @@ list_str() {
 # Usage: list_ref s args
 list_ref() {
     _list_name_ok "${1:-}" && _list_name_ok "${2:-}" || return 1
-    eval "_lf_n=\${_lidx_${2}:-0}"
+    eval "_lf_n=\${_NUT_LIST_N_${2}:-0}"
     _lf_out=""; _lf_i=0
     while [ "$_lf_i" -lt "$_lf_n" ]; do
-        eval "_lf_e=\"\$_lst_${2}_${_lf_i}\""
+        eval "_lf_e=\"\$_NUT_LIST_V_${2}_${_lf_i}\""
         _lf_out="${_lf_out}${_lf_e}${LIST_SEP}"
         _lf_i=$(( _lf_i + 1 ))
     done
@@ -213,10 +223,10 @@ list_ref() {
 list_each() {
     _list_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
-    eval "_le_n=\${_lidx_${1}:-0}"
+    eval "_le_n=\${_NUT_LIST_N_${1}:-0}"
     _le_fn="$2"; _le_i=0
     while [ "$_le_i" -lt "$_le_n" ]; do
-        eval "_le_e=\"\$_lst_${1}_${_le_i}\""
+        eval "_le_e=\"\$_NUT_LIST_V_${1}_${_le_i}\""
         "$_le_fn" "$_le_e" || { _le_rc=$?; return "$_le_rc"; }
         _le_i=$(( _le_i + 1 ))
     done

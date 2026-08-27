@@ -154,6 +154,11 @@ it_refuses_a_container_name_that_would_be_code() {
     _both "$sh" 'list_new l; list_read "v; echo PWNED" l 0 2>/dev/null; printf "%s" "$?"'
     _both "$sh" 'list_new l; list_ref "v; echo PWNED" l 2>/dev/null; printf "%s" "$?"'
     _both "$sh" 'list_new "a-b" 2>/dev/null; printf "%s" "$?"'
+    # The storage namespace and `array.sh`'s scratch space are reserved on both
+    # halves. Reserving them is what makes the scratch collision structural
+    # rather than a convention two files have to keep agreeing about.
+    _both "$sh" 'list_new _NUT_LIST_N_x 2>/dev/null; printf "%s" "$?"'
+    _both "$sh" 'list_new _arrtmp_x 2>/dev/null; printf "%s" "$?"'
     _both "$sh" 'list_new ok; list_push ok v; list_get ok 0'
 }
 

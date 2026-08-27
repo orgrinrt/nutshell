@@ -39,9 +39,19 @@ _list_name_ok() {
     case "${1:-}" in
         "" | *[!A-Za-z0-9_]* ) return 1 ;;
         [0-9]* ) return 1 ;;
+        _NUT_LIST_* | _arrtmp_* ) return 1 ;;
     esac
     return 0
 }
+# The names this module keeps its storage under are reserved.
+#
+# `_NUT_LIST_` is the module's, and `_arrtmp_` is `array.sh`'s scratch space.
+# Refusing both as container names is what makes the scratch unreachable:
+# deriving a scratch name from the caller's closed the collision one way and
+# left it open the other, so a caller holding a list called `_arrtmp_x` was
+# still emptied when somebody sorted `x`. Closing it here makes the property
+# structural rather than a convention two files have to keep agreeing about.
+
 
 declare -gA _NUT_LIST=()
 declare -gA _NUT_LIST_N=()

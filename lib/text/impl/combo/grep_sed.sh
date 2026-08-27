@@ -63,7 +63,7 @@ _text_grep_sed_filtered_replace_impl() {
         # Build sed command for specific lines
         local sed_cmd=""
         for num in $line_nums; do
-            sed_cmd+="${num}s/${search}/${replace}/g;"
+            sed_cmd="${sed_cmd}${num}s/${search}/${replace}/g;"
         done
         
         if [ "$variant" = "gnu" ]; then

@@ -1,0 +1,11 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash declare -a  append,9,11,within the noise,yes
+bash declare -a  by index,9,10,within the noise,yes
+slots by index,13,14,144%,yes
+slots  appends batched,17,18,188%,yes
+slots  one extra eval,14,15,155%,yes
+rope  chunked strings,117,121,1300%,yes
+string then split on index,112,115,1244%,yes
+one string  unit-separated,2957,3007,32855%,yes
+one string  prepended,3002,3044,33355%,yes
+positional parameters,39,42,433%,yes

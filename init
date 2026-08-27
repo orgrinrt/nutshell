@@ -58,7 +58,37 @@ _NUTSHELL_ROOT="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 
 # Export for use by modules
 export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
-export NUTSHELL_VERSION="0.6.3"
+# Read from the manifest rather than written here.
+#
+# It was a constant somebody had to remember to bump, and forgetting it is
+# silent: `init` said 0.6.0 while the newest tag was 0.6.1, because that
+# release was documentation and its bump got reverted before merging. A
+# release with nothing else to change is exactly when it is forgotten.
+#
+# Read as text, not through the toml module, because this runs before any
+# module is loaded and the parser is itself a module. One key, one shape.
+_nutshell_read_version() {
+    local f="${_NUTSHELL_ROOT}/nut.toml" line in_pkg=0
+    [ -r "$f" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            \[package\]*) in_pkg=1; continue ;;
+            \[*\]*)       in_pkg=0; continue ;;
+        esac
+        [ "$in_pkg" -eq 1 ] || continue
+        case "$line" in
+            version*=*)
+                line="${line#*=}"
+                line="${line#"${line%%[![:space:]]*}"}"
+                line="${line#[\"\']}"
+                line="${line%%[!0-9.]*}"
+                [ -n "$line" ] || continue
+                printf '%s' "$line"; return 0 ;;
+        esac
+    done < "$f"
+    return 1
+}
+export NUTSHELL_VERSION="$(_nutshell_read_version 2>/dev/null)"
 
 # Script identity belongs to the interpreter invocation, not to ancestry. The
 # interpreter exports NUTSHELL_SCRIPT and NUTSHELL_SCRIPT_DIR after this file

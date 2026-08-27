@@ -4,27 +4,54 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# This is the TOUGH template - strict conventions for high-quality codebases.
-# No compromises. No technical debt. No cutting corners.
+# The tough template. Every gate on, every threshold at the tightest value the
+# checks offer.
 #
-# Use this if you believe in:
-#   - Code quality over velocity
-#   - Preventing problems over fixing them
-#   - Self-documenting code
-#   - Small, focused modules
+# What that means in practice: a file over 300 lines of code fails, a public
+# function without a `Usage:` line fails, two functions whose names score above
+# 0.85 similar fail, and a `TODO` is a finding rather than a note.
+#
+# Pick it when a failing gate is what you want from a gate. The default
+# template is the same checks at values a codebase can adopt without a week of
+# work first.
 #
 # For gentler defaults, see: examples/configs/default.nut.toml
 # For all options documented: examples/configs/empty.nut.toml
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# What this package is
+# -----------------------------------------------------------------------------
+# Its own section, because `[meta]` is about this file and this is about the
+# thing the file describes. A review read `[meta] version` as nutshell's twice,
+# and it is the schema's.
+#
+# The fields are the ones cargo, npm and deno all agree on, because a package
+# manifest that invents its own vocabulary makes every reader learn it: name,
+# version, description, license, repository, keywords. `[lib]` and `[bin]` are
+# cargo's shape, and `[bin]` is a map the way package.json's is.
+[package]
+name = "nutshell"
+version = "0.6.3"
+description = "A bash library: modules with a manifest, a QA gate, and dependency resolution."
+license = "MPL-2.0"
+repository = "https://github.com/orgrinrt/nutshell"
+keywords = ["bash", "shell", "posix", "library", "modules"]
+
+# The library entry point: the file that says what this package provides, the
+# way `src/lib.rs` does for a crate.
+[lib]
+path = "lib.nut"
+
+# Command name to the file behind it.
+[bin]
+nutshell = "bin/nutshell"
+
 [meta]
-# The schema's version, not nutshell's. `examples/configs/empty.nut.toml` says
-# so where the field is documented, and a review read it as a third claim about
-# what nutshell is, next to `init`'s constant and the newest tag. Said here so
-# the next reader does not have to go and check.
+# The schema's version, not this package's. That is `[package] version` above.
 version = "1.0.0"
 name = "nutshell"
-description = "Everything you need, in a nutshell. Strict conventions, no compromises."
+description = "A bash library: modules with a manifest, a QA gate, and dependency resolution."
 
 # -----------------------------------------------------------------------------
 # Paths

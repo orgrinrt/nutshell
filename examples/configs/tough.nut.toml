@@ -4,14 +4,16 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# This is the TOUGH template - strict conventions for high-quality codebases.
-# No compromises. No technical debt. No cutting corners.
+# The tough template. Every gate on, every threshold at the tightest value the
+# checks offer.
 #
-# Use this if you believe in:
-#   - Code quality over velocity
-#   - Preventing problems over fixing them
-#   - Self-documenting code
-#   - Small, focused modules
+# What that means in practice: a file over 300 lines of code fails, a public
+# function without a `Usage:` line fails, two functions whose names score above
+# 0.85 similar fail, and a `TODO` is a finding rather than a note.
+#
+# Pick it when a failing gate is what you want from a gate. The default
+# template is the same checks at values a codebase can adopt without a week of
+# work first.
 #
 # For gentler defaults, see: default.nut.toml
 # For all options documented: empty.nut.toml
@@ -20,7 +22,7 @@
 [meta]
 version = "1.0.0"
 name = "Tough Configuration"
-description = "Strict conventions. No compromises. No technical debt."
+description = "Every gate on, every threshold at its tightest."
 
 # -----------------------------------------------------------------------------
 # Paths

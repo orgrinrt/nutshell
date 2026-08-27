@@ -303,7 +303,13 @@ main() {
 
     # Split on commas without touching `IFS`, which a `local IFS=,` here did
     # not survive and which the loops around this one read.
-    while IFS= read -r m; do
+    #
+    # `|| [[ -n "$m" ]]`, because `printf '%s'` writes no trailing newline and
+    # `read` returns non-zero on the last field when there is none. Without it
+    # the final module of every `--use` was dropped in silence: `--use text,fs`
+    # lowered `text` and left `fs` out, and the lowered file then loaded and
+    # answered nothing for half of what was asked for.
+    while IFS= read -r m || [[ -n "$m" ]]; do
         [[ -n "$m" ]] && _nl_walk "$m"
     done < <(printf '%s' "$extra" | tr ',' '\n')
 

@@ -168,3 +168,41 @@ it_refuses_a_script_that_names_no_modules() {
     assert_ne "$rc" "0"
     assert_contains "$out" "loads no modules"
 }
+
+#[test]
+# Every module named to `--use` reaches the closure, including the last one.
+#
+# It did not. The list is split with `printf '%s' | tr ',' '\n'`, which writes
+# no trailing newline, so `read` returned non-zero on the final field and the
+# loop exited without walking it. `--use text,fs` lowered `text` and left `fs`
+# out, and nothing failed: the lowered file loaded, and answered nothing for
+# half of what was asked for.
+#
+# Asserted by comparing counts rather than by naming files, because which
+# modules a module pulls in is its own business and changes.
+it_walks_every_module_named_to_use() {
+    local one two both
+    one="$("$_LOWER" "$_WORK" --use text --list 2>/dev/null | wc -l)"
+    two="$("$_LOWER" "$_WORK" --use fs --list 2>/dev/null | wc -l)"
+    both="$("$_LOWER" "$_WORK" --use text,fs --list 2>/dev/null | wc -l)"
+
+    # Each alone has to reach something at all. One module returning the
+    # one-line "loads no modules" error is exactly the bug, and it counts as 1.
+    assert_ok test "$one" -gt 1
+    assert_ok test "$two" -gt 1
+
+    # Together they reach more than either alone. With the last one dropped,
+    # `text,fs` equalled `text` exactly.
+    assert_ok test "$both" -gt "$one"
+    assert_ok test "$both" -gt "$two"
+}
+
+#[test]
+# The single-module case, which is the one the bug hit hardest: with one name
+# and no comma, the only field is the last field, so nothing was walked at all
+# and the tool reported the entry loading no modules.
+it_lowers_a_single_named_module() {
+    local out; out="$("$_LOWER" "$_WORK" --use text --list 2>&1)"
+    assert_not_contains "$out" "loads no modules"
+    assert_contains "$out" "lib/text.sh"
+}

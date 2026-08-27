@@ -112,7 +112,7 @@ bench_size "$ELEMS"
 bench_verify _answer_of
 
 bench_arm "bash, one associative array"     arm_bash_list
-bench_arm "posix floor, one string"         arm_posix_list
+bench_arm "posix floor, one per position"  arm_posix_list
 
 bench_run || exit 1
 

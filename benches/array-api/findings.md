@@ -5,7 +5,23 @@ the larger one: counting every construct rather than the first error `dash`
 prints, indexed arrays appear in thirteen of the twenty files that cannot yet be
 read, against nine for associative arrays.
 
-## The result
+## This answer was overturned by the bench above it
+
+**`benches/list-api` retires the conclusion below.** Read that first.
+
+The finding here is about a list held in a **local** variable, where appending
+is `s+=` and bash extends the string in place. A list with a **name** cannot
+use `+=`: the assignment goes through `eval`, which rebuilds the whole string on
+every push, so appending becomes quadratic and the headline number stops
+applying. The shipped container stores one variable per position for that
+reason.
+
+What still stands here is everything about the techniques themselves, which is
+most of the file: why the shell splitting beats a shell loop, why positional
+parameters append quadratically, why batching `eval` calls loses, and why a rope
+is slots with extra steps.
+
+## The result, for a list held in a local
 
 **Keep the list as a string and let the shell split it.** `IFS` set to the
 separator and `set -- $s`, or `for e in $s`, is field splitting, which the shell

@@ -29,15 +29,20 @@ nut_once || return 0
 # answered `0.1`. Bracket form for both kinds, and a name is quoted so a key
 # holding a dash or a space stays one segment.
 _jq_path() {
-    local dotted="${1:-}" expr="." seg oldifs
+    local dotted="${1:-}" expr="." seg oldifs oldf
     case "$dotted" in .*) dotted="${dotted#.}" ;; esac
     [ -z "$dotted" ] && { printf '.'; return 0; }
 
     oldifs="$IFS"
+    # `set -f` is restored to what it was rather than turned off. A caller that
+    # had globbing disabled got it back on, which is a change this function has
+    # no business making. The `dev` version used `local IFS` and touched
+    # neither.
+    case "$-" in *f*) oldf=1 ;; *) oldf=0 ;; esac
     set -f; IFS='.'
     # shellcheck disable=SC2086
     for seg in $dotted; do
-        IFS="$oldifs"; set +f
+        IFS="$oldifs"; [ "$oldf" = 1 ] || set +f
         if [ -n "$seg" ]; then
             case "$seg" in
                 *[!0-9]*) expr="${expr}[\"${seg}\"]" ;;
@@ -46,7 +51,7 @@ _jq_path() {
         fi
         set -f; IFS='.'
     done
-    IFS="$oldifs"; set +f
+    IFS="$oldifs"; [ "$oldf" = 1 ] || set +f
     printf '%s' "$expr"
 }
 

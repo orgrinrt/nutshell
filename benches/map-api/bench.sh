@@ -86,6 +86,18 @@ BODY
 # else.
 READ_WORKLOAD="${WORKLOAD/last=\"\$(map_get m \"lib\/some-module.sh:\$(( i * ENTRIES \/ LOOKUPS ))\")\"/map_read last m \"lib\/some-module.sh:\$(( i * ENTRIES \/ LOOKUPS ))\"}"
 
+# The substitution above is a pattern over a long escaped literal and nothing
+# else would notice if it stopped matching. If it did, arms C and D would be
+# byte-identical to A and B, the agreement control would pass by construction,
+# and the gap the findings quote for `map_read` would be noise reported as a
+# result.
+if [[ "$READ_WORKLOAD" == "$WORKLOAD" ]]; then
+    printf 'bench: the read-workload substitution did not apply, so arms C and D\n' >&2
+    printf '  would measure the same thing as A and B. Refusing rather than\n' >&2
+    printf '  reporting a number that means nothing.\n' >&2
+    exit 1
+fi
+
 # A read-dominated workload, which is the shape nutshell's own tables have: a
 # config cache or an attribute table is filled once and then read from on every
 # lookup for the rest of the run. The workload above is a fifth reads, so it

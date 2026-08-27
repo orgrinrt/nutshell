@@ -213,7 +213,13 @@ it_clears_the_arms_so_a_second_case_can_run() {
     bench_run >/dev/null 2>&1
 
     bench_reset
+    # All four, not just the functions. They are parallel arrays read by index
+    # when the table is printed, so a reset clearing one and not another
+    # desynchronises them and a check on `_BENCH_FN` alone would not see it.
     assert_eq "${#_BENCH_FN[@]}" "0"
+    assert_eq "${#_BENCH_LABEL[@]}" "0"
+    assert_eq "${#_BENCH_CEIL[@]}" "0"
+    assert_eq "${#_BENCH_NOTE[@]}" "0"
     assert_eq "$BENCH_TITLE" ""
     assert_eq "$BENCH_VERIFY" ""
     assert_eq "$BENCH_SIZE" "0"

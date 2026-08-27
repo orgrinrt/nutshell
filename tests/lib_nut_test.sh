@@ -7,7 +7,7 @@
 # name would fail, and the failure arrived mid-run under `set -eo pipefail`
 # with nothing to read.
 
-use extern test
+use extern test toml
 
 DECLARE="${BASH_SOURCE[0]%/*}/../bin/nut-declare"
 ROOT_DIR="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
@@ -448,4 +448,50 @@ PROBE
     local out; out="$(NUT_ROOT="$ROOT_DIR" bash "$f" 2>&1)"
     rm -f "$f"
     assert_ok grep -q 'COUNT=1' <<<"$out"
+}
+
+# --- the package declares its own version ------------------------------------
+#
+# It was a constant in `init` that somebody had to remember to bump, and
+# forgetting it is silent: this repository shipped a tag whose constant named
+# the release before it, because that release was documentation and its bump
+# got reverted before merging. A release with nothing else to change is
+# exactly when it gets forgotten.
+
+#[test]
+it_reads_the_version_from_the_package_section() {
+    local v; v="$(toml_get "$ROOT_DIR/nut.toml" package.version)"
+    assert_ne "$v" ""
+    assert_eq "$NUTSHELL_VERSION" "$v"
+}
+
+#[test]
+it_does_not_read_the_schema_version_as_the_packages() {
+    # `[meta] version` is the schema's and a review read it as nutshell's
+    # twice. The two have to be able to differ, and here they do.
+    local pkg schema
+    pkg="$(toml_get "$ROOT_DIR/nut.toml" package.version)"
+    schema="$(toml_get "$ROOT_DIR/nut.toml" meta.version)"
+    assert_ne "$pkg" "$schema"
+    assert_eq "$NUTSHELL_VERSION" "$pkg"
+}
+
+#[test]
+it_declares_the_metadata_a_package_manifest_carries() {
+    # The fields cargo, npm and deno all agree on. A manifest that invents its
+    # own vocabulary makes every reader learn it.
+    local k
+    for k in name version description license repository; do
+        assert_ne "$(toml_get "$ROOT_DIR/nut.toml" "package.$k")" "" "package.$k"
+    done
+    assert_ne "$(toml_get "$ROOT_DIR/nut.toml" lib.path)" ""
+    assert_ne "$(toml_get "$ROOT_DIR/nut.toml" bin.nutshell)" ""
+}
+
+#[test]
+it_points_at_files_that_are_there() {
+    # A manifest naming an entry point that does not exist is worse than one
+    # naming none: a reader trusts it.
+    assert_ok test -f "$ROOT_DIR/$(toml_get "$ROOT_DIR/nut.toml" lib.path)"
+    assert_ok test -f "$ROOT_DIR/$(toml_get "$ROOT_DIR/nut.toml" bin.nutshell)"
 }

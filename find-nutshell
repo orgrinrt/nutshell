@@ -611,9 +611,41 @@ _nutshell_adopt() {
 # The version an interpreter reports, without loading it. Reading the file
 # rather than sourcing it, because a candidate that is about to be rejected must
 # not be allowed to run first.
+#
+# From `nut.toml`'s `[package] version`, beside the `init` it was handed. The
+# version used to be a constant in `init` that somebody had to remember to
+# bump, and forgetting it is silent: this repository shipped a tag whose
+# constant said the release before it.
+#
+# `init` is still accepted as a fallback, because a toolchain fetched by an
+# older nutshell has no `[package]` section and the store is full of them.
+# Dropping that would make every existing entry unreadable rather than merely
+# older.
 _nutshell_version_of() {
     local init="$1" line
     [[ -r "$init" ]] || return 1
+
+    local manifest="${init%/init}/nut.toml"
+    if [[ -r "$manifest" ]]; then
+        local in_pkg=0
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            case "$line" in
+                \[package\]*) in_pkg=1; continue ;;
+                \[*\]*)       in_pkg=0; continue ;;
+            esac
+            [[ "$in_pkg" -eq 1 ]] || continue
+            case "$line" in
+                version*=*)
+                    line="${line#*=}"
+                    line="${line#"${line%%[![:space:]]*}"}"
+                    line="${line#[\"\']}"
+                    line="${line%%[!0-9.]*}"
+                    [[ -n "$line" ]] || continue
+                    printf '%s' "$line"; return 0 ;;
+            esac
+        done < "$manifest"
+    fi
+
     while IFS= read -r line || [[ -n "$line" ]]; do
         case "$line" in
             *NUTSHELL_VERSION=*)
@@ -623,7 +655,9 @@ _nutshell_version_of() {
                 # and answer with nothing.
                 line="${line#[\"\']}"
                 line="${line%%[!0-9.]*}"
-                [[ -n "$line" ]] || continue
+                # The reader in `init` itself is a command substitution now, so
+                # the line there is not a literal and must not be read as one.
+                case "$line" in ""|*[!0-9.]*) continue ;; esac
                 printf '%s' "$line"; return 0 ;;
         esac
     done < "$init"

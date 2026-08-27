@@ -22,21 +22,32 @@ use check-runner
 # =============================================================================
 
 # Valid top-level sections
-VALID_SECTIONS="meta paths deps annotations tests output"
+VALID_SECTIONS="package lib bin meta paths deps annotations tests output qa"
 
 # Valid keys per section
 declare -A VALID_KEYS
+# What the package is. The fields cargo, npm and deno all agree on, because a
+# manifest that invents its own vocabulary makes every reader learn it.
+VALID_KEYS[package]="name version description license repository homepage documentation keywords authors readme"
+# The library entry point, cargo's shape.
+VALID_KEYS[lib]="path"
+# Command name to the file behind it, package.json's shape.
+VALID_KEYS[bin]="*"
 VALID_KEYS[meta]="version name description"
+# Custom checks, which the runner has read since before this list existed and
+# which warned on every project that used one.
+VALID_KEYS[qa]="custom_checks run_builtins"
 VALID_KEYS[paths]="lib_dir exclude include"
 VALID_KEYS[deps.paths]="*"  # Any tool name allowed
 VALID_KEYS[annotations]="public_api allow_trivial_wrapper_ergonomics allow_large_file"
-VALID_KEYS[tests]="syntax trivial_wrappers file_size function_duplication cruft public_api_docs"
+VALID_KEYS[tests]="syntax trivial_wrappers file_size function_duplication cruft public_api_docs posix_floor module_contract config_schema"
 VALID_KEYS[tests.syntax]="shell fail_on_error"
 VALID_KEYS[tests.trivial_wrappers]="max_lines local_usage_threshold global_usage_threshold min_vars_for_ergonomic token_complexity_warn token_complexity_pass warn_threshold fail_threshold exempt_annotations exclude_patterns"
 VALID_KEYS[tests.file_size]="max_loc max_total_lines exempt_annotation_pattern exempt_patterns"
 VALID_KEYS[tests.function_duplication]="similarity_threshold min_lines_to_check ignore_name_patterns exclude_patterns"
 VALID_KEYS[tests.cruft]="debug_patterns todo_patterns fail_on_debug fail_on_todo max_todos"
 VALID_KEYS[tests.public_api_docs]="public_api_annotation required_elements recommended_elements min_doc_lines"
+VALID_KEYS[tests.posix_floor]="shell max_unreadable exempt"
 VALID_KEYS[output]="color verbosity format show_passing show_summary"
 
 # Valid enum values

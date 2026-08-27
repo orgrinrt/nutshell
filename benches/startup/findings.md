@@ -1,46 +1,71 @@
-# What a lowered form would save at load time
+# What lowering saves at load time
 
-**Not established. The first measurement was not sound and is recorded here so
-nobody quotes it.**
+Three arms, all running the same workload and compared on its answer rather
+than on the loaded surface, because a shaken arm loads less by design.
 
-## The unsound run
+| arm | best ms | against the first |
+|---|---|---|
+| resolved through the manifest | 247 | |
+| lowered, `use` resolved already | 235 | within the noise |
+| lowered and shaken | 67 | **26%** |
 
-    resolved through the manifest    217 ms
-    lowered, one file                 15 ms
-    a bare shell, loading nothing     12 ms
+Reproducible across runs. Six modules, a ten file closure.
 
-Read as written that is the load cost falling from 205 ms to 3 ms. It is not,
-because the two arms did not load the same thing: the resolved arm defined 165
-functions and the lowered arm 90.
+## The answer
 
-The lowered arm concatenates the modules named on the command line and stubs
-`use` to a no-op, so a module reaching for its own dependencies at load time
-gets nothing. The resolved arm loads those dependencies for real. So part of
-the gap is the lowered arm doing less work rather than doing it faster.
+**Resolving `use` ahead of time does not pay.** Twelve milliseconds in two
+hundred and fifty, and the harness reports it as noise. The cost is parsing the
+files, not finding them.
 
-The direction is almost certainly right. Every `use` resolves through
-`_lib_nut_lookup`, every caller of that wraps it in a command substitution, and
-a fork is not cheap. But the size of it is unmeasured.
+**Dropping what nothing calls does.** 3.7x, and it is the whole of the win.
+Statically, for one real program, 24 of the 165 functions it loads are
+reachable and 141 are not.
 
-## What a sound version needs
+So the lowering worth building is a shaker. The resolution half is a
+simplification rather than an optimisation and should be argued for on those
+grounds if at all.
 
-The arms have to load the same set. Two ways, and the second is better:
+## Four things a lowering has to do, each found by getting it wrong
 
-- Expand the module list to the transitive closure before concatenating, so
-  both arms end with the same functions defined. Straightforward and still
-  hand-rolled.
-- Have the lowering resolve `use` itself rather than stubbing it, which is what
-  a real lowering does anyway. Then the arms are the same program by
-  construction and the bench prices the thing rather than a sketch of it.
+**Strip the per-file inclusion guards.** `nut_once` answers about the file
+being sourced, and concatenated every file is the same file: the first call
+registers it and every guard after says "already loaded" and returns from the
+whole thing. The lowered arm defined one module and nothing else.
 
-Either way the harness will refuse a run whose arms disagree once they are
-asked the right question, which is `bench_verify` over the loaded surface
-rather than over one function's output. The current verify calls `str_upper`,
-which both arms answer identically while differing by 75 functions.
+**Register what it contains rather than stubbing the resolver.**
+`use() { return 0; }` looks equivalent and is not, because `nut_reload` goes
+through `use`. `fs_size` answered nothing.
 
-## What is not in question
+**Rewrite `super::` away.** It resolves relative to the file that wrote the
+call, through `BASH_SOURCE[1]`, and concatenated every call comes from the
+lowered file. In a temp directory with no manifest above it, that resolves to
+nothing. A lowering knows the unit at lower time, which is the point.
 
-That the resolved path forks per module. That is structural: `_lib_nut_lookup`
-prints its answer and all five call sites capture it with `$( )`.
-`benches/module-resolve` prices a predicated row against a plain one and names
-this as the larger cost sitting underneath both.
+**Shake by cutting definitions out of the file, not by rebuilding from
+`declare -f`.** Rebuilt, the result is functions and nothing else: every
+module's file-scope initialisation goes. `deps.sh` populating its tool table at
+load time was the one that showed, and `fs_size` then read an empty variant
+table and chose no implementation.
+
+## What the shaker here is, and is not
+
+It reads names rather than parsing shell, so a name in a comment or a string
+counts as a use. That over-retains, which is the safe direction, and makes 26%
+a **floor** on what a real pass could reach rather than a claim about what it
+would.
+
+What it cannot see is a name assembled at run time. Every `nut_reload` in this
+library is written literally for exactly that reason; two in `fs.sh` were not
+until today, and a shake would have kept one of the three stat implementations
+and dropped two, failing at first call on whichever machine has the other
+`stat`.
+
+The closure follows `nut_reload` targets as well as `use`. Following only `use`
+left the impl modules out and the harness refused the run.
+
+## What is not measured
+
+Whether the shake is safe for a program whose call graph is not visible: a
+caller reaching a library function through a variable, or a task file loaded by
+name at run time. hulilupteri does the second, so the number here does not
+transfer to it without checking that first.

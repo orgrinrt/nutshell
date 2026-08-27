@@ -260,7 +260,7 @@ compare_full_names() {
     BEGIN {
         # Files that are two spellings of one module, as `a>b` pairs.
         #
-        # A module carrying a `when=` row is written twice, once for bash and
+        # A module carrying a gate attribute is written twice, once for bash and
         # once for POSIX sh, and the two hold the same function names on
         # purpose. Every one of those is a perfect score and none of them is a
         # copy: only one is ever sourced.

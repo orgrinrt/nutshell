@@ -226,7 +226,8 @@ use() {
 #   log                 lib/log.sh
 #   tui::term           libs/tui/term.sh
 #   json::impl::jq      lib/json/impl/jq.sh      internal
-#   text                lib/text.fast.sh         when=have:grep
+#   #[has(bin(grep))]
+#   text                lib/text.fast.sh
 #   text                lib/text.sh
 #
 # `internal` means the library's own file, reachable by `super::` from inside
@@ -263,10 +264,25 @@ _lib_nut_lookup() {
     # `|| [[ -n "$name" ]]`, so a file whose last line has no newline keeps
     # its last declaration. Without it the module simply is not there, and the
     # checker agreed because it read the file another way.
-    local rest word pred
+    local rest word gates=""
     while read -r name file rest || [[ -n "$name" ]]; do
-        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
-        [[ "$name" == "$want" ]] || continue
+        [[ -z "$name" ]] && continue
+
+        # An attribute is a comment, which is the whole reason for the shape:
+        # `#` already means comment here, so a reader that does not know about
+        # gates skips them and the file stays the format it was.
+        #
+        # They attach downward and accumulate, the way they do in a shell file
+        # and the way `#[cfg(...)]` does above a `mod` in Rust. A run of them
+        # all has to hold.
+        if [[ "${name:0:2}" == "#[" ]]; then
+            word="${name#\#[}"; word="${word%]}"
+            gates+="${word} "
+            continue
+        fi
+        [[ "${name:0:1}" == "#" ]] && { gates=""; continue; }
+
+        if [[ "$name" != "$want" ]]; then gates=""; continue; fi
         [[ -n "$file" ]] || return 1
 
         # Everything after the file is read as words rather than by position,
@@ -277,17 +293,17 @@ _lib_nut_lookup() {
         # visibility, ignored the fourth word entirely, and loaded the module
         # on a machine whose predicate did not hold. Silently, which is the
         # only way this kind of thing ever goes.
-        vis=""; pred=""
+        vis=""
         for word in $rest; do
-            case "$word" in
-                when=*) pred="${word#when=}" ;;
-                *)      vis="$word" ;;
-            esac
+            vis="$word"
         done
 
-        if [[ -n "$pred" ]] && ! _nut_when "$pred"; then
-            continue
-        fi
+        local g held=0
+        for g in $gates; do
+            if ! _nut_gate "$g"; then held=1; break; fi
+        done
+        gates=""
+        [[ "$held" -eq 1 ]] && continue
 
         if [[ "$reach" == "public" && "${vis:-}" == "internal" ]]; then
             echo "nutshell: '${want}' is internal to that library" >&2
@@ -299,149 +315,74 @@ _lib_nut_lookup() {
     return 1
 }
 
-# _nut_when <predicate> -> 0 when it holds
+# What a `has(bin(...))` gate answered, so `command -v` runs once per name.
 #
-# The vocabulary is deliberately four words and no operators beyond `+`. A
-# predicate language grows into a parser, and this one is read before any
-# module is loaded, so a parser here is the same cycle the manifest format
+# Declared here rather than inside the function: it is an associative array,
+# and without the declaration bash reads `_NUT_GATE_ANSWER[has(bin(sh))]` as
+# an arithmetic subscript and fails on the parentheses.
+declare -gA _NUT_GATE_ANSWER=()
+
+# _nut_gate <attribute> -> 0 when it holds
+#
+# One attribute, in the shape the rest of the library already speaks:
+#
+#   shell(bash)      the running shell is bash, any version
+#   shell(bash4)     bash 4 or newer
+#   has(bin(grep))   that command is on PATH
+#   has(env(NAME))   that variable is set and not empty
+#
+# Deliberately four words. A predicate language grows into a parser, and this
+# is read before any module is loaded, which is the cycle the manifest format
 # exists to avoid.
-#
-#   have:<name>     that command is on PATH
-#   shell:bash      the running shell is bash, any version
-#   shell:bash4     bash 4 or newer
-#   env:<NAME>      that variable is set and not empty
-#   a+b             both
 #
 # Written in `case` and `command -v` rather than `[[ =~ ]]`, so it keeps
 # working when this file becomes POSIX sh. That is the point of the whole
-# arrangement and it would be strange to start by breaking it.
-declare -gA _NUT_WHEN_ANSWER=()
+# arrangement and it would be strange to break it on the first step.
+#
+# An unknown attribute does not hold. Read as true it would promote a variant
+# onto every machine on a typo, and nothing about the tree would look wrong.
+_nut_gate() {
+    local a="${1:-}" inner name
+    [[ -n "$a" ]] || return 0
 
-_nut_when() {
-    local expr="$1" part rest="$1"
-    [[ -n "$expr" ]] || return 0
-
-    # Only `have:` is remembered, and only because it is the only word that
-    # costs anything. `shell:` and `env:` are a `case` on a variable, which is
-    # free, and both can legitimately change: `env:` is a caller's variable,
-    # and a test driving the bash floor through its branches sets
-    # `BASH_VERSION` itself. Caching those made that test read one answer for
-    # every version it tried, which is the cache being wrong rather than the
-    # test being awkward.
-    #
-    # It reaches one lookup and no further, and that is worth stating because
-    # the first version of this comment claimed otherwise. Every caller of
-    # `_lib_nut_lookup` wraps it in a command substitution, which is a
-    # subshell, so whatever this writes dies with the lookup that wrote it. A
-    # module with several predicated rows shares the answer between them; two
-    # `use` calls do not.
-    #
-    # Measured: a predicated row resolves at about 113% of a plain one either
-    # way, reproducibly, at `benches/module-resolve`. The fork around the
-    # lookup is the larger cost and it is paid by every module, predicate or
-    # not. Removing it means returning through a variable rather than by
-    # printing, which is five call sites and its own change.
-    case "$expr" in
-        *shell:*|*env:*) : ;;
-        *)  case "${_NUT_WHEN_ANSWER[$expr]:-}" in
+    case "$a" in
+        shell\(bash4\))
+            case "${BASH_VERSION:-}" in
+                ""|1.*|2.*|3.*) return 1 ;;
+            esac
+            return 0 ;;
+        shell\(bash\))
+            [[ -n "${BASH_VERSION:-}" ]] || return 1
+            return 0 ;;
+        has\(bin\(*\)\))
+            inner="${a#has(bin(}"; inner="${inner%))}"
+            [[ -n "$inner" ]] || return 1
+            # Remembered, because `command -v` is the only word here that costs
+            # anything and this sits in front of every `use`. Not `shell` or
+            # `env`: both are a `case` on a variable, which is free, and both
+            # can change under a caller.
+            case "${_NUT_GATE_ANSWER[$a]:-}" in
                 yes) return 0 ;;
                 no)  return 1 ;;
-            esac ;;
+            esac
+            if command -v "$inner" >/dev/null 2>&1; then
+                _NUT_GATE_ANSWER["$a"]=yes; return 0
+            fi
+            _NUT_GATE_ANSWER["$a"]=no; return 1 ;;
+        has\(env\(*\)\))
+            name="${a#has(env(}"; name="${name%))}"
+            # The shape is checked before the indirection, because bash errors
+            # on `${!x}` when `x` is not a valid name and that error aborts
+            # whoever was loading a module.
+            case "$name" in
+                ""|*[!A-Za-z0-9_]*|[0-9]*) return 1 ;;
+            esac
+            [[ -n "${!name:-}" ]] || return 1
+            return 0 ;;
+        *)
+            printf 'nutshell: unknown gate %s\n' "$a" >&2
+            return 1 ;;
     esac
-
-    while [[ -n "$rest" ]]; do
-        case "$rest" in
-            *+*) part="${rest%%+*}"; rest="${rest#*+}" ;;
-            *)   part="$rest"; rest="" ;;
-        esac
-        [[ -n "$part" ]] || continue
-
-        case "$part" in
-            have:*)
-                command -v "${part#have:}" >/dev/null 2>&1 \
-                    || { _NUT_WHEN_ANSWER["$expr"]=no; return 1; } ;;
-            env:*)
-                # Indirect rather than `eval`, because the name comes out of a
-                # file and `eval` on it would be arbitrary execution at load
-                # time, in the one place that runs before anything else.
-                local _n="${part#env:}"
-                # The shape is checked before the indirection, because bash
-                # errors on `${!x}` when `x` does not hold a valid name, and
-                # that error aborts whoever was loading a module. Nothing is
-                # executed either way, so this is about failing quietly rather
-                # than about safety: a predicate that cannot hold should
-                # simply not hold.
-                case "$_n" in
-                    ""|*[!A-Za-z0-9_]*|[0-9]*) return 1 ;;
-                esac
-                # Not remembered. Every other word here is a fact about the
-                # machine and holds for the life of the process; this one is a
-                # variable a caller may set between two loads.
-                [[ -n "${!_n:-}" ]] || return 1 ;;
-            shell:bash)
-                [[ -n "${BASH_VERSION:-}" ]] || return 1 ;;
-            shell:bash4)
-                case "${BASH_VERSION:-}" in
-                    ""|1.*|2.*|3.*) return 1 ;;
-                esac ;;
-            *)
-                # An unknown word is not a licence to load the row. A typo in a
-                # predicate would otherwise silently promote a variant onto
-                # every machine, which is the opposite of what it is for.
-                printf 'nutshell: unknown predicate %s\n' "$part" >&2
-                return 1 ;;
-        esac
-    done
-    case "$expr" in
-        *shell:*|*env:*) : ;;
-        *) _NUT_WHEN_ANSWER["$expr"]=yes ;;
-    esac
-    return 0
-}
-
-# _lib_nut_files <root>
-#
-# Every file a library declares, one per line, relative as written.
-#
-# One module may name several, which is what a `when=` row is, so this is not
-# the same list as `_lib_nut_modules` and a reader wanting "is this file part
-# of the library" wants this one. Deriving a module name from a path and
-# looking that up says no for every variant: `lib/string.posix.sh` is not a
-# module called `string.posix`, it is one of the files module `string` can be.
-#
-# Here rather than in each checker because three of them asked the question
-# separately and all three got a different wrong answer the day a variant
-# appeared.
-_lib_nut_files() {
-    local root="$1" name file _rest
-    [[ -r "${root}/lib.nut" ]] || return 1
-    while read -r name file _rest || [[ -n "$name" ]]; do
-        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
-        [[ -n "$file" ]] && printf '%s\n' "$file"
-    done < "${root}/lib.nut"
-}
-
-# _lib_nut_variants_of <root> <file>
-#
-# The other files declared for whichever module declares this one, this one
-# excluded. Empty when the file is not a variant, which is the common case.
-#
-# What a checker wants when two files legitimately hold the same function
-# names, or when one appears to call into the other: they are one module
-# written twice for two shells, not two modules.
-_lib_nut_variants_of() {
-    local root="$1" want="$2" name file _rest owner=""
-    [[ -r "${root}/lib.nut" ]] || return 1
-    while read -r name file _rest || [[ -n "$name" ]]; do
-        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
-        [[ "$file" == "$want" ]] && { owner="$name"; break; }
-    done < "${root}/lib.nut"
-    [[ -n "$owner" ]] || return 1
-    while read -r name file _rest || [[ -n "$name" ]]; do
-        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
-        [[ "$name" == "$owner" && "$file" != "$want" ]] && printf '%s\n' "$file"
-    done < "${root}/lib.nut"
-    return 0
 }
 
 # _lib_nut_modules <root>

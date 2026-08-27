@@ -13,7 +13,8 @@
 # shell and reports what will not parse. A parse failure is fatal in a way a
 # runtime failure is not: the shell rejects the whole file before running a
 # line of it, so no guard inside the file can help and the only fix is to not
-# source that file on that shell. That is exactly what a `when=` row is for.
+# source that file on that shell. That is exactly what a `#[shell(...)]`
+# gate is for.
 #
 # It cannot see a construct that parses and then misbehaves. `declare -A` is
 # the standing example: dash parses it as a command and fails at runtime. So a
@@ -100,16 +101,23 @@ _is_exempt() {
 # Only `shell:` counts. A row predicated on `have:` is still sourced on a POSIX
 # shell wherever that tool exists, so it has to parse there.
 _shell_gated_files() {
-    local root="$1" name file rest word
+    local root="$1" name file rest pending=0
     [[ -r "${root}/lib.nut" ]] || return 0
     while read -r name file rest || [[ -n "$name" ]]; do
-        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        [[ -z "$name" ]] && continue
+        # A gate attaches downward to the next declaration and accumulates, so
+        # a `#[shell(...)]` seen here marks whatever row comes next.
+        if [[ "${name:0:2}" == "#[" ]]; then
+            case "$name" in \#\[shell\(*) pending=1 ;; esac
+            continue
+        fi
+        [[ "${name:0:1}" == "#" ]] && { pending=0; continue; }
         [[ -n "$file" ]] || continue
-        for word in $rest; do
-            case "$word" in
-                when=*shell:*) printf '%s\n' "$file" ;;
-            esac
-        done
+        # Only `shell`. A `has(bin(...))` row is still sourced on a POSIX shell
+        # wherever that tool exists, so it has to parse there, and discounting
+        # it would hide a real gap.
+        [[ "$pending" -eq 1 ]] && printf '%s\n' "$file"
+        pending=0
     done < "${root}/lib.nut"
 }
 

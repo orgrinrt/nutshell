@@ -130,30 +130,31 @@ _pf_lib() {
 }
 
 #[test]
-it_discounts_a_file_reached_only_behind_a_shell_predicate() {
-    local d; d="$(_pf_lib 'string  lib/string.sh        when=shell:bash4
+it_discounts_a_file_reached_only_behind_a_shell_gate() {
+    local d; d="$(_pf_lib '#[shell(bash4)]
+string  lib/string.sh
 string  lib/string.posix.sh
 other   lib/other.sh')"
-    local got; got="$(_shell_gated_files "$d")"
-    assert_eq "$got" "lib/string.sh"
+    assert_eq "$(_shell_gated_files "$d")" "lib/string.sh"
     rm -rf "$d"
 }
 
 #[test]
-it_counts_a_file_reached_behind_a_tool_predicate() {
-    # `have:` is not `shell:`. A row predicated on a tool is still sourced on a
-    # POSIX shell wherever that tool exists, so it has to parse there, and
-    # discounting it would hide a real gap.
-    local d; d="$(_pf_lib 'text  lib/text.fast.sh  when=have:grep
+it_counts_a_file_reached_behind_a_tool_gate() {
+    # `has(bin(...))` is not `shell(...)`. A row gated on a tool is still
+    # sourced on a POSIX shell wherever that tool exists, so it has to parse
+    # there, and discounting it would hide a real gap.
+    local d; d="$(_pf_lib '#[has(bin(grep))]
+text  lib/text.fast.sh
 text  lib/text.sh')"
     assert_empty "$(_shell_gated_files "$d")"
     rm -rf "$d"
 }
 
 #[test]
-it_discounts_nothing_in_a_manifest_with_no_predicates() {
-    # The control. A matcher that returned every file would empty the report
-    # and read as a floor that is already reached.
+it_discounts_nothing_in_a_manifest_with_no_gates() {
+    # The control. A matcher returning every file would empty the report and
+    # read as a floor that is already reached.
     local d; d="$(_pf_lib 'one  lib/one.sh
 two  lib/two.sh  internal')"
     assert_empty "$(_shell_gated_files "$d")"
@@ -161,14 +162,21 @@ two  lib/two.sh  internal')"
 }
 
 #[test]
-it_reads_a_shell_predicate_written_after_a_visibility() {
-    # The trailing columns are words, not positions, and this reader has to
-    # agree with the resolver about that or the two disagree about which file
-    # a POSIX shell ever sees.
-    local d; d="$(_pf_lib 'a  lib/a.sh  internal when=shell:bash4
-b  lib/b.sh  when=shell:bash internal')"
-    local got; got="$(_shell_gated_files "$d")"
-    assert_contains "$got" "lib/a.sh"
-    assert_contains "$got" "lib/b.sh"
+it_does_not_carry_a_gate_past_the_row_it_applies_to() {
+    # A gate attaches to the next declaration and stops. Carried on, one shell
+    # gate near the top would discount every file under it and the number
+    # would read as a floor already reached.
+    local d; d="$(_pf_lib '#[shell(bash4)]
+a  lib/a.sh
+b  lib/b.sh')"
+    assert_eq "$(_shell_gated_files "$d")" "lib/a.sh"
+    rm -rf "$d"
+}
+
+#[test]
+it_does_not_read_an_ordinary_comment_as_a_gate() {
+    local d; d="$(_pf_lib '# prose about the next one
+a  lib/a.sh')"
+    assert_empty "$(_shell_gated_files "$d")"
     rm -rf "$d"
 }

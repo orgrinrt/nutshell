@@ -186,3 +186,79 @@ it_does_not_define_split_on_the_floor() {
     out="$(bash -c 'nut_once() { return 0; }; . "$1" >/dev/null 2>&1; command -v str_split >/dev/null && echo there || echo ABSENT' _ "$BASHFILE" 2>&1)"
     assert_eq "$out" "there"
 }
+
+#[test]
+# The out-name form, which is why three modules stopped keeping their own copy
+# of this loop.
+#
+# `json.sh`, `toml/write.sh` and `extern.sh` each grew a private `_x_gsub`
+# because the printing form costs a fork per call and strips a trailing
+# newline. Then one of the three diverged and shipped an injection hole the
+# other two did not have, which is what a fourth copy buys you.
+#
+# Driven through the same two shells as everything else here, because an
+# out-name has to work on both halves or a caller works on one shell and not
+# the other.
+it_answers_into_a_named_variable_in_both_halves() {
+    local sh; sh="$(_sp_shell)" || { skip "no posix shell here"; return 0; }
+    local probe='
+        . "$1" >/dev/null 2>&1
+        out=""
+        str_replace "a,b,c" "," "-" out
+        printf "[%s]" "$out"
+        out=""
+        str_replace "abc" "" "X" out
+        printf "[%s]" "$out"
+    '
+    local b p
+    b="$(bash -c "nut_once() { return 0; }; $probe" _ "$BASHFILE" 2>/dev/null)"
+    p="$("$sh" -c "$probe" _ "$POSIXFILE" 2>/dev/null)"
+    assert_eq "$b" "[a-b-c][abc]"
+    assert_eq "$p" "$b"
+}
+
+#[test]
+# The out-name is validated before either exit, because both reach `eval`.
+#
+# The empty-needle shortcut sat *above* the validation in the private copies,
+# so it ran the name unvalidated. The ordinary path refused correctly the whole
+# time, which is why a test that only tried a bad name with a real needle said
+# everything was fine.
+it_refuses_a_bad_out_name_on_both_exits() {
+    local sh; sh="$(_sp_shell)" || { skip "no posix shell here"; return 0; }
+    local d; d="$(mktemp -d)"
+    local probe='
+        . "$1" >/dev/null 2>&1
+        str_replace "abc" "b" "Z" "v; touch '"'"'$2/nonempty'"'"'" ; printf "%s," "$?"
+        str_replace "abc" ""  "Z" "v; touch '"'"'$2/empty'"'"'"    ; printf "%s"  "$?"
+    '
+    local b p
+    b="$(bash -c "nut_once() { return 0; }; $probe" _ "$BASHFILE" "$d" 2>/dev/null)"
+    assert_eq "$b" "2,2"
+    assert_fails test -e "$d/nonempty"
+    assert_fails test -e "$d/empty"
+
+    rm -f "$d"/*
+    p="$("$sh" -c "$probe" _ "$POSIXFILE" "$d" 2>/dev/null)"
+    assert_eq "$p" "2,2"
+    assert_fails test -e "$d/nonempty"
+    assert_fails test -e "$d/empty"
+    rm -rf "$d"
+}
+
+#[test]
+# A replacement containing backslashes survives, in both halves.
+#
+# The bash half had `${str//"$from"/$to}` with the replacement unquoted, so it
+# went through quote removal and `\\` collapsed to `\`: it answered `\` where
+# the floor half answered `\\`. It sat undetected because every caller kept its
+# own copy of the loop, and surfaced the moment they stopped.
+#
+# The escapers in `json.sh` and `toml/write.sh` double a backslash as their
+# first step, so this is the exact shape they depend on.
+it_replaces_with_a_backslash_the_same_way_in_both_halves() {
+    local sh; sh="$(_sp_shell)" || { skip "no posix shell here"; return 0; }
+    _same "$sh" str_replace "a" "a" '\\'
+    _same "$sh" str_replace 'x\y' '\' '\\'
+    _same "$sh" str_replace 'a\b"c' '\' '\\'
+}

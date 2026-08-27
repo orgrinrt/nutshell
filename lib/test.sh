@@ -307,7 +307,7 @@ EOF
         local tally why=""
         tally="$(cat "$_TEST_MARK" 2>/dev/null)"
         rc=0
-        _has_z=0; case "$tally" in *z*) _has_z=1 ;; esac
+        local _has_z=0; case "$tally" in *z*) _has_z=1 ;; esac
         if [ "$_has_z" -eq 0 ]; then
             # What the marker actually held, because "did not finish" alone is
             # not diagnosable and this has fired intermittently on tests that
@@ -370,7 +370,7 @@ test_summary() {
         local f _tf_i=0 _tf_n
         _tf_n="$(list_len _TEST_FAILURES)"
         while [ "$_tf_i" -lt "$_tf_n" ]; do
-            f="$(list_get _TEST_FAILURES "$_tf_i")"
+            list_read f _TEST_FAILURES "$_tf_i"
             log_tagged "FAILED" red "$f"
             _tf_i=$(( _tf_i + 1 ))
         done

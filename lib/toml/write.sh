@@ -18,6 +18,11 @@
 [ -n "${_NUTSHELL_TOML_WRITE_SH:-}" ] && return 0
 _NUTSHELL_TOML_WRITE_SH=1
 
+# `str_replace` with an out-name, for the escaping below. This file carried its
+# own copy of that loop, as did `json.sh` and `extern.sh`; one of the three then
+# diverged and shipped an injection hole that the other two did not have.
+use string
+
 # The control characters a basic string escapes, as themselves. Built once,
 # because there is no `$'\n'` here to write one inline with. The trailing `.`
 # is because command substitution strips trailing newlines and the newline is
@@ -97,31 +102,6 @@ _tw_is_key() {
 _tw_has_content() {
     case "$1" in *[!" "]*) return 0 ;; esac
     return 1
-}
-
-# Every occurrence of one string swapped for another, into the named variable.
-# There is no `${x//a/b}` here.
-_tw_gsub() {
-    # An empty needle matches everywhere and the loop never shortens the
-    # remainder, so it appends forever. `str_replace` guards this on its first
-    # line and this copy did not, which is the cost of the second copy.
-    [ -n "$2" ] || { eval "$4=\$1"; return 0; }
-    # The out-name reaches `eval`, so it is checked the way every other
-    # out-name in this library is: `_json_gsub a b c 'v; echo X'` ran the echo.
-    case "$4" in
-        ''|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;;
-    esac
-    _tw_rest="$1"; _tw_acc=""
-    while :; do
-        case "$_tw_rest" in
-            *"$2"*)
-                _tw_acc="${_tw_acc}${_tw_rest%%"$2"*}$3"
-                _tw_rest="${_tw_rest#*"$2"}"
-                ;;
-            *) break ;;
-        esac
-    done
-    eval "$4=\${_tw_acc}\${_tw_rest}"
 }
 
 # A run of digits, with an optional leading minus, and at least one digit.
@@ -291,13 +271,13 @@ _toml_write_value() {
         "["*"]")    printf '%s' "$_twv"; return 0 ;;
     esac
     # Backslash first. Any other order escapes the backslashes this step adds.
-    _tw_gsub "$_twv" '\' '\\' _twv_esc
-    _tw_gsub "$_twv_esc" '"' '\"' _twv_esc
-    _tw_gsub "$_twv_esc" "$_TW_NL" '\n' _twv_esc
-    _tw_gsub "$_twv_esc" "$_TW_CR" '\r' _twv_esc
-    _tw_gsub "$_twv_esc" "$_TW_TAB" '\t' _twv_esc
-    _tw_gsub "$_twv_esc" "$_TW_BS" '\b' _twv_esc
-    _tw_gsub "$_twv_esc" "$_TW_FF" '\f' _twv_esc
+    str_replace "$_twv" '\' '\\' _twv_esc
+    str_replace "$_twv_esc" '"' '\"' _twv_esc
+    str_replace "$_twv_esc" "$_TW_NL" '\n' _twv_esc
+    str_replace "$_twv_esc" "$_TW_CR" '\r' _twv_esc
+    str_replace "$_twv_esc" "$_TW_TAB" '\t' _twv_esc
+    str_replace "$_twv_esc" "$_TW_BS" '\b' _twv_esc
+    str_replace "$_twv_esc" "$_TW_FF" '\f' _twv_esc
     printf '"%s"' "$_twv_esc"
 }
 

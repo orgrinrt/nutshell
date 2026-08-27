@@ -45,23 +45,7 @@
 [ -n "${_NUTSHELL_EXTERN_SH:-}" ] && return 0
 _NUTSHELL_EXTERN_SH=1
 
-# Every occurrence of one string swapped for another, into a named variable.
-# There is no `${x//from/to}` here.
-_extern_gsub() {
-    _eg_rest="$1"; _eg_acc=""
-    [ -n "$2" ] || { eval "$4=\$1"; return 0; }
-    case "$4" in ''|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;; esac
-    while :; do
-        case "$_eg_rest" in
-            *"$2"*) _eg_acc="${_eg_acc}${_eg_rest%%"$2"*}$3"
-                    _eg_rest="${_eg_rest#*"$2"}" ;;
-            *) break ;;
-        esac
-    done
-    eval "$4=\${_eg_acc}\${_eg_rest}"
-}
-
-use toml xdg fs log validate
+use toml string xdg fs log validate
 
 # _extern_manifest
 #
@@ -697,12 +681,12 @@ extern_resolve() {
     _has_slash=0; case "$rest" in */*) _has_slash=1 ;; esac
     if [ "$_has_slash" -eq 1 ]; then
         _spec_fixed=""
-        _extern_gsub "$spec" "/" "::" _spec_fixed
+        str_replace "$spec" "/" "::" _spec_fixed
         log_error "'${spec}' separates modules with '/'; use '::': ${_spec_fixed}"
         return 1
     fi
     local declared="${spec#*::}"
-    _extern_gsub "$rest" "::" "/" rest
+    str_replace "$rest" "::" "/" rest
 
     root="$(extern_path "$name")" || return 1
 

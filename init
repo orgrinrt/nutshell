@@ -58,7 +58,7 @@ _NUTSHELL_ROOT="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 
 # Export for use by modules
 export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
-export NUTSHELL_VERSION="0.4.2"
+export NUTSHELL_VERSION="0.5.0"
 
 # Script identity belongs to the interpreter invocation, not to ancestry. The
 # interpreter exports NUTSHELL_SCRIPT and NUTSHELL_SCRIPT_DIR after this file
@@ -226,6 +226,8 @@ use() {
 #   log                 lib/log.sh
 #   tui::term           libs/tui/term.sh
 #   json::impl::jq      lib/json/impl/jq.sh      internal
+#   text                lib/text.fast.sh         when=have:grep
+#   text                lib/text.sh
 #
 # `internal` means the library's own file, reachable by `super::` from inside
 # and not by name from outside. Files picked at runtime by capability, like the
@@ -233,16 +235,60 @@ use() {
 # module that chooses between them, and were never modules anybody names.
 # The third argument, when given, is the visibility a caller is allowed to
 # reach: `any` from inside the unit, `public` from outside it.
+#
+# A module may be declared more than once, each row carrying `when=<predicate>`,
+# and the first row whose predicate holds is the one sourced:
+#
+#   text  lib/text.bash.sh   when=shell:bash4
+#   text  lib/text.grep.sh   when=have:grep
+#   text  lib/text.sh
+#
+# The row with no predicate is the floor and always holds. It goes last,
+# because the order in the file is the order they are tried, and a floor above
+# a better row makes that row unreachable.
+#
+# The decision is taken **before the file is sourced**, which is the whole
+# point of putting it here rather than inside a module. A file using a
+# construct the running shell cannot parse fails at parse time, so no
+# `if` inside it can guard it: the guard has to sit above the sourcing, and
+# `use` is where that is.
+#
+# This is the shell half. The half that picks between tools already exists and
+# is not replaced: `text_grep` chooses `grep` over `perl` at first call and
+# reloads. That is per function and inside a module; this is per module and
+# above it, and a library will use both.
 _lib_nut_lookup() {
     local root="$1" want="$2" reach="${3:-any}" name file vis
     [[ -r "${root}/lib.nut" ]] || return 1
     # `|| [[ -n "$name" ]]`, so a file whose last line has no newline keeps
     # its last declaration. Without it the module simply is not there, and the
     # checker agreed because it read the file another way.
-    while read -r name file vis || [[ -n "$name" ]]; do
+    local rest word pred
+    while read -r name file rest || [[ -n "$name" ]]; do
         [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
         [[ "$name" == "$want" ]] || continue
         [[ -n "$file" ]] || return 1
+
+        # Everything after the file is read as words rather than by position,
+        # because a row may carry a visibility and a predicate both and
+        # demanding an order of them is a rule nobody would remember.
+        #
+        # Taken by position first, and `internal when=...` then read the
+        # visibility, ignored the fourth word entirely, and loaded the module
+        # on a machine whose predicate did not hold. Silently, which is the
+        # only way this kind of thing ever goes.
+        vis=""; pred=""
+        for word in $rest; do
+            case "$word" in
+                when=*) pred="${word#when=}" ;;
+                *)      vis="$word" ;;
+            esac
+        done
+
+        if [[ -n "$pred" ]] && ! _nut_when "$pred"; then
+            continue
+        fi
+
         if [[ "$reach" == "public" && "${vis:-}" == "internal" ]]; then
             echo "nutshell: '${want}' is internal to that library" >&2
             return 1
@@ -251,6 +297,106 @@ _lib_nut_lookup() {
         return 0
     done < "${root}/lib.nut"
     return 1
+}
+
+# _nut_when <predicate> -> 0 when it holds
+#
+# The vocabulary is deliberately four words and no operators beyond `+`. A
+# predicate language grows into a parser, and this one is read before any
+# module is loaded, so a parser here is the same cycle the manifest format
+# exists to avoid.
+#
+#   have:<name>     that command is on PATH
+#   shell:bash      the running shell is bash, any version
+#   shell:bash4     bash 4 or newer
+#   env:<NAME>      that variable is set and not empty
+#   a+b             both
+#
+# Written in `case` and `command -v` rather than `[[ =~ ]]`, so it keeps
+# working when this file becomes POSIX sh. That is the point of the whole
+# arrangement and it would be strange to start by breaking it.
+declare -gA _NUT_WHEN_ANSWER=()
+
+_nut_when() {
+    local expr="$1" part rest="$1"
+    [[ -n "$expr" ]] || return 0
+
+    # Only `have:` is remembered, and only because it is the only word that
+    # costs anything. `shell:` and `env:` are a `case` on a variable, which is
+    # free, and both can legitimately change: `env:` is a caller's variable,
+    # and a test driving the bash floor through its branches sets
+    # `BASH_VERSION` itself. Caching those made that test read one answer for
+    # every version it tried, which is the cache being wrong rather than the
+    # test being awkward.
+    #
+    # It reaches one lookup and no further, and that is worth stating because
+    # the first version of this comment claimed otherwise. Every caller of
+    # `_lib_nut_lookup` wraps it in a command substitution, which is a
+    # subshell, so whatever this writes dies with the lookup that wrote it. A
+    # module with several predicated rows shares the answer between them; two
+    # `use` calls do not.
+    #
+    # Measured: a predicated row resolves at about 113% of a plain one either
+    # way, reproducibly, at `benches/module-resolve`. The fork around the
+    # lookup is the larger cost and it is paid by every module, predicate or
+    # not. Removing it means returning through a variable rather than by
+    # printing, which is five call sites and its own change.
+    case "$expr" in
+        *shell:*|*env:*) : ;;
+        *)  case "${_NUT_WHEN_ANSWER[$expr]:-}" in
+                yes) return 0 ;;
+                no)  return 1 ;;
+            esac ;;
+    esac
+
+    while [[ -n "$rest" ]]; do
+        case "$rest" in
+            *+*) part="${rest%%+*}"; rest="${rest#*+}" ;;
+            *)   part="$rest"; rest="" ;;
+        esac
+        [[ -n "$part" ]] || continue
+
+        case "$part" in
+            have:*)
+                command -v "${part#have:}" >/dev/null 2>&1 \
+                    || { _NUT_WHEN_ANSWER["$expr"]=no; return 1; } ;;
+            env:*)
+                # Indirect rather than `eval`, because the name comes out of a
+                # file and `eval` on it would be arbitrary execution at load
+                # time, in the one place that runs before anything else.
+                local _n="${part#env:}"
+                # The shape is checked before the indirection, because bash
+                # errors on `${!x}` when `x` does not hold a valid name, and
+                # that error aborts whoever was loading a module. Nothing is
+                # executed either way, so this is about failing quietly rather
+                # than about safety: a predicate that cannot hold should
+                # simply not hold.
+                case "$_n" in
+                    ""|*[!A-Za-z0-9_]*|[0-9]*) return 1 ;;
+                esac
+                # Not remembered. Every other word here is a fact about the
+                # machine and holds for the life of the process; this one is a
+                # variable a caller may set between two loads.
+                [[ -n "${!_n:-}" ]] || return 1 ;;
+            shell:bash)
+                [[ -n "${BASH_VERSION:-}" ]] || return 1 ;;
+            shell:bash4)
+                case "${BASH_VERSION:-}" in
+                    ""|1.*|2.*|3.*) return 1 ;;
+                esac ;;
+            *)
+                # An unknown word is not a licence to load the row. A typo in a
+                # predicate would otherwise silently promote a variant onto
+                # every machine, which is the opposite of what it is for.
+                printf 'nutshell: unknown predicate %s\n' "$part" >&2
+                return 1 ;;
+        esac
+    done
+    case "$expr" in
+        *shell:*|*env:*) : ;;
+        *) _NUT_WHEN_ANSWER["$expr"]=yes ;;
+    esac
+    return 0
 }
 
 # _lib_nut_modules <root>

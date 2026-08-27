@@ -1,0 +1,7 @@
+case      What a when= row costs at module resolve time
+size      200
+repeats   7
+baseline  no trailing column
+bash      5.3.15(1)-release
+host      Darwin arm64
+taken     2026-08-27T02:42:24Z

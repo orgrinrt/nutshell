@@ -137,6 +137,42 @@ _toml_clean_line() {
     str_trim "$out"
 }
 
+# A codepoint as UTF-8 bytes, into a named variable.
+#
+# Not `printf '\uXXXX'`, which is what this used to be. That escape is decoded
+# against the current locale, so under `LC_ALL=C` bash emits the escape text
+# unchanged and a value comes back as `caf\u00E9` with no error anywhere. The
+# C locale is what a container and a build machine tend to run, which makes it
+# exactly the case that must work.
+#
+# `\xNN` writes a byte and means the same thing everywhere, so the encoding is
+# done here in arithmetic and handed over as bytes. A shell string is a byte
+# string, so nothing downstream has to know.
+#
+# Refuses a surrogate half and anything past the last codepoint, because
+# neither has a UTF-8 encoding; the caller keeps the escape as typed.
+_toml_utf8() {
+    local cp="$1" out="$2"
+    [[ "$out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
+    (( cp < 0 || cp > 0x10FFFF )) && return 1
+    (( cp >= 0xD800 && cp <= 0xDFFF )) && return 1
+    if (( cp < 0x80 )); then
+        printf -v "$out" '%b' "$(printf '\\x%02x' "$cp")"
+    elif (( cp < 0x800 )); then
+        printf -v "$out" '%b' "$(printf '\\x%02x\\x%02x' \
+            $(( 0xC0 | (cp >> 6) )) $(( 0x80 | (cp & 0x3F) )))"
+    elif (( cp < 0x10000 )); then
+        printf -v "$out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x' \
+            $(( 0xE0 | (cp >> 12) )) $(( 0x80 | ((cp >> 6) & 0x3F) )) \
+            $(( 0x80 | (cp & 0x3F) )))"
+    else
+        printf -v "$out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
+            $(( 0xF0 | (cp >> 18) )) $(( 0x80 | ((cp >> 12) & 0x3F) )) \
+            $(( 0x80 | ((cp >> 6) & 0x3F) )) $(( 0x80 | (cp & 0x3F) )))"
+    fi
+    return 0
+}
+
 # Decode the escapes a TOML basic string is allowed to carry.
 #
 # Only a basic string has them: a literal string is taken as typed, which is
@@ -169,15 +205,19 @@ _toml_unescape() {
             '"') out+='"' ;;
             "\\") out+="\\" ;;
             u|U)
-                # \uXXXX and \UXXXXXXXX. printf knows the escape; anything
-                # that is not the right number of hex digits is not one, and
-                # is kept as typed rather than silently eaten.
+                # \uXXXX and \UXXXXXXXX. Anything that is not the right
+                # number of hex digits is not one, and is kept as typed rather
+                # than silently eaten.
                 local n=4; [[ "$next" == "U" ]] && n=8
                 local hex="${s:i+1:n}"
                 if [[ "${#hex}" -eq "$n" && "$hex" =~ ^[0-9A-Fa-f]+$ ]]; then
-                    # shellcheck disable=SC2059
-                    out+="$(printf "\\$next$hex")"
-                    i=$(( i + n ))
+                    local __u_enc=""
+                    if _toml_utf8 "$(( 16#$hex ))" __u_enc; then
+                        out+="$__u_enc"
+                        i=$(( i + n ))
+                    else
+                        out+="\\$next"
+                    fi
                 else
                     out+="\\$next"
                 fi

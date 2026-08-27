@@ -522,3 +522,64 @@ it_reads_a_section_pair_with_an_escaped_quote_in_it() {
     assert_contains "$pairs" 'say " now'
     assert_contains "$pairs" "n=2"
 }
+
+#[test]
+# The escape decoded under the C locale, which is the case that was broken.
+#
+# It used to be `printf '\uXXXX'`, and that escape is decoded against the
+# current locale: under `LC_ALL=C` bash emitted the escape text unchanged, so
+# a value came back as `caf\u00E9` with no error raised anywhere. A container
+# and a build machine usually run the C locale, so the machines most likely to
+# hit it are the ones least likely to have anyone watching.
+#
+# Both locales are asserted rather than only the broken one, because the fix
+# has to keep the case that already worked.
+it_decodes_a_unicode_escape_in_any_locale() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'two = "caf\\u00e9"\n'
+        printf 'four = "\\U0001F600"\n'
+        printf 'ascii = "tab\\u0009end"\n'
+    } > "$d/t.toml"
+
+    local loc got
+    for loc in C en_US.UTF-8; do
+        got="$(LC_ALL="$loc" toml_get "$d/t.toml" two)"
+        assert_eq "$got" "café" "two-byte codepoint under LC_ALL=${loc}"
+        got="$(LC_ALL="$loc" toml_get "$d/t.toml" four)"
+        assert_eq "$got" "😀" "four-byte codepoint under LC_ALL=${loc}"
+        got="$(LC_ALL="$loc" toml_get "$d/t.toml" ascii)"
+        assert_eq "$got" "tab	end" "one-byte codepoint under LC_ALL=${loc}"
+    done
+    rm -rf "$d"
+}
+
+#[test]
+# What has no encoding is kept as typed rather than turned into something.
+#
+# A surrogate half and anything past the last codepoint are not characters,
+# and a run of hex digits that is too short was never an escape. Each is left
+# exactly as written, because silently producing a replacement character would
+# lose the fact that the file said something impossible.
+it_keeps_an_escape_that_names_no_character() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'lone = "\\uD800"\n'
+        printf 'past = "\\U00110000"\n'
+        printf 'nothex = "\\uZZZZ"\n'
+        printf 'short = "\\u00"\n'
+    } > "$d/t.toml"
+
+    local loc
+    for loc in C en_US.UTF-8; do
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" lone)" '\uD800' \
+            "surrogate half under LC_ALL=${loc}"
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" past)" '\U00110000' \
+            "past the last codepoint under LC_ALL=${loc}"
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" nothex)" '\uZZZZ' \
+            "not hex under LC_ALL=${loc}"
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" short)" '\u00' \
+            "too few digits under LC_ALL=${loc}"
+    done
+    rm -rf "$d"
+}

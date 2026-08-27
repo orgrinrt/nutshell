@@ -22,7 +22,7 @@ _text_replace_sed_impl() {
     local sed_path="${_TOOL_PATH_sed:-sed}"
     local variant="${_TOOL_VARIANT_sed:-unknown}"
     
-    if [[ "$variant" == "gnu" ]]; then
+    if [ "$variant" = "gnu" ]; then
         "$sed_path" -i "s/${pattern}/${replacement}/g" "$file"
     else
         # BSD sed requires '' after -i for no backup

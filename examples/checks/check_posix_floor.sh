@@ -155,6 +155,13 @@ _posix_bashisms() {
     # Comments stripped first, crudely. A `#` inside a string is taken as one,
     # which loses a real finding now and then; the alternative is parsing shell
     # to run a warning, and this check never blocks.
+    #
+    # It over-reports the other way too, on a program written in another
+    # language and passed as a string. `json/impl/jq.sh` carries a jq program
+    # with `((` in it, which is jq's grouping and not shell arithmetic, and no
+    # pattern short of parsing tells the two apart. Left flagged rather than
+    # narrowed, because a narrower rule would miss real ones and this one only
+    # warns.
     sed -e 's/#.*$//' "$file" 2>/dev/null | grep -noE \
         -e '\[\[' \
         -e '(^|[[:space:];&|])\(\(' \

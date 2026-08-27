@@ -37,7 +37,7 @@ _text_replace_awk_impl() {
         print
     }' "$file" > "$temp"
     
-    if [ $? -eq 0 ] && [[ -s "$temp" || ! -s "$file" ]]; then
+    if [ $? -eq 0 ] && { [ -s "$temp" ] || [ ! -s "$file" ]; }; then
         mv "$temp" "$file"
     else
         rm -f "$temp"

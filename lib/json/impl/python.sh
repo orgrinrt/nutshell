@@ -33,9 +33,9 @@ nut_once || return 0
 # Get python command (python3 preferred)
 _json_python_cmd() {
     if deps_has "python3"; then
-        echo "${_TOOL_PATH[python3]}"
+        echo "${_TOOL_PATH_python3}"
     else
-        echo "${_TOOL_PATH[python]}"
+        echo "${_TOOL_PATH_python}"
     fi
 }
 

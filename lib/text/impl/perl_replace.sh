@@ -22,7 +22,7 @@ _text_replace_perl_impl() {
     [[ -z "$pattern" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local perl_path="${_TOOL_PATH[perl]:-perl}"
+    local perl_path="${_TOOL_PATH_perl:-perl}"
     
     # perl -i does in-place editing consistently across platforms
     # -p reads input line by line and prints after each line

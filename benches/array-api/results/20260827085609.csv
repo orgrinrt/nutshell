@@ -1,0 +1,6 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash declare -a,8,9,within the noise,yes
+slots by index,11,12,137%,yes
+string  for over the split,8,9,within the noise,yes
+string  split then shifted,9,9,within the noise,yes
+one string  scanned,58,87,725%,yes

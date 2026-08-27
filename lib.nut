@@ -24,6 +24,12 @@ json::impl::jq           lib/json/impl/jq.sh          internal
 json::impl::perl         lib/json/impl/perl.sh        internal
 json::impl::python       lib/json/impl/python.sh      internal
 log                      lib/log.sh
+#[shell(bash4)]
+list                     lib/list.bash.sh
+list                     lib/list.sh
+#[shell(bash4)]
+map                      lib/map.bash.sh
+map                      lib/map.sh
 modgraph                 lib/modgraph.sh
 nutshell                 nutshell.sh
 os                       lib/os.sh

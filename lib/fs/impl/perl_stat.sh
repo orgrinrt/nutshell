@@ -18,7 +18,7 @@ _fs_size_perl_impl() {
     local path="${1:-}"
     [[ ! -f "$path" ]] && return 1
     
-    local perl_path="${_TOOL_PATH[perl]:-perl}"
+    local perl_path="${_TOOL_PATH_perl:-perl}"
     
     # perl stat returns list: (dev, ino, mode, nlink, uid, gid, rdev, size, ...)
     # Index 7 is size
@@ -30,7 +30,7 @@ _fs_mtime_perl_impl() {
     local path="${1:-}"
     [[ ! -e "$path" ]] && return 1
     
-    local perl_path="${_TOOL_PATH[perl]:-perl}"
+    local perl_path="${_TOOL_PATH_perl:-perl}"
     
     # perl stat returns list: (..., atime, mtime, ctime)
     # Index 9 is mtime

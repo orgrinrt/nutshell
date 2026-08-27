@@ -256,7 +256,7 @@ fs_size() {
     local impl=""
     
     if deps_has "stat"; then
-        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+        local variant="${_TOOL_VARIANT_stat:-unknown}"
         case "$variant" in
             gnu)     impl="stat_gnu" ;;
             bsd)     impl="stat_bsd" ;;
@@ -319,7 +319,7 @@ fs_mtime() {
     local impl=""
     
     if deps_has "stat"; then
-        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+        local variant="${_TOOL_VARIANT_stat:-unknown}"
         case "$variant" in
             gnu)     impl="stat_gnu" ;;
             bsd)     impl="stat_bsd" ;;
@@ -381,7 +381,7 @@ fs_temp_file() {
     local prefix="${1:-tmp}"
     
     if deps_has "mktemp"; then
-        "${_TOOL_PATH[mktemp]}" "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+        "${_TOOL_PATH_mktemp}" "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
     else
         # Fallback using $$ and RANDOM
         local path="${TMPDIR:-/tmp}/${prefix}.${$}.${RANDOM}"
@@ -396,7 +396,7 @@ fs_temp_dir() {
     local prefix="${1:-tmp}"
     
     if deps_has "mktemp"; then
-        "${_TOOL_PATH[mktemp]}" -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+        "${_TOOL_PATH_mktemp}" -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
     else
         # Fallback using $$ and RANDOM
         local path="${TMPDIR:-/tmp}/${prefix}.${$}.${RANDOM}"

@@ -18,7 +18,7 @@ _text_grep_grep_impl() {
     [[ -z "$pattern" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
     
     # Use -E for extended regex by default
     "$grep_path" -E "$pattern" "$file" 2>/dev/null || true
@@ -32,7 +32,7 @@ _text_contains_grep_impl() {
     [[ -z "$pattern" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
     
     # -q for quiet mode; just return exit status
     "$grep_path" -qE "$pattern" "$file" 2>/dev/null
@@ -46,7 +46,7 @@ _text_count_matches_grep_impl() {
     [[ -z "$pattern" ]] && { echo "0"; return 1; }
     [[ ! -f "$file" ]] && { echo "0"; return 1; }
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
     
     # -c counts matching lines
     "$grep_path" -cE "$pattern" "$file" 2>/dev/null || echo "0"

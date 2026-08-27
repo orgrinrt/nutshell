@@ -310,7 +310,9 @@ use os log json http
 | `deps` | Tool detection (`deps_has`, `deps_require`, `deps_path`) |
 | `fs` | Filesystem (`fs_exists`, `fs_mkdir`, `fs_temp_file`, `fs_size`) |
 | `string` | String manipulation (`str_upper`, `str_lower`, `str_trim`, `str_contains`) |
-| `array` | Array operations (`arr_contains`, `arr_unique`, `arr_length`) |
+| `array` | Operations over a list of arguments (`arr_contains`, `arr_index`, `arr_filter`), and over a `list` in place (`arr_unique`, `arr_reverse`, `arr_sort`) |
+| `list` | An ordered list that needs no bash array (`list_push`, `list_get`, `list_each`, `list_len`) |
+| `map` | A key to value table that needs no associative array (`map_set`, `map_get`, `map_has`, `map_keys`) |
 | `text` | Text processing (`text_grep`, `text_replace`, `text_count_matches`) |
 | `json` | JSON parsing (`json_get`, `json_set`, `json_valid`, `json_pretty`) |
 | `http` | HTTP requests (`http_get`, `http_post`, `http_download`) |

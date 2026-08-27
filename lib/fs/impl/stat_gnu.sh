@@ -15,7 +15,7 @@ _fs_size_stat_gnu_impl() {
     local path="${1:-}"
     [[ ! -f "$path" ]] && return 1
     
-    local stat_path="${_TOOL_PATH[stat]:-stat}"
+    local stat_path="${_TOOL_PATH_stat:-stat}"
     
     # GNU stat uses -c for format, %s for size in bytes
     "$stat_path" -c%s "$path"
@@ -26,7 +26,7 @@ _fs_mtime_stat_gnu_impl() {
     local path="${1:-}"
     [[ ! -e "$path" ]] && return 1
     
-    local stat_path="${_TOOL_PATH[stat]:-stat}"
+    local stat_path="${_TOOL_PATH_stat:-stat}"
     
     # GNU stat uses -c for format, %Y for mtime as epoch seconds
     "$stat_path" -c%Y "$path"

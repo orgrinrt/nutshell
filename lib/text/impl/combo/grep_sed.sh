@@ -48,7 +48,7 @@ _text_grep_sed_filtered_replace_impl() {
     
     # Build sed in-place flag based on variant
     local sed_inplace
-    if [[ "$variant" == "gnu" ]]; then
+    if [ "$variant" = "gnu" ]; then
         sed_inplace="-i"
     else
         sed_inplace="-i ''"
@@ -66,7 +66,7 @@ _text_grep_sed_filtered_replace_impl() {
             sed_cmd+="${num}s/${search}/${replace}/g;"
         done
         
-        if [[ "$variant" == "gnu" ]]; then
+        if [ "$variant" = "gnu" ]; then
             "$sed_path" -i "$sed_cmd" "$file"
         else
             "$sed_path" -i '' "$sed_cmd" "$file"
@@ -135,7 +135,7 @@ _text_replace_grep_sed_impl() {
     fi
     
     # Pattern exists, do the replacement
-    if [[ "$variant" == "gnu" ]]; then
+    if [ "$variant" = "gnu" ]; then
         "$sed_path" -i "s/${pattern}/${replacement}/g" "$file"
     else
         "$sed_path" -i '' "s/${pattern}/${replacement}/g" "$file"
@@ -146,32 +146,35 @@ _text_replace_grep_sed_impl() {
 # Public function replacements (when sourced)
 # -----------------------------------------------------------------------------
 
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    # Replace text_replace with optimized grep+sed version
-    text_replace() {
-        _text_replace_grep_sed_impl "$@"
-    }
-    
-    # Add new combo functions to the text module
-    
-    #[pub]
-    # Replace pattern only in lines matching a filter
-    # Usage: text_filtered_replace "filter_regex" "search" "replace" "file"
-    text_filtered_replace() {
-        _text_grep_sed_filtered_replace_impl "$@"
-    }
-    
-    #[pub]
-    # Extract matching lines and transform them (non-destructive)
-    # Usage: text_extract_transform "pattern" "search" "replace" "file" -> prints transformed lines
-    text_extract_transform() {
-        _text_grep_sed_extract_transform_impl "$@"
-    }
-    
-    #[pub]
-    # Count occurrences of secondary pattern within lines matching primary pattern
-    # Usage: text_count_in_matches "filter" "count_pattern" "file" -> "5"
-    text_count_in_matches() {
-        _text_grep_sed_count_in_matches_impl "$@"
-    }
-fi
+# Sourced, always: the resolver is the only thing that opens this file, and it
+# sources it. The `if [[ "${BASH_SOURCE[0]}" != "${0}" ]]` this replaces asked
+# whether that was so, which is a question with one answer and a bad
+# substitution under a POSIX shell, where there is no `BASH_SOURCE` to
+# subscript.
+# Replace text_replace with optimized grep+sed version
+text_replace() {
+    _text_replace_grep_sed_impl "$@"
+}
+
+# Add new combo functions to the text module
+
+#[pub]
+# Replace pattern only in lines matching a filter
+# Usage: text_filtered_replace "filter_regex" "search" "replace" "file"
+text_filtered_replace() {
+    _text_grep_sed_filtered_replace_impl "$@"
+}
+
+#[pub]
+# Extract matching lines and transform them (non-destructive)
+# Usage: text_extract_transform "pattern" "search" "replace" "file" -> prints transformed lines
+text_extract_transform() {
+    _text_grep_sed_extract_transform_impl "$@"
+}
+
+#[pub]
+# Count occurrences of secondary pattern within lines matching primary pattern
+# Usage: text_count_in_matches "filter" "count_pattern" "file" -> "5"
+text_count_in_matches() {
+    _text_grep_sed_count_in_matches_impl "$@"
+}

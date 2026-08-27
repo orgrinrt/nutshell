@@ -160,6 +160,12 @@ _posix_bashisms() {
     # which loses a real finding now and then; the alternative is parsing shell
     # to run a warning, and this check never blocks.
     #
+    # `[[` is matched only with whitespace after it, because bash's `[[` is a
+    # reserved word and always has some. Without that every `[[:space:]]` in a
+    # grep, sed or awk expression counted as a bashism, and this library is
+    # full of them: five in `text.sh` alone, every one inside a regex handed to
+    # another program.
+    #
     # It over-reports the other way too, on a program written in another
     # language and passed as a string. `json/impl/jq.sh` carries a jq program
     # with `((` in it, which is jq's grouping and not shell arithmetic, and no
@@ -167,7 +173,7 @@ _posix_bashisms() {
     # narrowed, because a narrower rule would miss real ones and this one only
     # warns.
     sed -e 's/#.*$//' "$file" 2>/dev/null | grep -noE \
-        -e '\[\[' \
+        -e '\[\[[[:space:]]' \
         -e '(^|[[:space:];&|])\(\(' \
         -e 'printf[[:space:]]+-v' \
         -e '(^|[[:space:];&|(])declare[[:space:]]' \

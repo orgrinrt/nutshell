@@ -42,6 +42,19 @@ _tc_store() {
     mkdir -p "$NUTSHELL_TOOLCHAINS/$name"
     printf 'export NUTSHELL_VERSION="%s"\n' "$v" \
         > "$NUTSHELL_TOOLCHAINS/$name/init"
+    # What a fetch leaves behind. An entry without it is not trusted, since a
+    # version string is not a content hash and a directory named for a release
+    # can hold something else that also calls itself that.
+    printf 'ref %s\nremote test\ncommit 0000000\n' "$v" \
+        > "$NUTSHELL_TOOLCHAINS/$name/.fetched"
+}
+
+# The same, minus the record: what an older nutshell left, or a hand-made
+# directory.
+_tc_store_unrecorded() {
+    local v="$1" name="${2:-$1}"
+    _tc_store "$v" "$name"
+    rm -f "$NUTSHELL_TOOLCHAINS/$name/.fetched"
 }
 
 # A remote holding one tagged version, so a fetch has somewhere real to go.
@@ -359,11 +372,40 @@ it_adopts_the_copy_that_got_there_first_instead_of_deleting_it() {
     # A fetch that deletes and replaces loses the mark; one that adopts what is
     # there keeps it, and both answers are the same version, which is the whole
     # reason adopting is allowed.
-    mkdir -p "$NUTSHELL_TOOLCHAINS/0.4.0"
-    printf 'export NUTSHELL_VERSION="0.4.0"\n' > "$NUTSHELL_TOOLCHAINS/0.4.0/init"
+    #
+    # Recorded, because that is what the loser of a real race finds: the winner
+    # writes its record into the scratch copy before the rename, so the two
+    # arrive together. An unrecorded directory is a different situation and is
+    # the test below.
+    _tc_store 0.4.0
     printf 'in use\n' > "$NUTSHELL_TOOLCHAINS/0.4.0/marker"
     assert_ok _nutshell_fetch 0.4.0 >/dev/null 2>&1
     assert_ok test -f "$NUTSHELL_TOOLCHAINS/0.4.0/marker"
+    _tc_end
+}
+
+#[test]
+it_moves_an_unrecorded_entry_aside_rather_than_adopting_it() {
+    _tc_setup
+    _tc_remote 0.4.0
+    _tc_store_unrecorded 0.4.0
+    printf 'not the release\n' > "$NUTSHELL_TOOLCHAINS/0.4.0/marker"
+
+    assert_ok _nutshell_fetch 0.4.0 >/dev/null 2>&1
+    # The fetched copy is in place, so the marker is gone from the name.
+    assert_fails test -f "$NUTSHELL_TOOLCHAINS/0.4.0/marker"
+    assert_ok test -f "$NUTSHELL_TOOLCHAINS/0.4.0/.fetched"
+
+    # Moved, not deleted. Something may be sourcing out of it, and a rename
+    # leaves an open file alone where a delete does not.
+    local aside=0 d
+    for d in "$NUTSHELL_TOOLCHAINS"/0.4.0.unrecorded.*; do
+        [[ -f "$d/marker" ]] && aside=1
+    done
+    assert_eq "$aside" "1" "the old directory should still be on disk"
+
+    # And what is left behind is invisible, because its name is not a version.
+    assert_eq "$(nutshell_toolchains)" "0.4.0"
     _tc_end
 }
 
@@ -549,4 +591,55 @@ it_follows_the_data_home_override_the_same_way_the_module_does() {
     [[ -n "$keep_store" ]] && export NUTSHELL_STORE="$keep_store"
     [[ -n "$keep_tc" ]] && export NUTSHELL_TOOLCHAINS="$keep_tc"
     return 0
+}
+
+# --- an entry that cannot say where it came from -----------------------------
+#
+# A version string is not a content hash. Everything reporting `0.4.0` fits a
+# `0.4.0` directory, and the tree on `dev` reports the next version for the
+# whole stretch before that version is tagged, so a fetch during that stretch
+# lands content that is not the release and then passes every check: the
+# directory and the interpreter inside it agree with each other perfectly.
+#
+# This was not hypothetical. A `toolchains/0.4.0` written before the 0.4.0 tag
+# existed sat in the real store on this machine, held a tree from before the
+# bash floor was added, and would have been handed to every consumer pinning
+# the release. Nothing detected it, and nothing would have replaced it, because
+# a directory that exists is adopted rather than overwritten.
+
+#[test]
+it_skips_an_entry_that_does_not_say_what_it_is() {
+    _tc_setup
+    _tc_store 0.4.0
+    _tc_store_unrecorded 0.5.0
+    # 0.5.0 agrees with its own name and is still not trusted, because nothing
+    # in it says it is the 0.5.0 release rather than something that said so.
+    assert_eq "$(nutshell_toolchains)" "0.4.0"
+    _tc_end
+}
+
+#[test]
+it_refetches_rather_than_handing_out_an_unrecorded_entry() {
+    _tc_setup
+    _tc_remote 0.4.0
+    _tc_store_unrecorded 0.4.0
+
+    assert_ok nutshell_find "" 0.4.0 2>/dev/null
+    # `fetched` and not `toolchain`, which is the whole claim: the directory
+    # was sitting there, agreed with its own name, and was not handed back.
+    assert_eq "$NUTSHELL_FROM" "fetched"
+    assert_ok test -f "$NUTSHELL_TOOLCHAINS/0.4.0/.fetched"
+    _tc_end
+}
+
+#[test]
+it_still_takes_a_recorded_entry_without_fetching() {
+    # The control for both. Requiring a fresh fetch on every lookup would make
+    # the store pointless, and no remote is configured here, so a fetch would
+    # fail loudly rather than quietly succeed.
+    _tc_setup
+    _tc_store 0.4.0
+    assert_ok nutshell_find "" 0.4.0
+    assert_eq "$NUTSHELL_FROM" "toolchain"
+    _tc_end
 }

@@ -42,9 +42,14 @@ call, is the whole of it.
 ## How this sits against the startup bench
 
 `benches/startup` found that resolving `use` ahead of time does not pay and
-that dropping what nothing calls pays 3.7x. This is the same shape one level
-down: the bookkeeping half of a lowering is noise, and the half that avoids
-reading a file is the win.
+that dropping what nothing calls pays about 11%. This is the same shape one
+level down, and the larger half of it: the bookkeeping half of a lowering is
+noise, and the half that avoids reading a file is the win.
+
+That file once reported 3.7x for the shaking. It was a shaker cutting
+`_deps_init`, and this paragraph cited the number for a day after it was
+retired, which is why a corrected finding is greped for rather than fixed
+where it was found.
 
 A shaker and a pre-binder want the same thing, which is worth saying because it
 suggests one pass rather than two: if the lowering already knows which

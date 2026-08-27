@@ -8,13 +8,15 @@
 # Takes a script and the modules it loads, and writes one file with the
 # resolution already done and everything nothing calls removed.
 #
-# The measurements say which half of that is worth doing. `benches/startup`
-# put resolving `use` ahead of time inside the noise, twelve milliseconds in
-# two hundred and fifty, and dropping what nothing calls at 3.7x. So the
-# shaking is the point and the concatenation is what makes it possible.
-# `benches/lazy-dispatch` found the same shape one level down: baking in the
+# The measurements say which half of that is worth doing, and they say less
+# than this file once claimed. `benches/startup` puts resolving `use` ahead of
+# time inside the noise and dropping what nothing calls at about 11%, 233ms
+# against 261. An earlier 3.7x was a broken shaker, not a win, and that file
+# records what it was.
+#
+# `benches/lazy-dispatch` found the larger one, a level down: baking in the
 # answer to `deps_has` buys nothing measurable, and not reading the module at
-# first call is the whole of it.
+# first call is about 35ms per process at six dispatched functions.
 #
 # Usage:
 #   nut-lower script.sh -o lowered.sh

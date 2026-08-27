@@ -2,9 +2,10 @@
 # Tests for `nut-lower`.
 #
 # The tool exists because `benches/startup` measured what it does: resolving
-# `use` ahead of time is noise, and dropping what nothing calls is 3.7x. So
-# every test here is about the shaking being correct, because a shaker that
-# drops something needed is worse than no shaker at all.
+# `use` ahead of time is noise, and dropping what nothing calls is about 11%.
+# So every test here is about the shaking being correct, because a shaker that
+# drops something needed is worse than no shaker at all, and this one has been:
+# the 3.7x that file used to report was a shaker cutting `_deps_init`.
 #
 # Four of these are the failure modes that bench found by getting them wrong,
 # each of which produced a lowered file that loaded cleanly and answered

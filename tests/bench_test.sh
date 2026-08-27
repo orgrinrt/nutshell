@@ -22,9 +22,20 @@ _bench_fresh() {
 _bench_done() { rm -rf "$BENCH_RESULTS"; unset BENCH_RESULTS; }
 
 # Two arms that agree, and one that does not.
-_arm_a()      { printf 'the same'; }
-_arm_b()      { printf 'the same'; }
-_arm_liar()   { printf 'something else'; }
+#
+# Each does enough work to be measurable. Written as a bare `printf` they take
+# zero milliseconds, and the harness refuses a baseline of zero because nothing
+# can be a ratio against it. That is the guard working, and it made
+# `it_measures_two_arms_that_agree` fail about one run in ten: passing on its
+# own, failing inside the full suite where the machine is busier.
+_spin() {
+    local i s=0
+    for (( i = 0; i < 3000; i++ )); do s=$(( s + i )); done
+    printf '%s' "$1"
+}
+_arm_a()      { _spin 'the same'; }
+_arm_b()      { _spin 'the same'; }
+_arm_liar()   { _spin 'something else'; }
 _answer_of()  { "$1"; }
 
 # --- it measures at all ------------------------------------------------------

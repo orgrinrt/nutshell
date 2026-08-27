@@ -465,6 +465,17 @@ _extern_remote_ref() {
 
     # `^{}` is the commit an annotated tag points at, and it is the one to
     # build from; the bare line is the tag object itself.
+    #
+    # Asked for with a trailing `*`, because the exact pattern does not return
+    # the peeled line at all. `git ls-remote <url> refs/tags/0.1.0` gives one
+    # row and it is the tag object; the `^{}` row only appears under a glob.
+    # So this read the tag object every time, the `peeled` branch below never
+    # ran, and a lockfile pinning an annotated tag recorded a sha that is not
+    # a commit and can never equal any checkout's `HEAD`.
+    #
+    # Two exact patterns rather than a glob, so nothing but those two rows
+    # can come back and the `case` below has nothing to filter out. A glob
+    # would also return `0.1.0-rc1`, which is a door with no reason to open.
     local peeled="" plain=""
     while IFS= read -r line; do
         sha="${line%%[[:space:]]*}"
@@ -472,7 +483,7 @@ _extern_remote_ref() {
             *"refs/tags/${ref}^{}") peeled="$sha" ;;
             *"refs/tags/${ref}")    plain="$sha"  ;;
         esac
-    done < <(git ls-remote "$url" "refs/tags/${ref}" 2>/dev/null)
+    done < <(git ls-remote "$url" "refs/tags/${ref}" "refs/tags/${ref}^{}" 2>/dev/null)
     [[ -n "$peeled" ]] && { printf 'tags %s' "$peeled"; return 0; }
     [[ -n "$plain" ]]  && { printf 'tags %s' "$plain";  return 0; }
     return 1

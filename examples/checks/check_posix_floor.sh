@@ -134,6 +134,11 @@ _shell_gated_files() {
 # can pass the parse and be broken on the floor in a way no test on a bash
 # machine will ever see.
 #
+# `x+=` is bash's append, for a string as much as for an array, and there is no
+# POSIX form of it: `x="${x}more"` is the whole replacement. A POSIX shell reads
+# the line as a command named `x+=...`, so it is a not-found rather than a wrong
+# answer.
+#
 # `echo -e` and `echo -n` are not POSIX and do not fail: POSIX `echo` has no
 # options, so it prints the flag as part of the text. A coloured line comes out
 # with `-e ` in front of it and everything still exits zero.
@@ -186,6 +191,7 @@ _posix_bashisms() {
         -e '(mapfile|readarray)[[:space:]]' \
         -e '(^|[[:space:];&|])nut_once([[:space:]]|$)' \
         -e '(^|[[:space:];&|])echo[[:space:]]+-[en]([[:space:]]|$)' \
+        -e '(^|[[:space:];&|])[A-Za-z_][A-Za-z0-9_]*\+=' \
         -e 'read[[:space:]]+-[a-zA-Z]*[nNdt]([[:space:]]|$)' \
         2>/dev/null | sed -e 's/^\([0-9]*\):[[:space:]]*/\1: /' | head -6
 }

@@ -249,3 +249,34 @@ it_builds_a_path_that_tells_an_index_from_a_name() {
     assert_eq "$(_jq_path 'a*b')" '.["a*b"]'
     assert_eq "$(_jq_path '*')" '.["*"]'
 }
+
+#[test]
+# The escaping `json_object` and `json_array` do before they hand a value over.
+#
+# It was four `${value//from/to}` substitutions, which are bash's, and it had
+# no test: the module's other tests all go through `jq` or `python`, which do
+# their own escaping, so this path could have been broken in either direction
+# without anything saying so.
+#
+# Backslash first, or the escaping escapes the backslashes it just added.
+it_escapes_a_value_before_putting_it_in_an_object() {
+    local v; v="$(printf 'a\\b"c\td\ne')"
+    local got; got="$(json_object k "$v")"
+    assert_eq "$got" '{"k":"a\\b\"c\td\ne"}'
+}
+
+#[test]
+# The same for an array, which carries its own copy of the escaping.
+it_escapes_a_value_before_putting_it_in_an_array() {
+    local v; v="$(printf 'x"y\\z')"
+    local got; got="$(json_array "$v")"
+    assert_eq "$got" '["x\"y\\z"]'
+}
+
+#[test]
+# A value that is only a backslash, which is where an ordering mistake shows
+# up as one character instead of three.
+it_escapes_a_lone_backslash_exactly_once() {
+    local got; got="$(json_object k '\')"
+    assert_eq "$got" '{"k":"\\"}'
+}

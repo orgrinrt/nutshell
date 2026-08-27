@@ -132,3 +132,32 @@ it_survives_a_value_full_of_the_characters_that_break_things() {
     _both "$sh" 'map_new m; map_set m k "100% of \$it"; map_get m k'
     _both "$sh" 'map_new m; map_set m k "a*b?c[d]"; map_get m k'
 }
+
+#[test]
+it_forgets_the_key_as_well_as_the_value_when_cleared() {
+    # `map_clear` unset the value and left the presence table, so a cleared map
+    # kept a key that `map_get` answered and `map_len` could not count, and
+    # `map_set` on that key never re-listed it. `map_new` is `map_clear` plus a
+    # line, so reusing a map under its own documented contract corrupted it.
+    local sh; sh="$(_mp_shell)" || return 0
+    _both "$sh" 'map_new c; map_set c hits 1; map_new c; map_set c hits 2; printf "%s|%s|%s" "$(map_len c)" "$(map_keys c | tr "\n" ",")" "$(map_get c hits)"'
+    _both "$sh" 'map_new d; map_set d a 1; map_clear d; map_has d a && printf present || printf absent'
+    _both "$sh" 'map_new d; map_set d a 1; map_clear d; map_set d a 2; printf "%s|%s" "$(map_len d)" "$(map_keys d | tr "\n" ",")"'
+}
+
+#[test]
+it_refuses_a_container_name_that_would_be_code() {
+    # Every function puts its first argument into an `eval`, so a name that is
+    # not a name is code. A container name is written by the programmer and
+    # never taken from data, so refusing is the honest answer and there is
+    # nothing to escape.
+    local sh; sh="$(_mp_shell)" || return 0
+    _both "$sh" 'map_new "m=1; echo PWNED; :" 2>/dev/null; printf "%s" "${m:-clean}"'
+    _both "$sh" 'map_new m; map_set "m; echo PWNED" k v 2>/dev/null; printf "%s" "$?"'
+    _both "$sh" 'map_new m; map_read "v; echo PWNED" m k 2>/dev/null; printf "%s" "$?"'
+    _both "$sh" 'map_new "a-b" 2>/dev/null; printf "%s" "$?"'
+    _both "$sh" 'map_new "" 2>/dev/null; printf "%s" "$?"'
+    # And a name that is a name still works, or the refusals above would pass
+    # against a function that refuses everything.
+    _both "$sh" 'map_new ok; map_set ok k v; map_get ok k'
+}

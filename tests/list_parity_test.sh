@@ -107,11 +107,12 @@ it_walks_in_order_on_both() {
 
 #[test]
 it_gives_the_callee_the_shell_as_it_found_it() {
-    # `list_each` sets IFS and `set -f` to walk, and has to put both back
-    # before calling. A callee that word-splits an unquoted expansion would
-    # otherwise split on the separator, and a callee that globs would not.
-    # That defect only shows for callers who happen to do those things, which
-    # is why it is pinned here rather than left to notice.
+    # Neither half touches `IFS` or `set -f` any more: both walk their storage
+    # directly and build no string to split. This stays because that is a
+    # property worth keeping rather than an accident, and a future
+    # implementation that walked a string would have to restore both to pass
+    # it. The comment used to describe a mechanism that had been removed, which
+    # is worse than no comment: it says the test guards something it does not.
     local sh; sh="$(_lp_shell)" || return 0
     _both "$sh" 'splitty() { set -- $1; printf "<%s>" "$#"; }; list_new a; list_push a "a b c d"; list_each a splitty'
     _both "$sh" 'globby() { set -- $1; printf "<%s>" "$#"; }; list_new a; list_push a "a b"; list_each a globby'
@@ -131,4 +132,40 @@ it_keeps_two_lists_apart() {
     local sh; sh="$(_lp_shell)" || return 0
     _both "$sh" 'list_new one; list_new two; list_push one a; list_push two b; printf "%s|%s|%s|%s" "$(list_len one)" "$(list_len two)" "$(list_get one 0)" "$(list_get two 0)"'
     _both "$sh" 'list_new one; list_new two; list_push one a; list_new two; printf "%s|%s" "$(list_len one)" "$(list_get one 0)"'
+}
+
+#[test]
+it_knows_a_started_list_from_one_that_was_never_started() {
+    # `list_len` answers zero for both, so nothing could tell an empty list
+    # from a name that is not a list. `array.sh` needs that difference: its
+    # rewrites used to take a bash array, and without this that old call shape
+    # would be treated as an empty list and report success having done nothing.
+    local sh; sh="$(_lp_shell)" || return 0
+    _both "$sh" 'list_new a; list_exists a && printf yes || printf no'
+    _both "$sh" 'list_new a; list_push a x; list_exists a && printf yes || printf no'
+    _both "$sh" 'list_exists never_started && printf yes || printf no'
+    _both "$sh" 'list_exists "" 2>/dev/null && printf yes || printf no'
+}
+
+#[test]
+it_refuses_a_container_name_that_would_be_code() {
+    local sh; sh="$(_lp_shell)" || return 0
+    _both "$sh" 'list_new "l=1; echo PWNED; :" 2>/dev/null; printf "%s" "${l:-clean}"'
+    _both "$sh" 'list_new l; list_read "v; echo PWNED" l 0 2>/dev/null; printf "%s" "$?"'
+    _both "$sh" 'list_new l; list_ref "v; echo PWNED" l 2>/dev/null; printf "%s" "$?"'
+    _both "$sh" 'list_new "a-b" 2>/dev/null; printf "%s" "$?"'
+    _both "$sh" 'list_new ok; list_push ok v; list_get ok 0'
+}
+
+#[test]
+it_refuses_a_non_numeric_index_on_both() {
+    # Arithmetic context turns `abc` into 0 under bash and into a fatal error
+    # under dash, so this was the halves disagreeing in the place a caller is
+    # most likely to pass something it never checked.
+    local sh; sh="$(_lp_shell)" || return 0
+    _both "$sh" 'list_new l; list_push l x; list_read v l abc 2>/dev/null; printf "%s|%s" "$?" "$v"'
+    _both "$sh" 'list_new l; list_push l x; list_read v l "" 2>/dev/null; printf "%s|%s" "$?" "$v"'
+    _both "$sh" 'list_new l; list_push l x; list_read v l "1x" 2>/dev/null; printf "%s|%s" "$?" "$v"'
+    _both "$sh" 'list_new l; list_push l x; list_read v l -1 2>/dev/null; printf "%s|%s" "$?" "$v"'
+    _both "$sh" 'list_new l; list_push l x; list_read v l 0 2>/dev/null; printf "%s|%s" "$?" "$v"'
 }

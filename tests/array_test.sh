@@ -10,9 +10,14 @@
 use test
 use array
 
+# Build a named list. It took a name and then pushed into a hardcoded one,
+# which worked only because every call passed that same name, and the test for
+# leaving a second list alone had to build its second list by hand to get round
+# it.
 _l() {
-    list_new "$1"; shift 2>/dev/null || return 0
-    local v; for v in "$@"; do list_push _t_l "$v"; done
+    local name="$1"; shift 2>/dev/null || true
+    list_new "$name"
+    local v; for v in "$@"; do list_push "$name" "$v"; done
 }
 _dump() { local s; list_ref s "$1"; printf '%s' "$s" | tr '\037' '|'; }
 
@@ -180,11 +185,51 @@ it_leaves_a_second_list_alone() {
     # A scratch list that leaked, or a copy that wrote to the wrong name, shows
     # up here and nowhere else.
     _l _t_l c a b
-    list_new _t_other; list_push _t_other keep
+    _l _t_other keep
     arr_sort _t_l
     assert_eq "$(_dump _t_other)" "keep|"
     arr_unique _t_l
     assert_eq "$(_dump _t_other)" "keep|"
     arr_reverse _t_l
     assert_eq "$(_dump _t_other)" "keep|"
+}
+
+#[test]
+it_refuses_a_name_that_is_not_a_started_list() {
+    # These three used to take a bash array through a nameref. That call shape
+    # now names a list that does not exist, and without a check it would report
+    # success and leave the array untouched, which is the worst outcome for a
+    # consumer upgrading: silent, and rc 0.
+    local fn
+    for fn in arr_unique arr_reverse arr_sort; do
+        assert_fails "$fn" never_started_list
+        assert_fails "$fn" ""
+    done
+
+    # A bash array by name, which is exactly the old call shape.
+    local -a fruits=(apple banana apple)
+    assert_fails arr_unique fruits
+    assert_eq "${fruits[*]}" "apple banana apple"
+
+    # An empty list is a started list and is accepted.
+    list_new _t_empty
+    assert_ok arr_sort _t_empty
+    assert_ok arr_unique _t_empty
+    assert_ok arr_reverse _t_empty
+}
+
+#[test]
+it_does_not_eat_a_list_named_like_its_own_scratch() {
+    # The scratch list was a hardcoded global, so a list actually called that
+    # was emptied and the function returned zero. It is derived from the
+    # caller's name now, and the one shape that would still collide is refused.
+    _l _arrtmp_x c a b
+    assert_fails arr_unique _arrtmp_x
+    assert_eq "$(_dump _arrtmp_x)" "c|a|b|"
+
+    # And a normal list beside a scratch-shaped one is untouched.
+    _l _t_l c a b
+    _l _arrtmp_other keep
+    arr_sort _t_l
+    assert_eq "$(_dump _arrtmp_other)" "keep|"
 }

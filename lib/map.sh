@@ -40,6 +40,21 @@
 [ -n "${_NUTSHELL_MAP_SH:-}" ] && return 0
 _NUTSHELL_MAP_SH=1
 
+# A name safe to build a variable out of, and safe to assign through.
+#
+# Every function here puts its first argument into an `eval`, because that is
+# how a named container works without associative arrays. So a name that is not
+# a name is code, and `map_new "m=1; echo hi; :"` would run it. Refused rather
+# than encoded: a container name is written by the programmer, never taken from
+# data, so there is nothing here to escape and a refusal is the honest answer.
+_map_name_ok() {
+    case "${1:-}" in
+        "" | *[!A-Za-z0-9_]* ) return 1 ;;
+        [0-9]* ) return 1 ;;
+    esac
+    return 0
+}
+
 # A key as the tail of a variable name. One-to-one.
 #
 # Walks the string a character at a time with parameter expansion only. There
@@ -93,6 +108,7 @@ _map_hex() {
 # Start a map, or empty one that is already there.
 # Usage: map_new counts
 map_new() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] || return 1
     map_clear "$1"
     eval "_map_keys_$1=''"
@@ -102,11 +118,17 @@ map_new() {
 # Forget every key in a map.
 # Usage: map_clear counts
 map_clear() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] || return 1
     _mc_k=""
     eval "_mc_all=\"\${_map_keys_$1:-}\""
     for _mc_k in $_mc_all; do
-        eval "unset _map_v_$1_$_mc_k"
+        # Both, because the presence table is what `map_has` and `map_set`
+        # read. Unsetting only the value left the key present but unlisted: the
+        # order list was empty so `map_len` said zero, `map_set` saw the key as
+        # already there and did not re-add it, and `map_get` still answered.
+        # A key `map_get` returns and `map_len` cannot count.
+        eval "unset _map_v_$1_$_mc_k _map_set_$1_$_mc_k"
     done
     eval "_map_keys_$1=''"
 }
@@ -115,6 +137,7 @@ map_clear() {
 # Put a value under a key.
 # Usage: map_set counts "lib/x.sh:1" hello
 map_set() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] && [ $# -ge 2 ] || return 1
     _ms_n="$1"; _map_encode "$2"; _ms_e="$_me_out"; _ms_v="${3:-}"
     # The key list only grows when the key is new, so setting twice does not
@@ -130,6 +153,7 @@ map_set() {
 # What is under a key, or nothing.
 # Usage: map_get counts "lib/x.sh:1" -> hello
 map_get() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] && [ $# -ge 2 ] || return 1
     _map_encode "$2"; _mg_e="$_me_out"
     eval "printf '%s' \"\${_map_v_$1_${_mg_e}:-}\""
@@ -145,7 +169,8 @@ map_get() {
 #
 # Usage: map_read v counts "lib/x.sh:1"; printf '%s' "$v"
 map_read() {
-    [ -n "${1:-}" ] && [ -n "${2:-}" ] && [ $# -ge 3 ] || return 1
+    _map_name_ok "${1:-}" && _map_name_ok "${2:-}" || return 1
+    [ $# -ge 3 ] || return 1
     _map_encode "$3"; _mr_e="$_me_out"
     eval "$1=\"\${_map_v_$2_${_mr_e}:-}\""
 }
@@ -154,6 +179,7 @@ map_read() {
 # Is the key there at all. Distinct from an empty value.
 # Usage: map_has counts "lib/x.sh:1" -> returns 0 when set
 map_has() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] && [ $# -ge 2 ] || return 1
     _map_encode "$2"; _mh_e="$_me_out"
     eval "[ -n \"\${_map_set_$1_${_mh_e}:-}\" ]"
@@ -163,6 +189,7 @@ map_has() {
 # Forget one key.
 # Usage: map_del counts "lib/x.sh:1"
 map_del() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] && [ $# -ge 2 ] || return 1
     _md_n="$1"; _map_encode "$2"; _md_e="$_me_out"
     eval "[ -n \"\${_map_set_${_md_n}_${_md_e}:-}\" ]" || return 0
@@ -180,6 +207,7 @@ map_del() {
 # How many keys are set.
 # Usage: map_len counts -> 3
 map_len() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] || return 1
     eval "_ml_all=\"\${_map_keys_$1:-}\""
     _ml_n=0
@@ -193,6 +221,7 @@ map_len() {
 # Decoded back, because the caller put a key in and expects the same one out.
 # Usage: map_keys counts
 map_keys() {
+    _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] || return 1
     eval "_mk_all=\"\${_map_keys_$1:-}\""
     for _mk_k in $_mk_all; do
@@ -202,6 +231,27 @@ map_keys() {
 }
 
 # The encoding, backwards.
+# The reverse of `_map_hex`, and it does not fork either.
+#
+# It ran two command substitutions per encoded character, which for keys of
+# nutshell's own `<path>:<line>` shape is about ten forks per key: `map_keys`
+# over two hundred of them took about a second under dash where plain keys took
+# none. This file's own header says the encoding must not fork, in those words,
+# and the decoder was doing it twice per character.
+#
+# The table covers what `_map_hex` produces by name. Anything else falls back
+# to the fork, which is correct for a key holding a character nobody listed and
+# is rare enough not to matter.
+_map_unhex() {
+    case "$1" in
+        5f) _mu='_' ;;  2f) _mu='/' ;;  2e) _mu='.' ;;
+        2d) _mu='-' ;;  3a) _mu=':' ;;  20) _mu=' ' ;;
+        3d) _mu='=' ;;  2c) _mu=',' ;;  2b) _mu='+' ;;
+        40) _mu='@' ;;  23) _mu='#' ;;  25) _mu='%' ;;
+        *)  _mu="$(printf "\\$(printf '%03o' "0x$1")")" ;;
+    esac
+}
+
 _map_decode() {
     _md2_in="$1"; _md2_out=""
     while [ -n "$_md2_in" ]; do
@@ -210,11 +260,21 @@ _map_decode() {
             _md2_in="${_md2_in#?}"
             _md2_h="${_md2_in%"${_md2_in#??}"}"
             _md2_in="${_md2_in#??}"
-            _md2_out="${_md2_out}$(printf "\\$(printf '%03o' "0x${_md2_h}")")"
+            _map_unhex "$_md2_h"
+            _md2_out="${_md2_out}${_mu}"
         else
-            _md2_out="${_md2_out}${_md2_c}"
-            _md2_in="${_md2_in#?}"
+            # The whole run up to the next escape in one expansion, rather than
+            # a character per iteration, the same way `_map_encode` takes its
+            # safe runs.
+            _md2_run="${_md2_in%%_*}"
+            if [ "$_md2_run" = "$_md2_in" ]; then
+                _md2_out="${_md2_out}${_md2_in}"
+                break
+            fi
+            _md2_out="${_md2_out}${_md2_run}"
+            _md2_in="${_md2_in#"$_md2_run"}"
         fi
     done
     printf '%s' "$_md2_out"
 }
+

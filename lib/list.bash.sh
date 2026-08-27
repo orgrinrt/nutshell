@@ -27,6 +27,22 @@ nut_once || return 0
 LIST_SEP=$'\037'
 export LIST_SEP
 
+
+# The same name check the floor makes, so both halves accept and refuse exactly
+# the same names.
+#
+# Nothing here would execute a bad name: it lands in an array subscript rather
+# than in an `eval`. It refuses anyway, because a name one half takes and the
+# other rejects is a difference a caller discovers by switching shells, which
+# is the one thing having two implementations must not cost.
+_list_name_ok() {
+    case "${1:-}" in
+        "" | *[!A-Za-z0-9_]* ) return 1 ;;
+        [0-9]* ) return 1 ;;
+    esac
+    return 0
+}
+
 declare -gA _NUT_LIST=()
 declare -gA _NUT_LIST_N=()
 
@@ -34,10 +50,28 @@ declare -gA _NUT_LIST_N=()
 # Start an empty list, or empty an existing one.
 # Usage: list_new args
 list_new() {
+    _list_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" ]] || return 1
     local k n="${_NUT_LIST_N[$1]:-0}" i
     for (( i = 0; i < n; i++ )); do unset '_NUT_LIST[$1'$'\037'"$i]"; done
     _NUT_LIST_N[$1]=0
+}
+
+#[pub]
+# Whether a list has been started, as distinct from being empty.
+#
+# `list_len` answers zero for both, so nothing could tell a list that exists
+# and holds nothing from a name that is not a list at all. `array.sh` needs
+# that difference: its three rewrites used to take a bash array through a
+# nameref, and without this check that old call shape names a list that does
+# not exist, gets treated as an empty one, and the function reports success
+# having done nothing.
+#
+# Usage: list_exists args -> returns 0 when started
+list_exists() {
+    _list_name_ok "${1:-}" || return 1
+    [[ -n "${1:-}" ]] || return 1
+    [[ -n "${_NUT_LIST_N[$1]+set}" ]]
 }
 
 #[pub]
@@ -50,6 +84,7 @@ list_new() {
 #
 # Usage: list_push args "a value"
 list_push() {
+    _list_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" && $# -ge 2 ]] || return 1
     [[ "$2" == *"$LIST_SEP"* ]] && return 2
     local n="${_NUT_LIST_N[$1]:-0}"
@@ -61,6 +96,7 @@ list_push() {
 # The raw string, separator and all.
 # Usage: list_str args
 list_str() {
+    _list_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" ]] || return 1
     local n="${_NUT_LIST_N[$1]:-0}" i out=""
     for (( i = 0; i < n; i++ )); do out+="${_NUT_LIST["$1$LIST_SEP$i"]}$LIST_SEP"; done
@@ -75,7 +111,7 @@ list_str() {
 #
 # Usage: list_ref s args
 list_ref() {
-    [[ -n "${1:-}" && -n "${2:-}" ]] || return 1
+    _list_name_ok "${1:-}" && _list_name_ok "${2:-}" || return 1
     local n="${_NUT_LIST_N[$2]:-0}" i out=""
     for (( i = 0; i < n; i++ )); do out+="${_NUT_LIST["$2$LIST_SEP$i"]}$LIST_SEP"; done
     printf -v "$1" '%s' "$out"
@@ -85,6 +121,7 @@ list_ref() {
 # How many elements are in it.
 # Usage: list_len args -> 2
 list_len() {
+    _list_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" ]] || return 1
     printf '%s' "${_NUT_LIST_N[$1]:-0}"
 }
@@ -93,6 +130,7 @@ list_len() {
 # The element at an index, counting from zero, or nothing.
 # Usage: list_get args 1 -> a value with spaces
 list_get() {
+    _list_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" && $# -ge 2 ]] || return 1
     local v; list_read v "$1" "$2" || return 1
     printf '%s' "$v"
@@ -102,7 +140,16 @@ list_get() {
 # The element at an index, into a variable of your naming.
 # Usage: list_read v args 1; printf '%s' "$v"
 list_read() {
-    [[ -n "${1:-}" && -n "${2:-}" && $# -ge 3 ]] || return 1
+    _list_name_ok "${1:-}" && _list_name_ok "${2:-}" || return 1
+    [[ $# -ge 3 ]] || return 1
+    # A non-numeric index is refused on both halves rather than one erroring
+    # and the other quietly treating it as zero. Arithmetic context turns `abc`
+    # into 0 under bash and into a fatal error under dash, which is a parity
+    # divergence in the one place a caller is most likely to pass something it
+    # did not check.
+    case "${3:-}" in
+        '' | *[!0-9-]* | -*-* ) printf -v "$1" '%s' ""; return 1 ;;
+    esac
     local n="${_NUT_LIST_N[$2]:-0}"
     if [[ "$3" -lt 0 || "$3" -ge "$n" ]]; then printf -v "$1" '%s' ""; return 1; fi
     printf -v "$1" '%s' "${_NUT_LIST["$2$LIST_SEP$3"]}"
@@ -112,6 +159,7 @@ list_read() {
 # Call a function once per element, in order.
 # Usage: list_each args printf
 list_each() {
+    _list_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" && -n "${2:-}" ]] || return 1
     local n="${_NUT_LIST_N[$1]:-0}" i rc
     for (( i = 0; i < n; i++ )); do

@@ -35,6 +35,22 @@ nut_once || return 0
 # to reach it, and a nameref is bash 4.3. The unit separator cannot appear in a
 # key that came from a path, and the alternative was inventing a delimiter that
 # could.
+
+# The same name check the floor makes, so both halves accept and refuse exactly
+# the same names.
+#
+# Nothing here would execute a bad name: it lands in an array subscript rather
+# than in an `eval`. It refuses anyway, because a name one half takes and the
+# other rejects is a difference a caller discovers by switching shells, which
+# is the one thing having two implementations must not cost.
+_map_name_ok() {
+    case "${1:-}" in
+        "" | *[!A-Za-z0-9_]* ) return 1 ;;
+        [0-9]* ) return 1 ;;
+    esac
+    return 0
+}
+
 declare -gA _NUT_MAP=()
 declare -gA _NUT_MAP_ORDER=()
 
@@ -44,6 +60,7 @@ _map_k() { printf '%s\037%s' "$1" "$2"; }
 # Start a map, or empty one that is already there.
 # Usage: map_new counts
 map_new() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" ]] || return 1
     map_clear "$1"
 }
@@ -52,6 +69,7 @@ map_new() {
 # Forget every key in a map.
 # Usage: map_clear counts
 map_clear() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" ]] || return 1
     local k
     for k in "${!_NUT_MAP[@]}"; do
@@ -64,6 +82,7 @@ map_clear() {
 # Put a value under a key.
 # Usage: map_set counts "lib/x.sh:1" hello
 map_set() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" && $# -ge 2 ]] || return 1
     local kk; kk="$(_map_k "$1" "$2")"
     # The order list only grows when the key is new, so setting twice does not
@@ -76,6 +95,7 @@ map_set() {
 # What is under a key, or nothing.
 # Usage: map_get counts "lib/x.sh:1" -> hello
 map_get() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" && $# -ge 2 ]] || return 1
     local kk; kk="$(_map_k "$1" "$2")"
     printf '%s' "${_NUT_MAP[$kk]:-}"
@@ -89,7 +109,8 @@ map_get() {
 #
 # Usage: map_read v counts "lib/x.sh:1"; printf '%s' "$v"
 map_read() {
-    [[ -n "${1:-}" && -n "${2:-}" && $# -ge 3 ]] || return 1
+    _map_name_ok "${1:-}" && _map_name_ok "${2:-}" || return 1
+    [[ $# -ge 3 ]] || return 1
     printf -v "$1" '%s' "${_NUT_MAP["$2"$'\037'"$3"]:-}"
 }
 
@@ -97,6 +118,7 @@ map_read() {
 # Is the key there at all. Distinct from an empty value.
 # Usage: map_has counts "lib/x.sh:1" -> returns 0 when set
 map_has() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" && $# -ge 2 ]] || return 1
     local kk; kk="$(_map_k "$1" "$2")"
     [[ -v '_NUT_MAP[$kk]' ]]
@@ -106,6 +128,7 @@ map_has() {
 # Forget one key.
 # Usage: map_del counts "lib/x.sh:1"
 map_del() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" && $# -ge 2 ]] || return 1
     local kk; kk="$(_map_k "$1" "$2")"
     [[ -v '_NUT_MAP[$kk]' ]] || return 0
@@ -126,6 +149,7 @@ map_del() {
 # How many keys are set.
 # Usage: map_len counts -> 3
 map_len() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" ]] || return 1
     local n=0 k
     for k in "${!_NUT_MAP[@]}"; do
@@ -138,6 +162,7 @@ map_len() {
 # Every key, one per line, in the order they were first set.
 # Usage: map_keys counts
 map_keys() {
+    _map_name_ok "${1:-}" || return 1
     [[ -n "${1:-}" ]] || return 1
     # `|| [[ -n "$k" ]]` for the last field, which has no newline after it.
     local k

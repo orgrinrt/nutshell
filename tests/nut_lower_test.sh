@@ -105,11 +105,20 @@ it_rewrites_super_away() {
 }
 
 #[test]
-it_registers_what_it_contains_rather_than_stubbing_use() {
-    # `use() { return 0; }` looks equivalent and is not: `nut_reload` goes
-    # through `use`, so a stub breaks the lazy dispatch and the dispatched
-    # function answers nothing.
-    _lower_to --no-shake
+# Where the dispatch is left to run, the file registers what it contains rather
+# than stubbing the resolver.
+#
+# `use() { return 0; }` looks equivalent and is not, **on this path**:
+# `nut_reload` goes through `use`, so a stub breaks the lazy dispatch and the
+# dispatched function answers nothing.
+#
+# It became conditional when pre-binding landed. With the implementation bound
+# ahead of the first call the stub never runs, `nut_reload` is never reached,
+# and the stub is then correct and is what lets the file drop `init` entirely.
+# So the rule this test guards is now the `--no-prebind` rule, and the test says
+# so rather than asserting it of every lowering.
+it_registers_what_it_contains_when_the_dispatch_is_left_to_run() {
+    _lower_to --no-shake --no-prebind
     assert_contains "$(cat "$_LOW_OUT")" '_NUTSHELL_LOADED['
     assert_not_contains "$(cat "$_LOW_OUT")" 'use() { return 0; }'
     # Every registration before any body, or anything reading up to the first
@@ -258,4 +267,222 @@ it_still_dispatches_at_first_call_without_prebinding() {
 
     assert_contains "$out" "DISPATCH-RAN"
     _lower_done
+}
+
+# A POSIX shell that is one, or nothing.
+_nl_posix_sh() {
+    local cand f; f="$(mktemp)"; printf 'declare -A x\n' > "$f"
+    for cand in dash ash yash busybox-sh; do
+        command -v "$cand" >/dev/null 2>&1 || continue
+        "$cand" -c ". '$f'" >/dev/null 2>&1 || { rm -f "$f"; printf '%s' "$cand"; return 0; }
+    done
+    rm -f "$f"; return 1
+}
+
+#[test]
+# A lowered file runs under a POSIX shell, which is the point of the floor.
+#
+# It did not, and no amount of converting modules would have changed that: the
+# emitted preamble sourced `init`, and `init` opens with `declare -gA`, which is
+# the first thing a POSIX shell refuses. Every module underneath could have been
+# perfectly POSIX and none of it was reachable.
+#
+# `init` is the development-time resolver. Six of its functions answer "which
+# file is this module" out of `lib.nut` and four more make a module load once,
+# and a lowered file has had both done to it already. What it actually
+# referenced was `use` at file scope, `nut_reload` and `nut_lazy_guard` inside
+# stubs that pre-binding overwrites, and one `NUTSHELL_ROOT`.
+#
+# `os` is lowered here rather than a larger closure because it carries no
+# `#[shell(bash4)]` gate. A gate resolves against the shell doing the lowering,
+# so lowering `string` under bash correctly picks the bash half and the artifact
+# is then a bash artifact by construction.
+it_produces_a_file_a_posix_shell_can_run() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use os --no-shake -o "$_LOW_OUT" 2>/dev/null
+
+    # No `init`, and none of the tables that need an associative array.
+    assert_fails grep -q '/init"' "$_LOW_OUT"
+    assert_fails grep -q '_NUTSHELL_LOADED\[' "$_LOW_OUT"
+
+    assert_ok "$sh" -n "$_LOW_OUT"
+
+    local got
+    got="$("$sh" -c '. "$1" && os_name' _ "$_LOW_OUT" 2>&1)"
+    assert_not_contains "$got" "not found"
+    assert_not_contains "$got" "Syntax error"
+    assert_eq "$got" "$(bash -c '. "$1" && os_name' _ "$_LOW_OUT" 2>&1)"
+    _lower_done
+}
+
+#[test]
+# The control, and the reason the preamble is chosen on pre-binding.
+#
+# Without it a stub still runs and still calls `nut_reload`. A no-op there would
+# leave it calling itself until `nut_lazy_guard` stopped it, so the function
+# would answer nothing at all. `--no-prebind` therefore keeps the old preamble
+# and stays a bash artifact, and this asserts that rather than leaving it to a
+# comment.
+it_keeps_the_bash_preamble_when_the_dispatch_is_left_to_run() {
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use os --no-shake --no-prebind -o "$_LOW_OUT" 2>/dev/null
+
+    assert_ok grep -q '/init"' "$_LOW_OUT"
+    assert_contains "$(head -1 "$_LOW_OUT")" "bash"
+
+    # And it still works under bash, which is what it is for.
+    assert_eq "$(bash -c '. "$1" && os_name' _ "$_LOW_OUT" 2>&1)" "$(bash -c 'uname -s' | tr 'A-Z' 'a-z' | sed 's/darwin/macos/')"
+    _lower_done
+}
+
+#[test]
+# The lowering takes the feature set, which is the point of having features.
+#
+# Three ordering mistakes made this look like it worked when it did not, so the
+# assertion is on the emitted file rather than on the flag being accepted: the
+# flags were first set after the closure had already been walked, so they were
+# accepted and changed nothing, which is the worst of the three possible
+# behaviours.
+it_lowers_the_half_the_features_ask_for() {
+    local on off
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake -o "$_LOW_OUT" 2>/dev/null
+    on="$(grep -o 'lib/string[a-z.]*\.sh' "$_LOW_OUT" | head -1)"
+    rm -f "$_LOW_OUT"
+
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake --no-default-features -o "$_LOW_OUT" 2>/dev/null
+    off="$(grep -o 'lib/string[a-z.]*\.sh' "$_LOW_OUT" | head -1)"
+
+    assert_ne "$on" "$off" "the feature flag changed nothing"
+    assert_contains "$off" "posix"
+    _lower_done
+}
+
+#[test]
+# And the file it produces runs where it was asked for.
+#
+# This is the end of the chain and the reason any of it matters: a machine with
+# bash could not produce a POSIX artifact before, because `#[shell(bash4)]`
+# asks the running shell and gets the right answer every time.
+it_produces_a_posix_artifact_from_a_bash_machine() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake --no-default-features -o "$_LOW_OUT" 2>/dev/null
+
+    assert_ok "$sh" -n "$_LOW_OUT"
+    local got; got="$("$sh" -c '. "$1" && str_upper hello' _ "$_LOW_OUT" 2>&1)"
+    assert_eq "$got" "HELLO"
+
+    # The control: with the feature on, the same closure is a bash artifact and
+    # the POSIX shell refuses it. Without this the test above would pass on a
+    # lowering that never had a bash half in it to begin with.
+    rm -f "$_LOW_OUT"
+    _LOW_OUT="$(mktemp "${TMPDIR:-/tmp}/nut-low.XXXXXX")"
+    "$_LOWER" "$_WORK" --use string --no-shake -o "$_LOW_OUT" 2>/dev/null
+    assert_fails "$sh" -n "$_LOW_OUT"
+    _lower_done
+}
+
+# Every module the manifest offers on its own, one closure each. The whole
+# matrix rather than a chosen few, because choosing which closures to lower is
+# choosing which ones not to find out about, and the two tests above lower
+# exactly the two that were known to work.
+# A script that loads nothing, so a closure below is exactly the module asked
+# for and whatever it needs. `$_WORK` is a bench workload with `use` lines of
+# its own, and lowering against it put five extra modules into every closure,
+# which made the counts a fact about that workload rather than about the module.
+_nl_bare_script() {
+    local f; f="$(mktemp "${TMPDIR:-/tmp}/nut-bare.XXXXXX")"
+    printf '#!/usr/bin/env nutshell\ntrue\n' > "$f"
+    printf '%s' "$f"
+}
+
+_nl_all_modules() {
+    awk '!/^#/ && NF>=2 && $3!="internal" {print $1}' \
+        "${BASH_SOURCE[0]%/*}/../lib.nut" | grep -v '::' | sort -u
+}
+
+#[test]
+# The honest statement of what removing `init` bought, which is not what the
+# source comment first claimed.
+#
+# It is necessary and not sufficient. The preamble no longer keeps a POSIX
+# shell out; the closure still can, because one unconverted module in the set
+# is enough. What holds regardless of how many are converted is that the thing
+# refusing is never the preamble: a failure always lands inside a module, past
+# line 12.
+#
+# That property is the one worth pinning. The count below moves as modules get
+# converted; this does not, and it is what would break if the preamble ever
+# regained a bashism.
+it_never_fails_inside_its_own_preamble() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    local out; out="$(mktemp "${TMPDIR:-/tmp}/nut-pre.XXXXXX")"
+    local bare; bare="$(_nl_bare_script)"
+    local m pre err ln checked=0
+
+    local inside=""
+    for m in $(_nl_all_modules); do
+        "$_LOWER" "$bare" --use "$m" --no-shake -o "$out" >/dev/null 2>&1 || continue
+        pre="$(grep -n '^use() { return 0; }' "$out" | cut -d: -f1)"
+        [ -n "$pre" ] || { inside="${inside} ${m}(no-preamble)"; continue; }
+        err="$("$sh" -n "$out" 2>&1 | head -1)"
+        [ -n "$err" ] || continue
+        ln="$(printf '%s' "$err" | sed -n 's/.*: \([0-9][0-9]*\): .*/\1/p')"
+        [ -n "$ln" ] || continue
+        checked=$((checked + 1))
+        [ "$ln" -le "$pre" ] && inside="${inside} ${m}@${ln}(preamble ends ${pre})"
+    done
+    rm -f "$out" "$bare"
+
+    # Named rather than counted, so a failure says which closure and where.
+    assert_eq "$inside" "" "a closure failed inside the preamble"
+    # The control. With no closure failing to parse the loop compared nothing,
+    # and this would keep passing through a regression that broke every one.
+    assert_ne "$checked" "0" "no closure failed to parse, so nothing was checked"
+}
+
+#[test]
+# A ratchet on how many closures a POSIX shell will take, so the number can
+# only move one way.
+#
+# Six of twenty-eight today. That is a fact about the eighteen unconverted
+# modules rather than about the lowering, and it is written down here because
+# it was previously asserted nowhere: the two tests above lower `os` and
+# `string`, which are two of the six that pass.
+#
+# Raise the floor when modules land. Never lower it.
+it_ratchets_how_many_closures_reach_the_floor() {
+    local sh; sh="$(_nl_posix_sh)" || { skip "no strict POSIX shell here"; return 0; }
+    local out; out="$(mktemp "${TMPDIR:-/tmp}/nut-cnt.XXXXXX")"
+    local bare; bare="$(_nl_bare_script)"
+    local m shaken=0 whole=0 total=0
+
+    for m in $(_nl_all_modules); do
+        "$_LOWER" "$bare" --use "$m" -o "$out" >/dev/null 2>&1 || continue
+        total=$((total + 1))
+        "$sh" -n "$out" 2>/dev/null && shaken=$((shaken + 1))
+        "$_LOWER" "$bare" --use "$m" --no-shake -o "$out" >/dev/null 2>&1 || continue
+        "$sh" -n "$out" 2>/dev/null && whole=$((whole + 1))
+    done
+    rm -f "$out" "$bare"
+
+    assert_ne "$total" "0" "no module lowered at all"
+
+    # Spelled as comparisons rather than bare counts, so a failure names the
+    # number it got and the number it owed instead of reporting that 4 is not 6.
+    local v="ok"; [ "$shaken" -lt 6 ] && v="only ${shaken} of ${total} shaken"
+    assert_eq "$v" "ok" "the shaken floor dropped below six"
+
+    v="ok"; [ "$whole" -lt 5 ] && v="only ${whole} of ${total} whole"
+    assert_eq "$v" "ok" "the unshaken floor dropped below five"
+
+    # Dropping what nothing calls can only help a POSIX shell, never hurt it:
+    # an unconverted function nobody reaches stops being a parse error when it
+    # stops being in the file. Six against five today, and the direction is the
+    # part that has to hold.
+    v="ok"; [ "$shaken" -lt "$whole" ] && v="shaken ${shaken} < whole ${whole}"
+    assert_eq "$v" "ok" "shaking made fewer closures parse, which it cannot do"
 }

@@ -25,9 +25,11 @@ json::impl::perl         lib/json/impl/perl.sh        internal
 json::impl::python       lib/json/impl/python.sh      internal
 log                      lib/log.sh
 #[shell(bash4)]
+#[feature(bash)]
 list                     lib/list.bash.sh
 list                     lib/list.sh
 #[shell(bash4)]
+#[feature(bash)]
 map                      lib/map.bash.sh
 map                      lib/map.sh
 modgraph                 lib/modgraph.sh
@@ -47,9 +49,11 @@ priv                     lib/priv.sh
 # floor module with the single-key ones left behind the gate, the way `map`,
 # `list` and `string` are paired. Filed rather than done.
 #[shell(bash4)]
+#[feature(bash)]
 prompt                   lib/prompt.sh
 srcfile                  lib/srcfile.sh
 #[shell(bash4)]
+#[feature(bash)]
 string                   lib/string.sh
 string                   lib/string.posix.sh
 test                     lib/test.sh

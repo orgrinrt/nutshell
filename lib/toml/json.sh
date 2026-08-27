@@ -178,7 +178,7 @@ _toml_value_to_json() {
     
     # Array
     if [[ "$val" =~ ^\[.*\]$ ]]; then
-        local content="${val#[}"
+        local content="${val#\[}"
         content="${content%]}"
         content="$(str_trim "$content")"
         

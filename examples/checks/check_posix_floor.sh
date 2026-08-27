@@ -161,10 +161,6 @@ _shell_gated_files() {
 # are a different fact about the file: it reads, and it does not work.
 _posix_bashisms() {
     local file="$1"
-    # Comments stripped first, crudely. A `#` inside a string is taken as one,
-    # which loses a real finding now and then; the alternative is parsing shell
-    # to run a warning, and this check never blocks.
-    #
     # `[[` is matched only with whitespace after it, because bash's `[[` is a
     # reserved word and always has some. Without that every `[[:space:]]` in a
     # grep, sed or awk expression counted as a bashism, and this library is
@@ -177,7 +173,28 @@ _posix_bashisms() {
     # pattern short of parsing tells the two apart. Left flagged rather than
     # narrowed, because a narrower rule would miss real ones and this one only
     # warns.
-    sed -e 's/#.*$//' "$file" 2>/dev/null | grep -noE \
+    #
+    # The unclosed `[` in a strip pattern is the one rule here that catches a
+    # divergence rather than a refusal. `${v#[}` strips in bash and does
+    # nothing in dash, which reads the `[` as opening a bracket expression and
+    # never finds its `]`. Neither shell says a word. Write `\[` or `"["`,
+    # which are both right in both. Three sites carried the bare form and one
+    # of them was `nut-declare` reading nutshell's own attribute syntax.
+    # Comments stripped, after protecting the `#` that is a strip operator.
+    #
+    # Stripping unconditionally from the first `#`, which is what this did, ate
+    # every `${x#...}` on the line and everything after it:
+    # `a="${v#foo}" ; [[ -n $a ]]` lost its `[[` entirely. So the operator is
+    # swapped for a control character first and put back afterwards.
+    #
+    # A `#` inside an ordinary string is still read as a comment, which loses a
+    # real finding now and then; the alternative is parsing shell in order to
+    # print a warning, and this check never blocks.
+    local h; h=$(printf '\001')
+    sed -e "s/\\\${\([A-Za-z_][A-Za-z0-9_]*\)##/\${\1$h$h/g" \
+        -e "s/\\\${\([A-Za-z_][A-Za-z0-9_]*\)#/\${\1$h/g" \
+        -e 's/#.*$//' \
+        -e "s/$h/#/g" "$file" 2>/dev/null | grep -noE \
         -e '\[\[[[:space:]]' \
         -e '(^|[[:space:];&|])\(\(' \
         -e 'printf[[:space:]]+-v' \
@@ -186,6 +203,7 @@ _posix_bashisms() {
         -e '\$\{[A-Za-z_][A-Za-z0-9_]*//' \
         -e '\$\{!' \
         -e '\$\{[A-Za-z_][A-Za-z0-9_]*:[0-9]' \
+        -e '\$\{[A-Za-z_][A-Za-z0-9_]*[#%]{1,2}([^}]*[^}\\"])?\[[^]}]*\}' \
         -e 'set[[:space:]]+-o[[:space:]]+pipefail' \
         -e '[^0-9&>]&>' \
         -e '\$\{[A-Za-z_][A-Za-z0-9_]*(\^\^|,,)' \

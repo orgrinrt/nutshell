@@ -31,7 +31,7 @@ nut_once || return 0
 
 # _json_pl <operation> <arguments...>
 _json_pl() {
-    "${_TOOL_PATH[perl]}" -MJSON::PP -e '
+    "${_TOOL_PATH_perl}" -MJSON::PP -e '
         use strict;
         use warnings;
 

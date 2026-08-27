@@ -34,14 +34,14 @@ _text_grep_sed_filtered_replace_impl() {
     [[ -z "$search" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
-    local sed_path="${_TOOL_PATH[sed]:-sed}"
-    local variant="${_TOOL_VARIANT[sed]:-unknown}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
+    local sed_path="${_TOOL_PATH_sed:-sed}"
+    local variant="${_TOOL_VARIANT_sed:-unknown}"
     
     # Create temp file
     local temp
-    if [[ -n "${_TOOL_PATH[mktemp]:-}" ]]; then
-        temp="$("${_TOOL_PATH[mktemp]}")"
+    if [[ -n "${_TOOL_PATH_mktemp:-}" ]]; then
+        temp="$("${_TOOL_PATH_mktemp}")"
     else
         temp="/tmp/grep_sed.$$"
     fi
@@ -88,8 +88,8 @@ _text_grep_sed_extract_transform_impl() {
     [[ -z "$pattern" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
-    local sed_path="${_TOOL_PATH[sed]:-sed}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
+    local sed_path="${_TOOL_PATH_sed:-sed}"
     
     # Grep first, pipe to sed
     "$grep_path" -E "$pattern" "$file" 2>/dev/null | "$sed_path" "s/${search}/${replace}/g"
@@ -106,8 +106,8 @@ _text_grep_sed_count_in_matches_impl() {
     [[ -z "$count_pattern" ]] && { echo "0"; return 1; }
     [[ ! -f "$file" ]] && { echo "0"; return 1; }
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
-    local sed_path="${_TOOL_PATH[sed]:-sed}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
+    local sed_path="${_TOOL_PATH_sed:-sed}"
     
     # Grep lines matching filter, then count secondary pattern
     "$grep_path" -E "$filter" "$file" 2>/dev/null | "$grep_path" -c "$count_pattern" 2>/dev/null || echo "0"
@@ -124,9 +124,9 @@ _text_replace_grep_sed_impl() {
     [[ -z "$pattern" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
-    local sed_path="${_TOOL_PATH[sed]:-sed}"
-    local variant="${_TOOL_VARIANT[sed]:-unknown}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
+    local sed_path="${_TOOL_PATH_sed:-sed}"
+    local variant="${_TOOL_VARIANT_sed:-unknown}"
     
     # Quick check: does the pattern even exist?
     if ! "$grep_path" -qE "$pattern" "$file" 2>/dev/null; then

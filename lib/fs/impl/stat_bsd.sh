@@ -17,7 +17,7 @@ _fs_size_stat_bsd_impl() {
     local path="${1:-}"
     [[ ! -f "$path" ]] && return 1
     
-    local stat_path="${_TOOL_PATH[stat]:-stat}"
+    local stat_path="${_TOOL_PATH_stat:-stat}"
     
     # BSD stat uses -f for format, %z for size in bytes
     "$stat_path" -f%z "$path"
@@ -28,7 +28,7 @@ _fs_mtime_stat_bsd_impl() {
     local path="${1:-}"
     [[ ! -e "$path" ]] && return 1
     
-    local stat_path="${_TOOL_PATH[stat]:-stat}"
+    local stat_path="${_TOOL_PATH_stat:-stat}"
     
     # BSD stat uses -f for format, %m for mtime as epoch seconds
     "$stat_path" -f%m "$path"

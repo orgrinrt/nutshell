@@ -106,9 +106,9 @@ text_line() {
     
     # Use sed if available, otherwise awk
     if deps_has "sed"; then
-        "${_TOOL_PATH[sed]}" -n "${num}p" "$file"
+        "${_TOOL_PATH_sed}" -n "${num}p" "$file"
     elif deps_has "awk"; then
-        "${_TOOL_PATH[awk]}" "NR==${num}" "$file"
+        "${_TOOL_PATH_awk}" "NR==${num}" "$file"
     else
         # Pure bash fallback (slow for large files)
         local i=0
@@ -134,15 +134,15 @@ text_lines() {
     
     if deps_has "sed"; then
         if [[ -n "$end" ]]; then
-            "${_TOOL_PATH[sed]}" -n "${start},${end}p" "$file"
+            "${_TOOL_PATH_sed}" -n "${start},${end}p" "$file"
         else
-            "${_TOOL_PATH[sed]}" -n "${start}p" "$file"
+            "${_TOOL_PATH_sed}" -n "${start}p" "$file"
         fi
     elif deps_has "awk"; then
         if [[ -n "$end" ]]; then
-            "${_TOOL_PATH[awk]}" "NR>=${start} && NR<=${end}" "$file"
+            "${_TOOL_PATH_awk}" "NR>=${start} && NR<=${end}" "$file"
         else
-            "${_TOOL_PATH[awk]}" "NR==${start}" "$file"
+            "${_TOOL_PATH_awk}" "NR==${start}" "$file"
         fi
     else
         return 1
@@ -327,11 +327,11 @@ text_extract_transform() {
             [[ ! -f "$file" ]] && return 1
             
             if deps_has "grep" && deps_has "sed"; then
-                "${_TOOL_PATH[grep]}" -E "$pattern" "$file" 2>/dev/null | \
-                    "${_TOOL_PATH[sed]}" "s/${search}/${replace}/g"
+                "${_TOOL_PATH_grep}" -E "$pattern" "$file" 2>/dev/null | \
+                    "${_TOOL_PATH_sed}" "s/${search}/${replace}/g"
             elif deps_has "perl"; then
-                "${_TOOL_PATH[perl]}" -ne "print if /${pattern}/" "$file" | \
-                    "${_TOOL_PATH[perl]}" -pe "s/${search}/${replace}/g"
+                "${_TOOL_PATH_perl}" -ne "print if /${pattern}/" "$file" | \
+                    "${_TOOL_PATH_perl}" -pe "s/${search}/${replace}/g"
             else
                 return 1
             fi
@@ -361,8 +361,8 @@ text_count_in_matches() {
             [[ ! -f "$file" ]] && { echo "0"; return 1; }
             
             if deps_has "grep"; then
-                "${_TOOL_PATH[grep]}" -E "$filter" "$file" 2>/dev/null | \
-                    "${_TOOL_PATH[grep]}" -c "$count_pattern" 2>/dev/null || echo "0"
+                "${_TOOL_PATH_grep}" -E "$filter" "$file" 2>/dev/null | \
+                    "${_TOOL_PATH_grep}" -c "$count_pattern" 2>/dev/null || echo "0"
             else
                 echo "0"
                 return 1
@@ -397,7 +397,7 @@ text_prepend() {
     
     local temp
     if deps_has "mktemp"; then
-        temp="$("${_TOOL_PATH[mktemp]}")"
+        temp="$("${_TOOL_PATH_mktemp}")"
     else
         temp="/tmp/text_prepend.$$"
     fi
@@ -417,11 +417,11 @@ text_between() {
     [[ ! -f "$file" || -z "$start" || -z "$end" ]] && return 1
     
     if deps_has "sed"; then
-        "${_TOOL_PATH[sed]}" -n "/${start}/,/${end}/p" "$file" | "${_TOOL_PATH[sed]}" '1d;$d'
+        "${_TOOL_PATH_sed}" -n "/${start}/,/${end}/p" "$file" | "${_TOOL_PATH_sed}" '1d;$d'
     elif deps_has "awk"; then
-        "${_TOOL_PATH[awk]}" "/${start}/,/${end}/" "$file" | "${_TOOL_PATH[awk]}" 'NR>1 { print prev } { prev=$0 }'
+        "${_TOOL_PATH_awk}" "/${start}/,/${end}/" "$file" | "${_TOOL_PATH_awk}" 'NR>1 { print prev } { prev=$0 }'
     elif deps_has "perl"; then
-        "${_TOOL_PATH[perl]}" -ne "print if /${start}/../${end}/" "$file" | "${_TOOL_PATH[perl]}" -ne 'print unless $. == 1 || eof'
+        "${_TOOL_PATH_perl}" -ne "print if /${start}/../${end}/" "$file" | "${_TOOL_PATH_perl}" -ne 'print unless $. == 1 || eof'
     else
         return 1
     fi
@@ -435,11 +435,11 @@ text_remove_blank() {
     [[ ! -f "$file" ]] && return 1
     
     if deps_has "grep"; then
-        "${_TOOL_PATH[grep]}" -v '^[[:space:]]*$' "$file" || true
+        "${_TOOL_PATH_grep}" -v '^[[:space:]]*$' "$file" || true
     elif deps_has "sed"; then
-        "${_TOOL_PATH[sed]}" '/^[[:space:]]*$/d' "$file"
+        "${_TOOL_PATH_sed}" '/^[[:space:]]*$/d' "$file"
     elif deps_has "awk"; then
-        "${_TOOL_PATH[awk]}" 'NF' "$file"
+        "${_TOOL_PATH_awk}" 'NF' "$file"
     else
         # Pure bash fallback
         while IFS= read -r line; do
@@ -456,11 +456,11 @@ text_remove_comments() {
     [[ ! -f "$file" ]] && return 1
     
     if deps_has "grep"; then
-        "${_TOOL_PATH[grep]}" -v '^[[:space:]]*#' "$file" | "${_TOOL_PATH[grep]}" -v '^[[:space:]]*$' || true
+        "${_TOOL_PATH_grep}" -v '^[[:space:]]*#' "$file" | "${_TOOL_PATH_grep}" -v '^[[:space:]]*$' || true
     elif deps_has "sed"; then
-        "${_TOOL_PATH[sed]}" -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$file"
+        "${_TOOL_PATH_sed}" -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$file"
     elif deps_has "awk"; then
-        "${_TOOL_PATH[awk]}" '!/^[[:space:]]*#/ && NF' "$file"
+        "${_TOOL_PATH_awk}" '!/^[[:space:]]*#/ && NF' "$file"
     else
         return 1
     fi

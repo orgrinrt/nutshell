@@ -81,7 +81,7 @@ _http_request_curl() {
     shift 3
     local -a extra_args=("$@")
     
-    local curl_cmd="${_TOOL_PATH[curl]}"
+    local curl_cmd="${_TOOL_PATH_curl}"
     local -a curl_args=(
         -s                              # Silent
         -S                              # Show errors
@@ -154,7 +154,7 @@ _http_request_wget() {
     shift 3
     local -a extra_args=("$@")
     
-    local wget_cmd="${_TOOL_PATH[wget]}"
+    local wget_cmd="${_TOOL_PATH_wget}"
     local -a wget_args=(
         -q                              # Quiet
         -O -                            # Output to stdout
@@ -468,12 +468,12 @@ http_download() {
     [[ "$_HTTP_READY" != "1" ]] && return 1
     
     if [[ "$_HTTP_IMPL" == "curl" ]]; then
-        "${_TOOL_PATH[curl]}" -sS -L -o "$output" \
+        "${_TOOL_PATH_curl}" -sS -L -o "$output" \
             --max-time "$HTTP_TIMEOUT" \
             -A "$HTTP_USER_AGENT" \
             "$url"
     else
-        "${_TOOL_PATH[wget]}" -q -O "$output" \
+        "${_TOOL_PATH_wget}" -q -O "$output" \
             --timeout="$HTTP_TIMEOUT" \
             --user-agent="$HTTP_USER_AGENT" \
             "$url"
@@ -496,7 +496,7 @@ http_upload() {
     
     if [[ "$_HTTP_IMPL" == "curl" ]]; then
         local output
-        output=$("${_TOOL_PATH[curl]}" -sS -w '\n%{http_code}' \
+        output=$("${_TOOL_PATH_curl}" -sS -w '\n%{http_code}' \
             -X POST \
             -F "${field}=@${file}" \
             --max-time "$HTTP_TIMEOUT" \

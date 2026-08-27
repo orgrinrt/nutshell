@@ -125,18 +125,67 @@ _deps_toml_get() {
 # Use -g for global scope when sourced from within a function (like use())
 declare -g _TOOLS_AVAILABLE=""
 
-# Associative array: tool name -> path
-declare -gA _TOOL_PATH=() 2>/dev/null || declare -A _TOOL_PATH=()
+# One variable per entry rather than four associative arrays.
+#
+# `_TOOL_PATH_sed` holds sed's path, `_TOOL_VARIANT_sed` its variant,
+# `_TOOL_CAN_sed_inplace` whether that capability is present, and
+# `_TOOL_MISSING_jq` marks a tool looked for and not found.
+#
+# Every read of these outside this module names the tool literally:
+# `${_TOOL_PATH_jq}`, `${_TOOL_PATH_curl}`. A literal name is a plain
+# expansion, so the fifteen modules reading them pay nothing at all for the
+# change, and four files' worth of array syntax leaves the floor.
+#
+# Writing needs an `eval`, once per tool at resolution and never on a read.
+# Names go through `_deps_name_ok` first, because `deps_has` takes whatever a
+# caller hands it and that value now reaches `eval`.
+#
+# Capability names are kept in a list because `deps_caps` has to report what is
+# set, and there is no `${!table[@]}` to ask any more.
+declare -g _TOOL_CAN_NAMES=""
 
-# Associative array: tool name -> variant (gnu/bsd/gawk/mawk/nawk/unknown)
-declare -gA _TOOL_VARIANT=() 2>/dev/null || declare -A _TOOL_VARIANT=()
+# A name safe to build a variable out of. Refused rather than encoded: every
+# tool and capability this module has ever had is already `[a-z0-9_]`, so an
+# encoding would be machinery for a case that does not arise, and refusing
+# leaves the `eval` below unable to see anything that is not a name.
+_deps_name_ok() {
+    case "${1:-}" in
+        "" | *[!A-Za-z0-9_]* ) return 1 ;;
+        [0-9]* ) return 1 ;;
+    esac
+    return 0
+}
 
-# Associative array: capability -> 1 (present) or 0 (absent)
-# Capabilities are named as tool_capability, e.g., sed_inplace, grep_pcre
-declare -gA _TOOL_CAN=() 2>/dev/null || declare -A _TOOL_CAN=()
+# _deps_get <destvar> <table> <name>
+#
+# Reads one entry into a variable rather than printing it, so a read costs no
+# subshell. Callers outside this module skip it entirely where the name is a
+# literal and expand `${_TOOL_PATH_jq}` directly.
+_deps_get() {
+    if ! _deps_name_ok "$3"; then eval "$1=''"; return 1; fi
+    eval "$1=\"\${_TOOL_$2_$3:-}\""
+}
 
-# Tools looked for and not found, so a miss is paid for once.
-declare -gA _TOOL_MISSING=() 2>/dev/null || declare -A _TOOL_MISSING=()
+# _deps_set <table> <name> <value>
+_deps_set() {
+    _deps_name_ok "$2" || return 1
+    eval "_TOOL_$1_$2=\$3"
+}
+
+# _deps_can_set <capability> <0|1>
+#
+# Records the name as well as the value. A fixed list of every capability this
+# module knows would report the unset ones as zero, which is a different answer
+# than `deps_caps` used to give: it listed what had been set, and an absent
+# capability was absent rather than false.
+_deps_can_set() {
+    _deps_name_ok "$1" || return 1
+    case " $_TOOL_CAN_NAMES " in
+        *" $1 "*) : ;;
+        *) _TOOL_CAN_NAMES="${_TOOL_CAN_NAMES} $1" ;;
+    esac
+    eval "_TOOL_CAN_$1=\$2"
+}
 
 # The config file, found once at init rather than on every lookup.
 declare -g _DEPS_CONFIG=""
@@ -292,122 +341,122 @@ _deps_detect_find_variant() {
 
 _deps_detect_capabilities() {
     # sed capabilities
-    if [[ -n "${_TOOL_PATH[sed]:-}" ]]; then
-        local sed_cmd="${_TOOL_PATH[sed]}"
-        local variant="${_TOOL_VARIANT[sed]:-unknown}"
+    if [[ -n "${_TOOL_PATH_sed:-}" ]]; then
+        local sed_cmd="${_TOOL_PATH_sed}"
+        local variant="${_TOOL_VARIANT_sed:-unknown}"
         
         # In-place editing
         # GNU: sed -i 'cmd' file
         # BSD: sed -i '' 'cmd' file
-        _TOOL_CAN[sed_inplace]=1
+        _deps_can_set sed_inplace 1
         
         # Extended regex (-E)
         # Both GNU and BSD support -E now
         if "$sed_cmd" -E 's/a/b/' /dev/null 2>/dev/null; then
-            _TOOL_CAN[sed_extended]=1
+            _deps_can_set sed_extended 1
         else
-            _TOOL_CAN[sed_extended]=0
+            _deps_can_set sed_extended 0
         fi
         
         # GNU-specific -r (same as -E but older)
         if [[ "$variant" == "gnu" ]]; then
-            _TOOL_CAN[sed_regex_r]=1
+            _deps_can_set sed_regex_r 1
         else
-            _TOOL_CAN[sed_regex_r]=0
+            _deps_can_set sed_regex_r 0
         fi
     fi
     
     # grep capabilities
-    if [[ -n "${_TOOL_PATH[grep]:-}" ]]; then
-        local grep_cmd="${_TOOL_PATH[grep]}"
+    if [[ -n "${_TOOL_PATH_grep:-}" ]]; then
+        local grep_cmd="${_TOOL_PATH_grep}"
         
         # Extended regex (-E)
-        _TOOL_CAN[grep_extended]=1
+        _deps_can_set grep_extended 1
         
         # PCRE (-P) - mainly GNU grep
         if echo "test" | "$grep_cmd" -P "t.st" &>/dev/null; then
-            _TOOL_CAN[grep_pcre]=1
+            _deps_can_set grep_pcre 1
         else
-            _TOOL_CAN[grep_pcre]=0
+            _deps_can_set grep_pcre 0
         fi
         
         # --include/--exclude for recursive searches
         if "$grep_cmd" --help 2>&1 | grep -q -- '--include'; then
-            _TOOL_CAN[grep_include]=1
+            _deps_can_set grep_include 1
         else
-            _TOOL_CAN[grep_include]=0
+            _deps_can_set grep_include 0
         fi
         
         # -o (only matching)
         if echo "test" | "$grep_cmd" -o "es" &>/dev/null; then
-            _TOOL_CAN[grep_only_matching]=1
+            _deps_can_set grep_only_matching 1
         else
-            _TOOL_CAN[grep_only_matching]=0
+            _deps_can_set grep_only_matching 0
         fi
     fi
     
     # awk capabilities
-    if [[ -n "${_TOOL_PATH[awk]:-}" ]]; then
-        local awk_cmd="${_TOOL_PATH[awk]}"
-        local variant="${_TOOL_VARIANT[awk]:-unknown}"
+    if [[ -n "${_TOOL_PATH_awk:-}" ]]; then
+        local awk_cmd="${_TOOL_PATH_awk}"
+        local variant="${_TOOL_VARIANT_awk:-unknown}"
         
         # Regex matching (all awks have this)
-        _TOOL_CAN[awk_regex]=1
+        _deps_can_set awk_regex 1
         
         # gawk-specific features
         if [[ "$variant" == "gawk" ]]; then
-            _TOOL_CAN[awk_nextfile]=1
-            _TOOL_CAN[awk_strftime]=1
-            _TOOL_CAN[awk_gensub]=1
+            _deps_can_set awk_nextfile 1
+            _deps_can_set awk_strftime 1
+            _deps_can_set awk_gensub 1
         else
-            _TOOL_CAN[awk_nextfile]=0
-            _TOOL_CAN[awk_strftime]=0
-            _TOOL_CAN[awk_gensub]=0
+            _deps_can_set awk_nextfile 0
+            _deps_can_set awk_strftime 0
+            _deps_can_set awk_gensub 0
         fi
     fi
     
     # stat capabilities
-    if [[ -n "${_TOOL_PATH[stat]:-}" ]]; then
-        local stat_cmd="${_TOOL_PATH[stat]}"
-        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+    if [[ -n "${_TOOL_PATH_stat:-}" ]]; then
+        local stat_cmd="${_TOOL_PATH_stat}"
+        local variant="${_TOOL_VARIANT_stat:-unknown}"
         
         # Format strings
         if [[ "$variant" == "gnu" ]] || [[ "$variant" == "bsd" ]]; then
-            _TOOL_CAN[stat_format]=1
+            _deps_can_set stat_format 1
         else
-            _TOOL_CAN[stat_format]=0
+            _deps_can_set stat_format 0
         fi
     fi
     
     # perl capabilities
-    if [[ -n "${_TOOL_PATH[perl]:-}" ]]; then
-        local perl_cmd="${_TOOL_PATH[perl]}"
+    if [[ -n "${_TOOL_PATH_perl:-}" ]]; then
+        local perl_cmd="${_TOOL_PATH_perl}"
         
         # Basic perl is always capable
-        _TOOL_CAN[perl_regex]=1
-        _TOOL_CAN[perl_inplace]=1
+        _deps_can_set perl_regex 1
+        _deps_can_set perl_inplace 1
         
         # Check for common modules (optional)
         if "$perl_cmd" -MJSON -e '1' 2>/dev/null; then
-            _TOOL_CAN[perl_json]=1
+            _deps_can_set perl_json 1
         else
-            _TOOL_CAN[perl_json]=0
+            _deps_can_set perl_json 0
         fi
     fi
     
     # find capabilities
-    if [[ -n "${_TOOL_PATH[find]:-}" ]]; then
-        local find_cmd="${_TOOL_PATH[find]}"
-        local variant="${_TOOL_VARIANT[find]:-unknown}"
+    if [[ -n "${_TOOL_PATH_find:-}" ]]; then
+        local find_cmd="${_TOOL_PATH_find}"
+        local variant="${_TOOL_VARIANT_find:-unknown}"
         
         # -maxdepth (both have it now)
-        _TOOL_CAN[find_maxdepth]=1
+        _deps_can_set find_maxdepth 1
         
         # -printf (GNU only)
         if [[ "$variant" == "gnu" ]]; then
-            _TOOL_CAN[find_printf]=1
+            _deps_can_set find_printf 1
         else
-            _TOOL_CAN[find_printf]=0
+            _deps_can_set find_printf 0
         fi
     fi
 }
@@ -432,17 +481,17 @@ _deps_init() {
     
     for tool in "${tools[@]}"; do
         if path="$(_deps_find_tool "$tool" "$config_file")"; then
-            _TOOL_PATH[$tool]="$path"
+            _deps_set PATH "$tool" "$path"
             available+=("$tool")
             
             # Detect variant for tools that have meaningful variants
             case "$tool" in
-                sed)  _TOOL_VARIANT[$tool]="$(_deps_detect_sed_variant "$path")" ;;
-                awk)  _TOOL_VARIANT[$tool]="$(_deps_detect_awk_variant "$path")" ;;
-                grep) _TOOL_VARIANT[$tool]="$(_deps_detect_grep_variant "$path")" ;;
-                stat) _TOOL_VARIANT[$tool]="$(_deps_detect_stat_variant "$path")" ;;
-                find) _TOOL_VARIANT[$tool]="$(_deps_detect_find_variant "$path")" ;;
-                *)    _TOOL_VARIANT[$tool]="standard" ;;
+                sed)  _deps_set VARIANT "$tool" "$(_deps_detect_sed_variant "$path")" ;;
+                awk)  _deps_set VARIANT "$tool" "$(_deps_detect_awk_variant "$path")" ;;
+                grep) _deps_set VARIANT "$tool" "$(_deps_detect_grep_variant "$path")" ;;
+                stat) _deps_set VARIANT "$tool" "$(_deps_detect_stat_variant "$path")" ;;
+                find) _deps_set VARIANT "$tool" "$(_deps_detect_find_variant "$path")" ;;
+                *)    _deps_set VARIANT "$tool" standard ;;
             esac
         fi
     done
@@ -477,8 +526,9 @@ _deps_init
 deps_has() {
     local tool="${1:-}"
     [[ -z "$tool" ]] && return 1
-    [[ -n "${_TOOL_PATH[$tool]:-}" ]] && return 0
-    [[ -n "${_TOOL_MISSING[$tool]:-}" ]] && return 1
+    local _hit
+    _deps_get _hit PATH "$tool"    && [[ -n "$_hit" ]] && return 0
+    _deps_get _hit MISSING "$tool" && [[ -n "$_hit" ]] && return 1
 
     # Anything not in the eager list is looked for now, once, and remembered.
     #
@@ -491,11 +541,11 @@ deps_has() {
     # wrong to ask. The answer was.
     local path
     if path="$(_deps_find_tool "$tool" "$_DEPS_CONFIG")"; then
-        _TOOL_PATH[$tool]="$path"
+        _deps_set PATH "$tool" "$path"
         _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"
         return 0
     fi
-    _TOOL_MISSING[$tool]=1
+    _deps_set MISSING "$tool" 1
     return 1
 }
 
@@ -546,7 +596,8 @@ deps_path() {
     # asking where it was did not, because only the first had been taught to
     # look.
     deps_has "$tool" || return 1
-    printf '%s\n' "${_TOOL_PATH[$tool]}"
+    local _p; _deps_get _p PATH "$tool"
+    printf '%s\n' "$_p"
 }
 
 #[pub]
@@ -554,7 +605,8 @@ deps_path() {
 # Usage: deps_variant "sed" -> "gnu" or "bsd"
 deps_variant() {
     local tool="${1:-}"
-    echo "${_TOOL_VARIANT[$tool]:-unknown}"
+    local _v; _deps_get _v VARIANT "$tool"
+    echo "${_v:-unknown}"
 }
 
 #[pub]
@@ -562,7 +614,7 @@ deps_variant() {
 # Usage: deps_is_gnu "sed" -> returns 0 or 1
 deps_is_gnu() {
     local tool="${1:-}"
-    local variant="${_TOOL_VARIANT[$tool]:-}"
+    local variant; _deps_get variant VARIANT "$tool"
     [[ "$variant" == "gnu" ]] || [[ "$variant" == "gawk" ]]
 }
 
@@ -571,7 +623,7 @@ deps_is_gnu() {
 # Usage: deps_is_bsd "sed" -> returns 0 or 1
 deps_is_bsd() {
     local tool="${1:-}"
-    local variant="${_TOOL_VARIANT[$tool]:-}"
+    local variant; _deps_get variant VARIANT "$tool"
     [[ "$variant" == "bsd" ]]
 }
 
@@ -584,7 +636,8 @@ deps_is_bsd() {
 # Usage: deps_can "grep_pcre" -> returns 0 or 1
 deps_can() {
     local cap="${1:-}"
-    [[ "${_TOOL_CAN[$cap]:-0}" == "1" ]]
+    local _c; _deps_get _c CAN "$cap"
+    [[ "${_c:-0}" == "1" ]]
 }
 
 #[pub]
@@ -592,16 +645,18 @@ deps_can() {
 # Usage: deps_cap "grep_pcre" -> "1" or "0"
 deps_cap() {
     local cap="${1:-}"
-    echo "${_TOOL_CAN[$cap]:-0}"
+    local _c; _deps_get _c CAN "$cap"
+    echo "${_c:-0}"
 }
 
 #[pub]
 # List all capabilities (one per line: cap=value)
 # Usage: deps_caps -> "sed_inplace=1\ngrep_pcre=1\n..."
 deps_caps() {
-    local cap
-    for cap in "${!_TOOL_CAN[@]}"; do
-        echo "${cap}=${_TOOL_CAN[$cap]}"
+    local cap _c
+    for cap in $_TOOL_CAN_NAMES; do
+        _deps_get _c CAN "$cap"
+        echo "${cap}=${_c}"
     done | sort
 }
 
@@ -670,8 +725,8 @@ deps_info() {
     
     local tool path variant
     for tool in sed awk grep perl stat mktemp find sort wc tr head tail cut tee xargs; do
-        path="${_TOOL_PATH[$tool]:-}"
-        variant="${_TOOL_VARIANT[$tool]:-}"
+        _deps_get path PATH "$tool"
+        _deps_get variant VARIANT "$tool"
         
         if [[ -n "$path" ]]; then
             printf "  %-10s %s" "$tool:" "$path"
@@ -741,7 +796,7 @@ deps_run() {
 deps_sed_inplace() {
     local pattern="$1"
     local file="$2"
-    local sed_path="${_TOOL_PATH[sed]:-sed}"
+    local sed_path="${_TOOL_PATH_sed:-sed}"
     
     if deps_is_gnu "sed"; then
         "$sed_path" -i "$pattern" "$file"
@@ -756,7 +811,7 @@ deps_sed_inplace() {
 # Usage: deps_stat_size "file" -> "12345"
 deps_stat_size() {
     local file="$1"
-    local stat_path="${_TOOL_PATH[stat]:-stat}"
+    local stat_path="${_TOOL_PATH_stat:-stat}"
     
     if deps_is_gnu "stat"; then
         "$stat_path" -c%s "$file"
@@ -770,7 +825,7 @@ deps_stat_size() {
 # Usage: deps_stat_mtime "file" -> "1234567890"
 deps_stat_mtime() {
     local file="$1"
-    local stat_path="${_TOOL_PATH[stat]:-stat}"
+    local stat_path="${_TOOL_PATH_stat:-stat}"
     
     if deps_is_gnu "stat"; then
         "$stat_path" -c%Y "$file"

@@ -62,7 +62,7 @@ _jq_present() {
         parent="$(_jq_path "${dotted%.*}")"
     fi
 
-    answer="$(printf '%s' "$json" | "${_TOOL_PATH[jq]}" -r \
+    answer="$(printf '%s' "$json" | "${_TOOL_PATH_jq}" -r \
         "${parent} | if type == \"object\" then has(\"${last}\")
          elif type == \"array\" then ((\"${last}\" | tonumber? // -1) as \$i
               | \$i >= 0 and \$i < length)
@@ -76,7 +76,7 @@ _json_get_jq() {
     _jq_present "$json" "$path" || return 1
 
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -c -S -r "$expr" 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -c -S -r "$expr" 2>/dev/null
 }
 
 _json_set_jq() {
@@ -87,45 +87,45 @@ _json_set_jq() {
     if [[ "$value" == "true" || "$value" == "false" || "$value" == "null" || \
           "$value" =~ ^-?[0-9]+(\.[0-9]+)?$ || \
           "$value" == "["* || "$value" == "{"* ]]; then
-        printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -c -S "$expr = $value" 2>/dev/null
+        printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -c -S "$expr = $value" 2>/dev/null
     else
-        printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -c -S --arg v "$value" "$expr = \$v" 2>/dev/null
+        printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -c -S --arg v "$value" "$expr = \$v" 2>/dev/null
     fi
 }
 
 _json_keys_jq() {
     local json="${1:-}" path="${2:-}" expr
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -r "$expr | if type == \"array\" then range(length) else keys[] end" 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | if type == \"array\" then range(length) else keys[] end" 2>/dev/null
 }
 
 _json_valid_jq() {
     local json="${1:-}"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -e . >/dev/null 2>&1
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -e . >/dev/null 2>&1
 }
 
 _json_pretty_jq() {
     local json="${1:-}"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -S '.' 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -S '.' 2>/dev/null
 }
 
 _json_compact_jq() {
     local json="${1:-}"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -c -S '.' 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -c -S '.' 2>/dev/null
 }
 
 _json_type_jq() {
     local json="${1:-}" path="${2:-}" expr
     _jq_present "$json" "$path" || return 1
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -r "$expr | type" 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | type" 2>/dev/null
 }
 
 _json_length_jq() {
     local json="${1:-}" path="${2:-}" expr
     _jq_present "$json" "$path" || return 1
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -r "$expr | length" 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | length" 2>/dev/null
 }
 
 # `*` recurses into objects where python's `update` and perl's slice assignment
@@ -134,12 +134,12 @@ _json_length_jq() {
 # into it.
 _json_merge_jq() {
     local json1="$1" json2="$2"
-    printf '%s\n' "$json1" | "${_TOOL_PATH[jq]}" -c -S ". + $json2" 2>/dev/null
+    printf '%s\n' "$json1" | "${_TOOL_PATH_jq}" -c -S ". + $json2" 2>/dev/null
 }
 
 # `del` printed its result formatted while python and perl printed it compact.
 _json_delete_jq() {
     local json="$1" path="$2" expr
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH[jq]}" -c -S "del($expr)" 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -c -S "del($expr)" 2>/dev/null
 }

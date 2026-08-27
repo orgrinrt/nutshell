@@ -19,8 +19,8 @@ _text_replace_sed_impl() {
     [[ -z "$pattern" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local sed_path="${_TOOL_PATH[sed]:-sed}"
-    local variant="${_TOOL_VARIANT[sed]:-unknown}"
+    local sed_path="${_TOOL_PATH_sed:-sed}"
+    local variant="${_TOOL_VARIANT_sed:-unknown}"
     
     if [[ "$variant" == "gnu" ]]; then
         "$sed_path" -i "s/${pattern}/${replacement}/g" "$file"

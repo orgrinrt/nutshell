@@ -22,8 +22,8 @@ _text_replace_awk_impl() {
     [[ -z "$pattern" ]] && return 1
     [[ ! -f "$file" ]] && return 1
     
-    local awk_path="${_TOOL_PATH[awk]:-awk}"
-    local mktemp_path="${_TOOL_PATH[mktemp]:-mktemp}"
+    local awk_path="${_TOOL_PATH_awk:-awk}"
+    local mktemp_path="${_TOOL_PATH_mktemp:-mktemp}"
     
     # awk doesn't have in-place editing; use temp file
     local temp

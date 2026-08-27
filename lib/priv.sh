@@ -29,7 +29,13 @@
 #   printf '%s/.local/state\n' "$(priv_user_home)"
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success.
+[ -n "${_NUTSHELL_PRIV_SH:-}" ] && return 0
+_NUTSHELL_PRIV_SH=1
 
 use log
 
@@ -38,21 +44,21 @@ use log
 # Read at load time on purpose. A caller asking later, from inside something
 # that has already elevated, would be told about root, and the whole point is
 # to answer about the person.
-declare -g PRIV_USER="${PRIV_USER:-}"
-declare -g PRIV_HOME="${PRIV_HOME:-}"
-declare -g PRIV_UID="${PRIV_UID:-}"
+PRIV_USER="${PRIV_USER:-}"
+PRIV_HOME="${PRIV_HOME:-}"
+PRIV_UID="${PRIV_UID:-}"
 
 _priv_learn_user() {
-    [[ -z "$PRIV_UID" ]] || return 0
+    [ -z "$PRIV_UID" ] || return 0
 
     # `SUDO_USER` is set when this process was itself started under sudo, and
     # then it names the person rather than root. That case is the one this
     # module is trying to make unnecessary, and it still has to be answered
     # correctly while it exists.
-    if [[ "$(id -u 2>/dev/null)" == "0" && -n "${SUDO_USER:-}" ]]; then
+    if [ "$(id -u 2>/dev/null)" = "0" ] && [ -n "${SUDO_USER:-}" ]; then
         PRIV_USER="$SUDO_USER"
         PRIV_UID="${SUDO_UID:-}"
-        [[ -n "$PRIV_UID" ]] || PRIV_UID="$(id -u "$PRIV_USER" 2>/dev/null)"
+        [ -n "$PRIV_UID" ] || PRIV_UID="$(id -u "$PRIV_USER" 2>/dev/null)"
         PRIV_HOME="$(_priv_home_of "$PRIV_USER")"
         return 0
     fi
@@ -68,28 +74,36 @@ _priv_home_of() {
     # Initialised, not merely declared: `local x` leaves it unset, and a caller
     # running under `set -u` gets an error rather than an empty string.
     local u="$1" line=""
-    [[ -n "$u" ]] || return 1
+    [ -n "$u" ] || return 1
     if command -v getent >/dev/null 2>&1; then
         line="$(getent passwd "$u" 2>/dev/null)" || line=""
     fi
-    if [[ -z "$line" && -r /etc/passwd ]]; then
+    if [ -z "$line" ] && [ -r /etc/passwd ]; then
         while IFS= read -r line; do
-            [[ "$line" == "${u}:"* ]] && break
+            case "$line" in "${u}:"*) break ;; esac
             line=""
         done < /etc/passwd
     fi
-    if [[ -n "$line" ]]; then
-        # name:passwd:uid:gid:gecos:home:shell
-        local IFS=:
-        # shellcheck disable=SC2206
-        local -a f=($line)
-        [[ -n "${f[5]:-}" ]] && { printf '%s' "${f[5]}"; return 0; }
+    if [ -n "$line" ]; then
+        # name:passwd:uid:gid:gecos:home:shell, and the home is the sixth.
+        #
+        # Cut to it rather than splitting into an array, which needs `local -a`
+        # and an `IFS` a POSIX shell has no per-command form of. Five fields
+        # dropped from the front, then everything from the next colon on.
+        local home="$line"
+        home="${home#*:}"   # passwd
+        home="${home#*:}"   # uid
+        home="${home#*:}"   # gid
+        home="${home#*:}"   # gecos
+        home="${home#*:}"   # home:shell
+        home="${home%%:*}"  # home
+        [ -n "$home" ] && { printf '%s' "$home"; return 0; }
     fi
     # A mac keeps its users elsewhere, and `dscl` is how you ask.
     if command -v dscl >/dev/null 2>&1; then
         local h; h="$(dscl . -read "/Users/${u}" NFSHomeDirectory 2>/dev/null)" || h=""
         h="${h#*: }"
-        [[ -n "$h" ]] && { printf '%s' "$h"; return 0; }
+        [ -n "$h" ] && { printf '%s' "$h"; return 0; }
     fi
     return 1
 }
@@ -122,9 +136,22 @@ priv_user_home() { _priv_learn_user; printf '%s' "$PRIV_HOME"; }
 #
 # Single quotes take everything literally, so the only character needing work
 # is the single quote itself: close, escape it outside the quotes, reopen.
+# One shell-quoted word, safe to hand to `su -c`.
+#
+# Walked rather than `${s//from/to}`, which is bash's. Every single quote
+# closes the quoting, escapes itself, and opens it again, which is the only
+# form that survives inside single quotes.
 _priv_sq() {
-    local s="${1:-}"
-    printf "'%s'" "${s//\'/\'\\\'\'}"
+    local s="${1:-}" out="" head
+    while :; do
+        case "$s" in
+            *\'*) head="${s%%\'*}"
+                  out="${out}${head}'\\''"
+                  s="${s#*\'}" ;;
+            *) break ;;
+        esac
+    done
+    printf "'%s'" "${out}${s}"
 }
 
 #[pub]
@@ -145,10 +172,10 @@ _priv_sq() {
 # Usage: priv_as_user "reading your checkout" git -C "$d" status
 priv_as_user() {
     local what="${1:-a step}"; shift || true
-    (( $# > 0 )) || { log_error "priv_as_user: nothing to run"; return 2; }
+    [ "$#" -gt 0 ] || { log_error "priv_as_user: nothing to run"; return 2; }
 
     local u; u="$(priv_user)"
-    if ! priv_is_root || [[ -z "$u" || "$u" == "root" ]]; then
+    if ! priv_is_root || [ -z "$u" ] || [ "$u" = "root" ]; then
         "$@"
         return $?
     fi
@@ -170,7 +197,7 @@ priv_as_user() {
             # back into one string. Every other route avoids that.
             su)
                 local q="" a
-                for a in "$@"; do q+="${q:+ }$(_priv_sq "$a")"; done
+                for a in "$@"; do q="${q}${q:+ }$(_priv_sq "$a")"; done
                 # No `-s`. That flag is util-linux; BSD and macOS `su` is
                 # `su [-] [-flm] [login [args]]` and refuses it, and this is
                 # the branch a busybox rescue console actually takes.
@@ -187,7 +214,7 @@ priv_as_user() {
 #[pub]
 # Is this already root?
 # Usage: priv_is_root
-priv_is_root() { [[ "$(id -u 2>/dev/null)" == "0" ]]; }
+priv_is_root() { [ "$(id -u 2>/dev/null)" = "0" ]; }
 
 #[pub]
 # Can this ask for root at all, and how?
@@ -236,7 +263,7 @@ priv_needs_password() {
 # Usage: priv_run "mount the stick" mount /dev/sda2 /mnt
 priv_run() {
     local what="${1:-a privileged step}"; shift || true
-    (( $# > 0 )) || { log_error "priv_run: nothing to run"; return 2; }
+    [ "$#" -gt 0 ] || { log_error "priv_run: nothing to run"; return 2; }
 
     if priv_is_root; then
         "$@"
@@ -269,9 +296,9 @@ priv_run() {
 
 # Is there a terminal a password could be typed on?
 _priv_can_prompt() {
-    [[ -t 0 || -t 1 || -t 2 ]] && return 0
+    { [ -t 0 ] || [ -t 1 ] || [ -t 2 ]; } && return 0
     # An askpass helper is a terminal by another name.
-    [[ -n "${SUDO_ASKPASS:-}" ]] && return 0
+    [ -n "${SUDO_ASKPASS:-}" ] && return 0
     return 1
 }
 
@@ -284,11 +311,11 @@ _priv_can_prompt() {
 # Usage: priv_return <path>...
 priv_return() {
     local u; u="$(priv_user)"
-    [[ -n "$u" && "$u" != "root" ]] || return 0
+    { [ -n "$u" ] && [ "$u" != "root" ]; } || return 0
     priv_is_root || return 0
     local p
     for p in "$@"; do
-        [[ -e "$p" ]] || continue
+        [ -e "$p" ] || continue
         chown -R "$u" "$p" 2>/dev/null || true
     done
 }

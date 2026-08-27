@@ -41,44 +41,13 @@ _NUTSHELL_JSON_SH=1
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
-use deps
+use deps string
 
 # A newline and a tab as themselves. There is no `$'\n'` here to write one
 # inline with, and the trailing `.` is because command substitution strips the
 # trailing newline, which is the character being asked for.
 _JSON_NL="$(printf '\n.')"; _JSON_NL="${_JSON_NL%.}"
 _JSON_TAB="$(printf '\t.')"; _JSON_TAB="${_JSON_TAB%.}"
-
-# Every occurrence of one string swapped for another, into a named variable.
-# There is no `${x//from/to}` here.
-#
-# `string`'s `str_replace` does the same walk and is on the floor, and it
-# prints, so each of the eight calls below would cost a fork and lose a
-# trailing newline from a value that is allowed to have one. This is the second
-# copy of the loop in this library, which is worth one comment and not yet
-# worth a shared out-name form and a new dependency in two modules.
-_json_gsub() {
-    # An empty needle matches everywhere and the loop never shortens the
-    # remainder, so it appends forever. `str_replace` guards this on its first
-    # line and this copy did not, which is the cost of the second copy.
-    [ -n "$2" ] || { eval "$4=\$1"; return 0; }
-    # The out-name reaches `eval`, so it is checked the way every other
-    # out-name in this library is: `_json_gsub a b c 'v; echo X'` ran the echo.
-    case "$4" in
-        ''|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;;
-    esac
-    _jg_rest="$1"; _jg_acc=""
-    while :; do
-        case "$_jg_rest" in
-            *"$2"*)
-                _jg_acc="${_jg_acc}${_jg_rest%%"$2"*}$3"
-                _jg_rest="${_jg_rest#*"$2"}"
-                ;;
-            *) break ;;
-        esac
-    done
-    eval "$4=\${_jg_acc}\${_jg_rest}"
-}
 
 # -----------------------------------------------------------------------------
 # Module Status
@@ -337,10 +306,10 @@ json_object() {
         
         # Escape special characters in value
         # Backslash first. Any other order escapes the backslashes it adds.
-        _json_gsub "$value" '\' '\\' value
-        _json_gsub "$value" '"' '\"' value
-        _json_gsub "$value" "$_JSON_NL" '\n' value
-        _json_gsub "$value" "$_JSON_TAB" '\t' value
+        str_replace "$value" '\' '\\' value
+        str_replace "$value" '"' '\"' value
+        str_replace "$value" "$_JSON_NL" '\n' value
+        str_replace "$value" "$_JSON_TAB" '\t' value
         
         result="${result}""\"${key}\":\"${value}\""
     done
@@ -363,10 +332,10 @@ json_array() {
         
         # Escape special characters
         # Backslash first. Any other order escapes the backslashes it adds.
-        _json_gsub "$value" '\' '\\' value
-        _json_gsub "$value" '"' '\"' value
-        _json_gsub "$value" "$_JSON_NL" '\n' value
-        _json_gsub "$value" "$_JSON_TAB" '\t' value
+        str_replace "$value" '\' '\\' value
+        str_replace "$value" '"' '\"' value
+        str_replace "$value" "$_JSON_NL" '\n' value
+        str_replace "$value" "$_JSON_TAB" '\t' value
         
         result="${result}""\"${value}\""
     done

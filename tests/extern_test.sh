@@ -541,29 +541,36 @@ it_remembers_a_resolved_path() {
     # Every `use <dep>::<module>` resolved the dependency again: manifest
     # re-read, lockfile re-read, git asked twice. None of it can change while a
     # script runs, and five modules out of one library cost it five times.
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[fixture]="/tmp"
+    # Through the module's own accessors rather than into whatever it keeps
+    # the memo in. These reached into `_EXTERN_RESOLVED[...]` directly and
+    # broke the moment that became a `map`, on a change that altered nothing
+    # about the answer.
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED fixture "/tmp"
     _extern_is_repo() { return 0; }
     assert_eq "$(extern_path fixture)" "/tmp"
 }
 
 #[test]
 it_forgets_one_name_when_asked() {
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[a]="/tmp/a"
-    _EXTERN_RESOLVED[b]="/tmp/b"
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED a "/tmp/a"
+    map_set _EXTERN_RESOLVED b "/tmp/b"
     extern_forget a
-    assert_empty "${_EXTERN_RESOLVED[a]:-}"
-    assert_eq "${_EXTERN_RESOLVED[b]:-}" "/tmp/b"
+    local va="" vb=""
+    map_read va _EXTERN_RESOLVED a
+    map_read vb _EXTERN_RESOLVED b
+    assert_empty "$va"
+    assert_eq "$vb" "/tmp/b"
 }
 
 #[test]
 it_forgets_everything_when_given_no_name() {
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[a]="/tmp/a"
-    _EXTERN_RESOLVED[b]="/tmp/b"
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED a "/tmp/a"
+    map_set _EXTERN_RESOLVED b "/tmp/b"
     extern_forget
-    assert_eq "${#_EXTERN_RESOLVED[@]}" "0"
+    assert_eq "$(map_len _EXTERN_RESOLVED)" "0"
 }
 
 #[test]
@@ -571,11 +578,13 @@ it_does_not_hand_back_a_checkout_that_has_gone() {
     # A cached path whose checkout was removed is worse than no cache: the
     # caller gets a directory git will not answer for, and no explanation.
     # It must fall through and resolve again rather than returning it.
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[fixture]="/tmp/definitely-not-a-checkout"
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED fixture "/tmp/definitely-not-a-checkout"
     _extern_is_repo() { return 1; }
     extern_path fixture >/dev/null 2>&1 || true
-    assert_empty "${_EXTERN_RESOLVED[fixture]:-}"
+    local v=""
+    map_read v _EXTERN_RESOLVED fixture
+    assert_empty "$v"
 }
 
 # --- how a module path is spelled ----------------------------------------------

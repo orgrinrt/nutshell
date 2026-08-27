@@ -137,7 +137,20 @@ test_posix_floor() {
 
     local files file rel total=0 unreadable=0 exempt=0 gated=0 why
     declare -a bad=()
+
+    # `get_script_files` honours the project's excludes, and this project
+    # excludes `/impl/` from its quality checks: those files are repetitive by
+    # design, one per tool, and a duplication or size finding about them says
+    # nothing.
+    #
+    # The POSIX question is not a quality question. An impl module is sourced
+    # at run time by the module that chose it, on whatever shell is running,
+    # so it has to parse there like anything else. Excluded, twelve of them
+    # were invisible and the number read as smaller than it was.
     files="$(get_script_files)"
+    local extra
+    extra="$(find "$REPO_ROOT/lib" -type f -name '*.sh' -path '*/impl/*' 2>/dev/null)"
+    [[ -n "$extra" ]] && files="${files}"$'\n'"${extra}"
 
     local -A shell_gated=()
     while IFS= read -r rel; do

@@ -47,27 +47,3 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
         _fs_mtime_perl_impl "$@"
     }
 fi
-
-# When executed directly: dispatch based on first argument
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Minimal environment setup for standalone execution
-    if [[ -z "${_TOOL_PATH[perl]:-}" ]]; then
-        declare -A _TOOL_PATH=()
-        _TOOL_PATH[perl]="$(command -v perl 2>/dev/null || echo "perl")"
-    fi
-    
-    case "${1:-}" in
-        --size)
-            shift
-            _fs_size_perl_impl "$@"
-            ;;
-        --mtime)
-            shift
-            _fs_mtime_perl_impl "$@"
-            ;;
-        *)
-            echo "Usage: $0 [--size|--mtime] path" >&2
-            exit 1
-            ;;
-    esac
-fi

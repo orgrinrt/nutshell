@@ -66,31 +66,3 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
         _text_count_matches_grep_impl "$@"
     }
 fi
-
-# When executed directly: dispatch based on first argument
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Minimal environment setup for standalone execution
-    if [[ -z "${_TOOL_PATH[grep]:-}" ]]; then
-        declare -A _TOOL_PATH=()
-        _TOOL_PATH[grep]="$(command -v grep 2>/dev/null || echo "grep")"
-    fi
-    
-    case "${1:-}" in
-        --grep)
-            shift
-            _text_grep_grep_impl "$@"
-            ;;
-        --contains)
-            shift
-            _text_contains_grep_impl "$@"
-            ;;
-        --count)
-            shift
-            _text_count_matches_grep_impl "$@"
-            ;;
-        *)
-            echo "Usage: $0 [--grep|--contains|--count] pattern file" >&2
-            exit 1
-            ;;
-    esac
-fi

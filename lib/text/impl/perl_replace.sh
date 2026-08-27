@@ -19,8 +19,8 @@ _text_replace_perl_impl() {
     local replacement="${2:-}"
     local file="${3:-}"
     
-    [[ -z "$pattern" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$pattern" ] && return 1
+    [ ! -f "$file" ] && return 1
     
     local perl_path="${_TOOL_PATH_perl:-perl}"
     
@@ -29,9 +29,11 @@ _text_replace_perl_impl() {
     "$perl_path" -i -pe "s/${pattern}/${replacement}/g" "$file"
 }
 
-# When sourced: redefine the public function
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    text_replace() {
-        _text_replace_perl_impl "$@"
-    }
-fi
+# Sourced, always: the resolver is the only thing that opens this file, and it
+# sources it. The `if [[ "${BASH_SOURCE[0]}" != "${0}" ]]` this replaces asked
+# whether that was so, which is a question with one answer and a bad
+# substitution under a POSIX shell, where there is no `BASH_SOURCE` to
+# subscript.
+text_replace() {
+    _text_replace_perl_impl "$@"
+}

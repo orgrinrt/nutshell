@@ -30,9 +30,9 @@ _text_grep_sed_filtered_replace_impl() {
     local replace="${3:-}"
     local file="${4:-}"
     
-    [[ -z "$filter" ]] && return 1
-    [[ -z "$search" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$filter" ] && return 1
+    [ -z "$search" ] && return 1
+    [ ! -f "$file" ] && return 1
     
     local grep_path="${_TOOL_PATH_grep:-grep}"
     local sed_path="${_TOOL_PATH_sed:-sed}"
@@ -40,7 +40,7 @@ _text_grep_sed_filtered_replace_impl() {
     
     # Create temp file
     local temp
-    if [[ -n "${_TOOL_PATH_mktemp:-}" ]]; then
+    if [ -n "${_TOOL_PATH_mktemp:-}" ]; then
         temp="$("${_TOOL_PATH_mktemp}")"
     else
         temp="/tmp/grep_sed.$$"
@@ -59,7 +59,7 @@ _text_grep_sed_filtered_replace_impl() {
     local line_nums
     line_nums=$("$grep_path" -n "$filter" "$file" 2>/dev/null | cut -d: -f1)
     
-    if [[ -n "$line_nums" ]]; then
+    if [ -n "$line_nums" ]; then
         # Build sed command for specific lines
         local sed_cmd=""
         for num in $line_nums; do
@@ -85,8 +85,8 @@ _text_grep_sed_extract_transform_impl() {
     local replace="${3:-}"
     local file="${4:-}"
     
-    [[ -z "$pattern" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$pattern" ] && return 1
+    [ ! -f "$file" ] && return 1
     
     local grep_path="${_TOOL_PATH_grep:-grep}"
     local sed_path="${_TOOL_PATH_sed:-sed}"
@@ -102,9 +102,9 @@ _text_grep_sed_count_in_matches_impl() {
     local count_pattern="${2:-}"
     local file="${3:-}"
     
-    [[ -z "$filter" ]] && { echo "0"; return 1; }
-    [[ -z "$count_pattern" ]] && { echo "0"; return 1; }
-    [[ ! -f "$file" ]] && { echo "0"; return 1; }
+    [ -z "$filter" ] && { echo "0"; return 1; }
+    [ -z "$count_pattern" ] && { echo "0"; return 1; }
+    [ ! -f "$file" ] && { echo "0"; return 1; }
     
     local grep_path="${_TOOL_PATH_grep:-grep}"
     local sed_path="${_TOOL_PATH_sed:-sed}"
@@ -121,8 +121,8 @@ _text_replace_grep_sed_impl() {
     local replacement="${2:-}"
     local file="${3:-}"
     
-    [[ -z "$pattern" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$pattern" ] && return 1
+    [ ! -f "$file" ] && return 1
     
     local grep_path="${_TOOL_PATH_grep:-grep}"
     local sed_path="${_TOOL_PATH_sed:-sed}"

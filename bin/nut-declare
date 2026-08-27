@@ -88,6 +88,16 @@ _dupes() {
     _scan | awk -F'\t' '{ print $1 }' | sort | uniq -d
 }
 
+# Every file a declaration names. One module may name several.
+_lib_nut_files_of() {
+    local r="$1" n f _rest
+    [[ -r "${r}/lib.nut" ]] || return 1
+    while read -r n f _rest || [[ -n "$n" ]]; do
+        [[ -z "$n" || "${n:0:1}" == "#" ]] && continue
+        [[ -n "$f" ]] && printf '%s\n' "$f"
+    done < "${r}/lib.nut"
+}
+
 # Every name a declaration holds. One parser for the checker, so it and the
 # resolver cannot disagree about what the file says.
 _lib_nut_modules_of() {
@@ -132,24 +142,53 @@ case "$MODE" in
         # a comment wherever it starts, a missing newline on the last line does
         # not lose it, and a line that is not a declaration is reported rather
         # than crashing on an unset positional.
-        while read -r dname dfile dvis || [[ -n "$dname" ]]; do
+        while read -r dname dfile drest || [[ -n "$dname" ]]; do
             [[ -z "$dname" || "${dname:0:1}" == "#" ]] && continue
             if [[ -z "$dfile" ]]; then
                 printf 'not a declaration: %s\n' "$dname"; rc=1; continue
             fi
-            case "${dvis:-}" in
-                ""|internal) ;;
-                *) printf 'unknown visibility on %s: %s\n' "$dname" "$dvis"; rc=1 ;;
-            esac
+            # The trailing columns are words rather than positions, the same
+            # way the resolver reads them, or the two disagree about what a
+            # row says. Read by position, `when=shell:bash4` was reported as
+            # an unknown visibility.
+            for dword in $drest; do
+                case "$dword" in
+                    internal) ;;
+                    when=*)
+                        # The predicate's words too, because `_nut_when` refuses
+                        # one it does not know and a refused predicate is a
+                        # variant that silently never loads. Caught here it is a
+                        # typo somebody can see.
+                        _dp="${dword#when=}"
+                        while [ -n "$_dp" ]; do
+                            case "$_dp" in
+                                *+*) dpart="${_dp%%+*}"; _dp="${_dp#*+}" ;;
+                                *)   dpart="$_dp"; _dp="" ;;
+                            esac
+                            case "$dpart" in
+                                have:?*|env:?*|shell:bash|shell:bash4) ;;
+                                *) printf 'unknown predicate on %s: %s\n' "$dname" "$dpart"; rc=1 ;;
+                            esac
+                        done
+                        ;;
+                    *) printf 'unknown word on %s: %s\n' "$dname" "$dword"; rc=1 ;;
+                esac
+            done
             if [[ ! -f "$ROOT/$dfile" ]]; then
                 printf 'declared but missing: %s -> %s\n' "$dname" "$dfile"; rc=1
             fi
         done < "$ROOT/lib.nut"
+        # By file, not by the name the path suggests.
+        #
+        # A module may name several files, which is what a `when=` row is, and
+        # `lib/string.posix.sh` is not a module called `string.posix`: it is
+        # one of the files module `string` can be. Asked by derived name, every
+        # variant reads as an undeclared file.
+        declared_files="$(_lib_nut_files_of "$ROOT")"
         while IFS=$'\t' read -r name rel _vis; do
-            # Compared as a word, not matched as a pattern. A module named
-            # `fs.impl` would otherwise match `fsXimpl` and be reported as
-            # declared when it is not.
-            _lib_nut_modules_of "$ROOT" | grep -qxF "$name" \
+            # Compared as a word, not matched as a pattern. A path
+            # `lib/fs.sh` would otherwise match `lib/fsXsh`.
+            grep -qxF "$rel" <<<"$declared_files" \
                 || { printf 'present but undeclared: %s (%s)\n' "$name" "$rel"; rc=1; }
         done < <(_scan)
         # Not `local`: this is a case arm at file scope, where `local` is a

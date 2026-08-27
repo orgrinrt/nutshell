@@ -360,8 +360,40 @@ it_reports_a_visibility_it_does_not_understand() {
     mkdir -p "$d/lib"; : > "$d/lib/x.sh"
     printf 'x lib/x.sh publicish\n' > "$d/lib.nut"
     out="$("$DECLARE" --check "$d" 2>&1 || true)"
-    # A typo in the third column silently made an internal module public.
-    assert_ok grep -q 'unknown visibility' <<<"$out"
+    # A typo in a trailing column silently made an internal module public.
+    #
+    # "word" rather than "visibility": a trailing column can be a visibility or
+    # a `when=` predicate now, and calling every one of them a visibility told
+    # a reader with a mistyped predicate to look at the wrong thing.
+    assert_ok grep -q 'unknown word' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_reports_a_predicate_it_does_not_understand() {
+    # A predicate `_nut_when` refuses is a variant that silently never loads,
+    # and the row looks fine. Caught here it is a typo somebody can see.
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/lib"; : > "$d/lib/x.sh"
+    printf 'x lib/x.sh when=shel:bash4
+' > "$d/lib.nut"
+    out="$("$DECLARE" --check "$d" 2>&1 || true)"
+    assert_ok grep -q 'unknown predicate' <<<"$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_accepts_every_predicate_word_the_resolver_knows() {
+    # The control. A validator rejecting everything would pass the test above
+    # and refuse every real manifest.
+    local d out rc; d="$(mktemp -d)"
+    mkdir -p "$d/lib"; : > "$d/lib/x.sh"
+    printf 'x lib/x.sh when=have:grep+shell:bash4
+y lib/x.sh when=env:HOME
+z lib/x.sh when=shell:bash
+' > "$d/lib.nut"
+    rc=0; out="$("$DECLARE" --check "$d" 2>&1)" || rc=$?
+    assert_eq "$rc" "0" "$out"
     rm -rf "$d"
 }
 

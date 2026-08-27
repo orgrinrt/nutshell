@@ -133,3 +133,68 @@ it_reports_a_declaration_nothing_uses() {
     MODGRAPH_NOCACHE=1 modgraph_build "$FIXTURE"
     assert_contains "$(modgraph_audit)" "unused	idle	alpha"
 }
+
+# --- two files, one module ---------------------------------------------------
+#
+# A `when=` row means a module is written twice, once for bash and once for
+# POSIX sh, and only one is ever loaded. Named from the path, the second
+# becomes a module of its own that calls everything the first defines and
+# declares none of it, and the contract check reports every function.
+#
+# Fifteen of those on `string` the day the floor was added.
+
+_mgv_lib() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-mgv.XXXXXX")"
+    mkdir -p "$d/lib"
+    printf '%s' "$1" > "$d/lib.nut"
+    printf 'nut_once || return 0\n#[pub]\n# Usage: thing_do\nthing_do() { :; }\n' > "$d/lib/thing.sh"
+    printf 'nut_once || return 0\n#[pub]\n# Usage: thing_do\nthing_do() { :; }\n' > "$d/lib/thing.posix.sh"
+    printf '%s' "$d"
+}
+
+#[test]
+it_reads_two_variant_files_as_one_module() {
+    local d; d="$(_mgv_lib 'thing  lib/thing.sh        when=shell:bash4
+thing  lib/thing.posix.sh')"
+    MODGRAPH_ROOT="$d" modgraph_build "$d/lib"
+    local mods; mods="$(printf '%s\n' "${_MG_MODULES[@]}" | sort | tr '\n' ' ')"
+    assert_eq "$mods" "thing "
+    unset MODGRAPH_ROOT
+    rm -rf "$d"
+}
+
+#[test]
+it_reports_no_undeclared_call_between_two_variants() {
+    # The property that matters, rather than the module count: one spelling
+    # must not read as calling into the other.
+    local d; d="$(_mgv_lib 'thing  lib/thing.sh        when=shell:bash4
+thing  lib/thing.posix.sh')"
+    MODGRAPH_ROOT="$d" modgraph_build "$d/lib"
+    assert_empty "$(modgraph_audit | grep undeclared || true)"
+    unset MODGRAPH_ROOT
+    rm -rf "$d"
+}
+
+#[test]
+it_still_reads_two_unrelated_files_as_two_modules() {
+    # The control. Merging on the file stem, or merging everything, would pass
+    # both tests above and collapse the whole graph into one node.
+    local d; d="$(_mgv_lib 'thing  lib/thing.sh
+other  lib/thing.posix.sh')"
+    MODGRAPH_ROOT="$d" modgraph_build "$d/lib"
+    local mods; mods="$(printf '%s\n' "${_MG_MODULES[@]}" | sort | tr '\n' ' ')"
+    assert_eq "$mods" "other thing "
+    unset MODGRAPH_ROOT
+    rm -rf "$d"
+}
+
+#[test]
+it_names_a_file_the_manifest_does_not_mention_by_its_stem() {
+    # What every file did before there was a manifest to ask, and what a file
+    # outside one still gets.
+    local d; d="$(_mgv_lib 'thing  lib/thing.sh')"
+    assert_eq "$(_mg_module_of "$d/lib/thing.posix.sh" "$d")" "thing.posix"
+    assert_eq "$(_mg_module_of "$d/lib/thing.sh" "$d")" "thing"
+    assert_eq "$(_mg_module_of "/tmp/nowhere/zzz.sh" "$d")" "zzz"
+    rm -rf "$d"
+}

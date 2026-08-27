@@ -79,7 +79,7 @@ use extern log
 # scalar. Same shape mockspace.toml uses for the same job, because it is the
 # same job and a reader should not have to learn two spellings:
 #
-#     nutshell_version = "0.5.0"     the released form
+#     nutshell_version = "0.6.0"     the released form
 #     nutshell_branch  = "dev"       when there is no release yet
 #
 # Root level, before any [table] header. A bare key written after one belongs

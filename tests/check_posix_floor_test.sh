@@ -180,3 +180,42 @@ a  lib/a.sh')"
     assert_empty "$(_shell_gated_files "$d")"
     rm -rf "$d"
 }
+
+# --- the impl modules are in scope -------------------------------------------
+#
+# `get_script_files` honours the project's excludes, and this project excludes
+# `/impl/` from its quality checks: those files are repetitive by design, one
+# per tool, so a duplication or size finding about them says nothing.
+#
+# The POSIX question is not a quality question. An impl module is sourced at
+# run time by the module that chose it, on whatever shell is running, so it has
+# to parse there like anything else. Excluded, twelve of them were invisible
+# and the number read as smaller than it was.
+
+#[test]
+it_scans_the_impl_modules_that_the_project_excludes() {
+    local sh; sh="$(_posix_shell)" || return 0
+    local files
+    files="$(get_script_files)"
+    # The exclusion is real, so this is what the check is working around.
+    assert_eq "$(grep -c '/impl/' <<<"$files" || true)" "0"
+
+    # And there are impl modules to find.
+    local extra
+    extra="$(find "$REPO_ROOT/lib" -type f -name '*.sh' -path '*/impl/*' 2>/dev/null)"
+    assert_ne "$extra" ""
+    assert_ok test "$(grep -c . <<<"$extra")" -gt 5
+}
+
+#[test]
+it_reports_a_count_larger_than_the_excluded_scope() {
+    # The property, rather than the mechanism: whatever the check scans has to
+    # be more than what `get_script_files` hands it, or the widening is not
+    # doing anything and the number is the old one under a new name.
+    local sh; sh="$(_posix_shell)" || return 0
+    local base extra
+    base="$(get_script_files | grep -c . || true)"
+    extra="$(find "$REPO_ROOT/lib" -type f -name '*.sh' -path '*/impl/*' 2>/dev/null | grep -c . || true)"
+    assert_ok test "$extra" -gt 0
+    assert_ok test "$(( base + extra ))" -gt "$base"
+}

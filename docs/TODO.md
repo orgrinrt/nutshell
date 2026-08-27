@@ -462,7 +462,7 @@ for, not a requirement to copy either.
 It was not how it worked. Externs were already central and content-addressed;
 the interpreter was the exception, resolved by picking from what the machine
 happened to have and never fetching. That is the whole of the version trouble:
-`0.4.0` exists only on `dev`, nothing has tagged it, so no amount of resolving
+`0.4.0` existed only on `dev` with nothing tagged, so no amount of resolving
 could find it and the fallback to the vendored copy fired every run.
 
 Settled by this work: a toolchain store keyed by version, a fetch when the
@@ -564,9 +564,10 @@ itself in a file.
 Named before what it enables, because a closed gap reads as progress while a
 falsified claim announces nothing.
 
-- **`init:29`'s `NUTSHELL_VERSION`.** A constant somebody has to remember to
-  bump, which is why `main` says 0.2.0, `dev` says 0.4.0, and neither is a fact
-  about the code. It goes.
+- **`init`'s `NUTSHELL_VERSION`.** A constant somebody has to remember to bump,
+  so for the whole stretch between a bump and the tag that matches it, `dev`
+  reports a version that does not exist yet. That is what let a pre-release
+  tree fill a store directory named for a release. It goes.
 - **`find-nutshell:_nutshell_version_of`.** Reads that constant out of `init`
   without sourcing it. The whole function exists to serve the constant.
 - **The store's name-equals-contents invariant.** `nutshell_toolchains` skips a

@@ -277,14 +277,28 @@ fs_size() {
         impl="perl_stat"
     fi
     
-    if [[ -n "$impl" ]]; then
-        # Named, not sourced by an assembled path. The resolver knows where
-        # the module is, loads it once however many callers arrive, and the
-        # declaration covers it; a hand-rolled `source` has none of that, and
-        # fails at the moment it is reached rather than before the run.
-        nut_reload "super::fs::impl::${impl}"
-    else
-        # No tool available
+    # Written out rather than assembled from `$impl`.
+    #
+    # Named, not sourced by a path: the resolver knows where the module is,
+    # loads it once however many callers arrive, and the declaration covers
+    # it. That part was already right.
+    #
+    # What was not: `nut_reload "super::fs::impl::${impl}"` builds the name at
+    # run time, so nothing reading this file can tell which modules it can
+    # reach. Every other dispatch in the library is literal, thirteen of them
+    # in `text.sh` alone, and these two were the only ones that were not. A
+    # pass that drops what nothing calls would drop two of these three and
+    # fail at first call on whichever machine has the other `stat`.
+    #
+    # The set is closed and has three members, so writing them out costs four
+    # lines and makes the whole library statically readable.
+    case "$impl" in
+        stat_gnu)  nut_reload super::fs::impl::stat_gnu ;;
+        stat_bsd)  nut_reload super::fs::impl::stat_bsd ;;
+        perl_stat) nut_reload super::fs::impl::perl_stat ;;
+    esac
+
+    if [[ -z "$impl" ]]; then
         fs_size() {
             echo "[ERROR] fs_size: no stat tool available" >&2
             return 1
@@ -324,13 +338,28 @@ fs_mtime() {
         impl="perl_stat"
     fi
     
-    if [[ -n "$impl" ]]; then
-        # Named, not sourced by an assembled path. The resolver knows where
-        # the module is, loads it once however many callers arrive, and the
-        # declaration covers it; a hand-rolled `source` has none of that, and
-        # fails at the moment it is reached rather than before the run.
-        nut_reload "super::fs::impl::${impl}"
-    else
+    # Written out rather than assembled from `$impl`.
+    #
+    # Named, not sourced by a path: the resolver knows where the module is,
+    # loads it once however many callers arrive, and the declaration covers
+    # it. That part was already right.
+    #
+    # What was not: `nut_reload "super::fs::impl::${impl}"` builds the name at
+    # run time, so nothing reading this file can tell which modules it can
+    # reach. Every other dispatch in the library is literal, thirteen of them
+    # in `text.sh` alone, and these two were the only ones that were not. A
+    # pass that drops what nothing calls would drop two of these three and
+    # fail at first call on whichever machine has the other `stat`.
+    #
+    # The set is closed and has three members, so writing them out costs four
+    # lines and makes the whole library statically readable.
+    case "$impl" in
+        stat_gnu)  nut_reload super::fs::impl::stat_gnu ;;
+        stat_bsd)  nut_reload super::fs::impl::stat_bsd ;;
+        perl_stat) nut_reload super::fs::impl::perl_stat ;;
+    esac
+
+    if [[ -z "$impl" ]]; then
         fs_mtime() {
             echo "[ERROR] fs_mtime: no stat tool available" >&2
             return 1

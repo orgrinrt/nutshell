@@ -134,11 +134,57 @@ collect_all_functions() {
 
 # Run full name comparison using optimized awk
 # Returns lines in format: "FAIL|score|name1|name2|file1|file2" or "WARN|..."
+# Every pair of files that are two spellings of one module, as `a>b`, so the
+# comparison can skip a perfect score between them. Read from the manifest
+# rather than named here, because a list here is a second place to update.
+_variant_pairs() {
+    local root="${REPO_ROOT:-$PWD}" name file rest word
+    local -A owner=()
+    [[ -r "${root}/lib.nut" ]] || return 0
+    while read -r name file rest || [[ -n "$name" ]]; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        [[ -n "$file" ]] || continue
+        if [[ -n "${owner[$name]:-}" ]]; then
+            local prior
+            for prior in ${owner[$name]}; do
+                # Relative, as written in the manifest, because that is the
+                # shape `collect_all_functions` produces. Emitted absolute
+                # first, and nothing ever matched: the skip was proved on
+                # hand-made absolute input and never once fired on the real
+                # data, which is the whole reason a test builds its own input
+                # carefully and then proves nothing.
+                printf '%s>%s ' "$prior" "$file"
+            done
+        fi
+        owner["$name"]="${owner[$name]:-} $file"
+    done < "${root}/lib.nut"
+}
+
+# Computed once. There are two comparisons in this file and the second is the
+# one that reported the variants: set inside the first, the second never saw it.
+declare -g _NUT_DUP_VARIANTS=""
+_variants_once() {
+    [[ -n "${_NUT_DUP_VARIANTS_DONE:-}" ]] && return 0
+    _NUT_DUP_VARIANTS="$(_variant_pairs)"
+    _NUT_DUP_VARIANTS_DONE=1
+}
+
+# The list to use: whatever the caller set, else the manifest's.
+#
+# A caller passing its own used to be overwritten by the manifest's, which made
+# the comparison untestable against anything but this repository.
+_variants_for() {
+    if [[ -n "${NUT_DUP_VARIANTS+x}" ]]; then printf '%s' "$NUT_DUP_VARIANTS"; return 0; fi
+    _variants_once
+    printf '%s' "$_NUT_DUP_VARIANTS"
+}
+
 compare_full_names() {
     local func_data="$1"
     local threshold="$2"
+    local NUT_DUP_VARIANTS; NUT_DUP_VARIANTS="$(_variants_for)"
     
-    echo "$func_data" | awk -F'|' -v threshold="$threshold" '
+    echo "$func_data" | awk -F'|' -v threshold="$threshold" -v variants="${NUT_DUP_VARIANTS:-}" '
     # Levenshtein distance, abandoned as soon as it cannot matter.
     #
     # `maxd` is the largest distance the caller could still accept. Past that
@@ -211,6 +257,21 @@ compare_full_names() {
         return 1.0 - (dist / maxlen)
     }
     
+    BEGIN {
+        # Files that are two spellings of one module, as `a>b` pairs.
+        #
+        # A module carrying a `when=` row is written twice, once for bash and
+        # once for POSIX sh, and the two hold the same function names on
+        # purpose. Every one of those is a perfect score and none of them is a
+        # copy: only one is ever sourced.
+        n = split(variants, vs, " ")
+        for (k = 1; k <= n; k++) is_variant_pair[vs[k]] = 1
+    }
+
+    function are_variants(a, b) {
+        return (is_variant_pair[a ">" b] || is_variant_pair[b ">" a])
+    }
+
     {
         names[NR] = $1
         files[NR] = $2
@@ -262,6 +323,8 @@ compare_full_names() {
                     }
                 }
 
+                if (are_variants(files[i], files[j])) continue
+
                 printf "MATCH|%.3f|%s|%s|%s|%s\n", score, names[i], names[j], files[i], files[j]
             }
         }
@@ -292,7 +355,14 @@ add_stripped_names() {
     {
         stripped = strip_prefix($1)
         if (length(stripped) >= 4) {
-            print stripped "|" $1 "|" $2
+            # Four fields, because the comparison downstream reads `$4` for the
+            # file and was being handed three. `files[]` was empty on every row
+            # of that pass, so it could not name a file in its own report and
+            # could not tell two spellings of one module apart.
+            #
+            # The prefix is what `strip_prefix` removed, kept so the report can
+            # show the whole name.
+            print stripped "|" substr($1, 1, length($1) - length(stripped)) "|" $1 "|" $2
         }
     }
     '
@@ -301,10 +371,11 @@ add_stripped_names() {
 # Run stripped name comparison using optimized awk
 # Returns lines in format: "WARN|score|stripped1|orig1|stripped2|orig2|file1|file2"
 compare_stripped_names() {
+    local NUT_DUP_VARIANTS; NUT_DUP_VARIANTS="$(_variants_for)"
     local func_data="$1"
     local threshold="$2"
     
-    echo "$func_data" | awk -F'|' -v threshold="$threshold" '
+    echo "$func_data" | awk -F'|' -v threshold="$threshold" -v variants="${NUT_DUP_VARIANTS:-}" '
     # The same abandoned-early distance as the first pass. See there for why.
     function levenshtein(s1, s2, maxd,    len1, len2, i, j, c1, cost, prev, cur, best, subst) {
         len1 = length(s1); len2 = length(s2)
@@ -342,6 +413,15 @@ compare_stripped_names() {
         return 1.0 - (dist / maxlen)
     }
     
+    BEGIN {
+        n = split(variants, vs, " ")
+        for (k = 1; k <= n; k++) is_variant_pair[vs[k]] = 1
+    }
+
+    function are_variants(a, b) {
+        return (is_variant_pair[a ">" b] || is_variant_pair[b ">" a])
+    }
+
     {
         stripped[NR] = $1
         prefixes[NR] = $2
@@ -376,6 +456,7 @@ compare_stripped_names() {
                 score = similarity(stripped[i], stripped[j], threshold)
                 
                 if (score >= threshold) {
+                    if (are_variants(files[i], files[j])) continue
                     printf "WARN|%.3f|%s|%s|%s|%s|%s|%s\n", score, stripped[i], original[i], stripped[j], original[j], files[i], files[j]
                 }
             }

@@ -70,3 +70,57 @@ it_does_not_compare_a_name_with_no_prefix_by_a_prefix_rule() {
     local out; out="$(_pairs "$(printf 'render|a.sh\nrenders|b.sh\n')")"
     assert_contains "$out" "MATCH"
 }
+
+# --- two spellings of one module are not a copy ------------------------------
+#
+# A `when=` row means a module is written twice for two shells, holding the
+# same function names on purpose, and only one is ever loaded. Every pair of
+# them scores 1.000 and none of them is a duplicate.
+#
+# The paths matter here and are the reason this test exists. `_variant_pairs`
+# emitted absolute paths while `collect_all_functions` produces repo-relative
+# ones, so the skip never matched and never fired on real data. It was proved
+# working on hand-made absolute input, which is a test of the input.
+
+_dup_lib() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-dup.XXXXXX")"
+    printf '%s' "$1" > "$d/lib.nut"
+    printf '%s' "$d"
+}
+
+#[test]
+it_does_not_call_two_variants_of_one_module_a_duplicate() {
+    local d; d="$(_dup_lib 'thing  lib/thing.sh        when=shell:bash4
+thing  lib/thing.posix.sh')"
+    local pairs; pairs="$(REPO_ROOT="$d" _variant_pairs)"
+    # Relative, as `collect_all_functions` produces them.
+    assert_contains "$pairs" "lib/thing.sh>lib/thing.posix.sh"
+    assert_eq "${pairs#*/Users}" "$pairs" "the pairs must not be absolute"
+
+    local out
+    out="$(NUT_DUP_VARIANTS="$pairs" compare_full_names \
+        "$(printf 'thing_do|lib/thing.sh\nthing_do|lib/thing.posix.sh\n')" "0.85")"
+    assert_empty "$out"
+    rm -rf "$d"
+}
+
+#[test]
+it_still_calls_the_same_name_in_two_unrelated_files_a_duplicate() {
+    # The control. A skip that fired on every pair would empty this check and
+    # it would report clean over a library full of copies.
+    local out
+    out="$(NUT_DUP_VARIANTS="lib/a.sh>lib/b.sh" compare_full_names \
+        "$(printf 'thing_do|lib/c.sh\nthing_do|lib/d.sh\n')" "0.85")"
+    assert_contains "$out" "MATCH"
+}
+
+#[test]
+it_carries_the_file_through_the_stripped_comparison() {
+    # `add_stripped_names` emitted three fields and the comparison downstream
+    # read `$4` for the file, so `files[]` was empty on every row of that pass:
+    # it could not name a file in its own report and could not tell two
+    # spellings of one module apart.
+    local rows; rows="$(add_stripped_names "$(printf 'str_contains|lib/string.sh\n')")"
+    assert_eq "$(awk -F'|' '{print NF}' <<<"$rows")" "4"
+    assert_contains "$rows" "lib/string.sh"
+}

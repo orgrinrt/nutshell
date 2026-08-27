@@ -214,15 +214,80 @@ _mg_scan() {
 # Building
 # -----------------------------------------------------------------------------
 
+declare -gA _MG_SEEN=()
+
 _mg_reset() {
     _MG_DECLARES=(); _MG_DEFINES=(); _MG_CALLS=(); _MG_OWNER=(); _MG_VIS=(); _MG_MODULES=()
+    _MG_SEEN=()
+}
+
+# A second file for a module already recorded: its declarations, definitions
+# and calls are added to that module rather than becoming another one.
+_mg_merge_into() {
+    local mod="$1" file="$2" kind values fn pair
+    local visraw=""
+    while IFS=$'\t' read -r kind values; do
+        case "$kind" in
+            declares) _MG_DECLARES[$mod]="${_MG_DECLARES[$mod]:-} $values" ;;
+            defines)  _MG_DEFINES[$mod]="${_MG_DEFINES[$mod]:-} $values" ;;
+            calls)    _MG_CALLS[$mod]="${_MG_CALLS[$mod]:-} $values" ;;
+            vis)      visraw="$values" ;;
+        esac
+    done < <(_mg_scan "$file")
+
+    # The variant's own definitions belong to the same module, and its
+    # visibilities are its own: a function public in one spelling and absent
+    # from the other still has to answer as public.
+    for fn in ${_MG_DEFINES[$mod]:-}; do
+        _MG_OWNER[$fn]="$mod"
+    done
+    for pair in ${visraw:-}; do
+        _MG_VIS[${pair%%=*}]="${pair#*=}"
+    done
+}
+
+# The module a file belongs to, from the manifest when there is one.
+#
+# A module may name several files, which is what a `when=` row is: `string.sh`
+# and `string.posix.sh` are one module written twice for two shells and only
+# one is ever loaded. Named from the path, the second becomes a module called
+# `string.posix` that calls fifteen functions from `string` and declares none
+# of them, and the contract check reports every one.
+#
+# Falls back to the file stem, which is what every file without a manifest
+# entry gets and what this always did.
+_mg_module_of() {
+    local file="$1" root="${2:-}" rel name f _rest
+    local stem="${file##*/}"; stem="${stem%.sh}"
+    [[ -n "$root" && -r "${root}/lib.nut" ]] || { printf '%s' "$stem"; return 0; }
+    rel="${file#"${root}/"}"
+    while read -r name f _rest || [[ -n "$name" ]]; do
+        [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
+        if [[ "$f" == "$rel" ]]; then
+            # The leaf, since this graph works in file-stem names throughout
+            # and a `::` path would not match anything else in it.
+            printf '%s' "${name##*::}"
+            return 0
+        fi
+    done < "${root}/lib.nut"
+    printf '%s' "$stem"
 }
 
 _mg_analyse() {
     local dir="$1" file mod line kind values
+    # The library root, so the manifest can say which module a file is. `dir`
+    # is the lib directory; the manifest sits above it.
+    local root="${MODGRAPH_ROOT:-${dir%/*}}"
     for file in "$dir"/*.sh; do
         [[ -f "$file" ]] || continue
-        mod="${file##*/}"; mod="${mod%.sh}"
+        mod="$(_mg_module_of "$file" "$root")"
+        # A module already seen is a variant of it. Its calls and definitions
+        # join the ones already recorded rather than starting a second module.
+        if [[ -n "${_MG_SEEN[$mod]:-}" ]]; then
+            _mg_merge_into "$mod" "$file"
+            continue
+        fi
+        _MG_SEEN[$mod]=1
         _MG_MODULES+=("$mod")
         while IFS=$'\t' read -r kind values; do
             case "$kind" in

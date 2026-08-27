@@ -14,7 +14,11 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded.
+[ -n "${_NUTSHELL_LOG_SH:-}" ] && return 0
+_NUTSHELL_LOG_SH=1
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -31,7 +35,7 @@ _log_should_color() {
     case "$LOG_COLOR" in
         always) return 0 ;;
         never)  return 1 ;;
-        auto)   [[ -t 2 ]] ;;  # Check if stderr is a TTY
+        auto)   [ -t 2 ] ;;  # Check if stderr is a TTY
     esac
 }
 
@@ -49,7 +53,7 @@ _log_should_emit() {
     local msg_level="$1"
     local current=$(_log_level_num "$LOG_LEVEL")
     local target=$(_log_level_num "$msg_level")
-    [[ $target -ge $current ]]
+    [ "$target" -ge "$current" ]
 }
 
 _log_format() {
@@ -58,7 +62,7 @@ _log_format() {
     local reset="$3"
     local message="$4"
     
-    if [[ -n "$color" ]]; then
+    if [ -n "$color" ]; then
         printf '%b[%s]%b %s\n' "$color" "$level" "$reset" "$message"
     else
         printf '[%s] %s\n' "$level" "$message"
@@ -83,9 +87,9 @@ _log_format() {
 
 LOG_MARKS="${LOG_MARKS:-auto}"
 
-declare -gi LOG_DEPTH=0
-declare -gi LOG_WARNINGS=0
-declare -gi LOG_FAILURES=0
+LOG_DEPTH=0
+LOG_WARNINGS=0
+LOG_FAILURES=0
 
 _LOG_MARKS_SET=0
 _LOG_M_OK="+"; _LOG_M_BAD="x"; _LOG_M_WARN="!"; _LOG_M_STEP=">"; _LOG_M_FLAT=" "
@@ -98,11 +102,11 @@ _log_unicode_ok() {
         *UTF-8*|*utf8*|*UTF8*|*utf-8*) ;;
         *) return 1 ;;
     esac
-    [[ "${TERM:-}" != "linux" ]]
+    [ "${TERM:-}" != "linux" ]
 }
 
 _log_marks_init() {
-    (( _LOG_MARKS_SET == 1 )) && return 0
+    [ "${_LOG_MARKS_SET:-0}" = 1 ] && return 0
     _LOG_MARKS_SET=1
     case "$LOG_MARKS" in
         none) _LOG_M_OK=" "; _LOG_M_BAD=" "; _LOG_M_WARN=" "; _LOG_M_STEP=" " ;;
@@ -112,11 +116,17 @@ _log_marks_init() {
     esac
 }
 
+# The marks as octal UTF-8 rather than `\uXXXX`, which is a bash extension to
+# `%b`, and through a substitution rather than `printf -v`, which is bash too.
+#
+# Four forks, once per process: `_log_marks_init` returns early after the first
+# call, and `log_marks` is the only thing that re-arms it. The file stays ASCII,
+# which is why these are escapes and not the characters themselves.
 _log_marks_unicode() {
-    printf -v _LOG_M_OK   '%b' '\u2713'
-    printf -v _LOG_M_BAD  '%b' '\u2717'
-    printf -v _LOG_M_WARN '%b' '\u26a0'
-    printf -v _LOG_M_STEP '%b' '\u203a'
+    _LOG_M_OK="$(printf '%b' '\342\234\223')"
+    _LOG_M_BAD="$(printf '%b' '\342\234\227')"
+    _LOG_M_WARN="$(printf '%b' '\342\232\240')"
+    _LOG_M_STEP="$(printf '%b' '\342\200\272')"
 }
 
 #[pub]
@@ -131,8 +141,11 @@ log_reset() { LOG_DEPTH=0; LOG_WARNINGS=0; LOG_FAILURES=0; }
 
 _log_pad() {
     local n=$(( LOG_DEPTH * 2 ))
-    (( n > 0 )) || return 0
-    printf '%*s' "$n" ''
+    [ "$n" -gt 0 ] || return 0
+    # A loop rather than `%*s`, which is a bash extension: POSIX `printf` has
+    # no `*` field width and the width here is not a constant.
+    _lp_i=0
+    while [ "$_lp_i" -lt "$n" ]; do printf ' '; _lp_i=$(( _lp_i + 1 )); done
 }
 
 # One marked line. The mark sits outside the indent, so every mark in a run is
@@ -215,16 +228,35 @@ log_flat() {
 log_run() {
     local label="$1"; shift
     log_open "$label"
-    local line rc=""
+    local line rc="" sep fifo
+    sep="$(printf '\037')"
+
+    # A named pipe rather than `< <(...)`, which is bash. The output has to
+    # stream as it arrives and the status has to come back to this shell, and a
+    # plain pipeline gives up the second: the loop would run in a subshell and
+    # what it counted would not return. A temp file gives up the first.
+    #
+    # `mkfifo` is POSIX. The command writes into the pipe from a background
+    # job, this shell reads it, and `wait` collects the job so the function
+    # does not return before the writer is done.
+    fifo="$(mktemp -u "${TMPDIR:-/tmp}/nut-run.XXXXXX")" || return 1
+    mkfifo "$fifo" || return 1
+
+    { "$@" 2>&1; printf '%s%d\n' "$sep" "$?"; } > "$fifo" &
     while IFS= read -r line; do
         # The status travels in the stream, because a pipeline loses it and a
         # runner that reports success on a failed command is worse than none.
         # Read, never printed: a marker, not output.
-        if [[ "${line:0:1}" == $'\037' ]]; then rc="${line:1}"; break; fi
+        if [ "${line%"${line#?}"}" = "$sep" ]; then rc="${line#?}"; break; fi
         log_flat "$line"
-    done < <("$@" 2>&1; printf '\037%d\n' "$?")
-    [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
-    if (( rc == 0 )); then log_close ok "$label"
+    done < "$fifo"
+    wait 2>/dev/null
+    rm -f "$fifo"
+
+    case "$rc" in
+        '' | *[!0-9]* ) rc=1 ;;
+    esac
+    if [ "$rc" -eq 0 ]; then log_close ok "$label"
     else log_close fail "${label} (exit ${rc})"; fi
     return "$rc"
 }
@@ -239,8 +271,8 @@ log_run() {
 # text or keep the count, not both from the same call.
 # Usage: log_worst -> ok | warn | fail
 log_worst() {
-    (( LOG_FAILURES > 0 )) && { printf 'fail'; return 0; }
-    (( LOG_WARNINGS > 0 )) && { printf 'warn'; return 0; }
+    [ "$LOG_FAILURES" -gt 0 ] && { printf 'fail'; return 0; }
+    [ "$LOG_WARNINGS" -gt 0 ] && { printf 'warn'; return 0; }
     printf 'ok'
 }
 
@@ -358,7 +390,7 @@ log_tagged() {
             gray)    color='\033[0;37m' ;;
             *)       color='' ;;
         esac
-        [[ -n "$color" ]] && reset='\033[0m'
+        [ -n "$color" ] && reset='\033[0m'
     fi
     _log_format "$tag" "$color" "$reset" "$*"
 }

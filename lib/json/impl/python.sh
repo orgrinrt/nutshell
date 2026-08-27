@@ -30,6 +30,8 @@
 
 nut_once || return 0
 
+use deps
+
 # Get python command (python3 preferred)
 _json_python_cmd() {
     if deps_has "python3"; then

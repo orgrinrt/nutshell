@@ -2,10 +2,9 @@
 
 Op's shape, recorded before it is built.
 
-Three sections are marked **drafted rather than ratified**. Those are the
-agent's reading of something op asked for, written down so he can take it or
-correct it, and nothing in them binds until he does. Everything else here is
-his.
+Everything here is settled. The sections that were drafted awaiting a ruling
+have had one, and where a ruling went against the draft the draft is gone
+rather than kept beside it.
 
 ## The manifest carries the gates, attribute-shaped
 
@@ -43,8 +42,8 @@ gate the resolver refuses is a variant that silently never loads.
 
 ## Features are a choice; a gate is an observation
 
-**Op's ask. Built; the shape below is what shipped, and the three open
-questions at the end of this section are still his.**
+**Op's ask, and the three questions this section used to leave open are
+answered below.**
 
 `nut.toml` grows a `[features]` table, the way `Cargo.toml` has one:
 
@@ -81,7 +80,9 @@ are asked, and that is right for a program deciding at load time what it can do
 here.
 
 A lowering is not deciding what it can do here. It is deciding what to write
-into a file that will run somewhere else, and an observation cannot answer that.
+into a file that will run somewhere else, and an observation cannot answer
+that. The case that settles it is CI: a build host bakes bundles for several
+targets, and every one of those targets is a machine it is not.
 
 The case that showed it: lowering `string` on this machine takes
 `lib/string.sh`, the bash half, because `#[shell(bash4)]` asks the running shell
@@ -92,8 +93,28 @@ then carries a `local -n` nameref that a POSIX shell refuses. The floor is
 reachable in principle and unreachable in practice, and no amount of converting
 modules changes it.
 
-So a feature is chosen by the person doing the lowering, and a gate is answered
-by the machine doing the running. Both stay. They are different questions.
+So a feature is chosen by the person doing the lowering, and a gate is what
+the manifest writes down about a variant. Both stay, and they are different
+things: one is the question, the other is the answer chosen for a target.
+
+### A feature always wins, and every gate resolves at lower time
+
+Every attribute is settled while lowering, and the arms not taken are lowered
+out. Nothing about a gate survives into the artifact, `has(bin(...))` included.
+
+This follows from what a lowering is for. A build host bakes a bundle for a
+target it is not, so an observation of the build host is the wrong answer to
+every question, not only to the shell one. A tool gate reads as though it could
+stay live, because a binary can be looked for at run time and a shell cannot be
+re-parsed; but the artifact is being written for another machine either way,
+and a test that runs there answers about a machine nobody was building for.
+
+So a feature is never overridden by a gate. Selecting one would otherwise mean
+nothing, which is the whole reason features exist.
+
+A host that has a tool and wants a bundle built without it says so the same
+way as everything else, by selecting features: `--features foo,bar,baz`. The
+opt-out is a selection rather than a second mechanism.
 
 ### The cargo rules that carry over
 
@@ -107,21 +128,11 @@ Nothing else about a feature is special.
 **A row without a `#[feature(...)]` is always in.** Gating is opt-in, so a
 manifest that declares no features behaves exactly as it does today.
 
-### What is not decided, and is op's
-
-Three things this draft deliberately does not settle:
-
-- **Whether a feature may enable a dependency.** Cargo has `optional = true`
-  and `dep:name`, and `[deps.shebang]` is already cargo-shaped, so the shape is
-  available. Nothing here needs it yet.
-- **Whether a feature may gate anything but a manifest row.** A function, a
-  block inside a file, a whole tree.
-- **What happens when a selected feature and a machine gate disagree**, which
-  is the interesting one. Lowering with `--no-default-features` asks for the
-  floor half of `string` on a machine whose `#[shell(bash4)]` gate would have
-  taken the bash half. The feature has to win, or selecting it means nothing;
-  but then a feature can ask for a file this machine could not have run, and
-  that is exactly what producing an artifact for another machine requires.
+**A feature reaches a whole tree, not only a row.** Cargo's shape carries over
+in full: a feature may enable a dependency, the way `optional = true` and
+`dep:name` do, and `[deps.shebang]` is already cargo-shaped so the slot is
+there. What a feature gates is a unit of the manifest, which is a module row or
+a dependency, rather than something inside a file.
 
 ## Why the shell gate cannot move into the file
 
@@ -188,12 +199,24 @@ sourced, and concatenated every file is the same file: the first call registers
 it and every guard after says "already loaded" and returns from the whole
 thing. Found by the lowered arm defining one module and nothing else.
 
-## A lowered file needs nothing from `init`
+## `init` dissolves into `lib.nut`
 
-**Drafted rather than ratified**, and it answers op's question: why does a
-lowered file need `init` at all, now that the manifest carries the shape.
+Op's call, and it goes further than the draft that preceded it. That draft
+answered his question, why does a lowered file need `init` at all now that the
+manifest carries the shape, and concluded that it does not: the artifact drops
+it, and `init` stays as the thing a person sources while developing.
 
-It does not. `init` is 770 lines and eighteen functions, and almost all of it is
+He ruled that `init` should not stay. The manifest already carries the module
+map, so the resolver becomes a smaller thing derived from it, and the bash
+refusal moves out to whatever tool a person actually runs. What a consumer
+sources changes, which is the largest blast radius of the three shapes that
+were on the table and is the point: a file that exists only to look things up
+in another file is a copy of that file with worse ergonomics.
+
+The accounting below is what made the case, and it is why the answer went this
+way rather than towards putting `init` itself on the floor.
+
+`init` is 770 lines and eighteen functions, and almost all of it is
 resolution:
 
 - Six functions answer "which file is this module" out of `lib.nut`:

@@ -22,38 +22,55 @@ git clone https://github.com/orgrinrt/nutshell.git
 
 ### When a project needs a version the machine does not have
 
-Copy `find-nutshell` into the project and let it resolve. It is one file, it needs no nutshell module, and it is what has to be on disk
-before anything else can be found. It does use `git`, `date`, `uname` and the
-ordinary file tools, since fetching is what it is for:
+Say so in `nut.toml`, at the root of the file, above the first table:
 
-```bash
-# in the project
-curl -LO https://raw.githubusercontent.com/orgrinrt/nutshell/main/find-nutshell
+```toml
+nutshell_branch = "dev"       # or nutshell_version = "0.7.0" for a release
 ```
 
-```bash
-#!/usr/bin/env bash
-HERE="${BASH_SOURCE[0]%/*}"
-. "$HERE/find-nutshell"
-nutshell_find "$HERE" dev || exit 1    # a version, or a branch
-. "$NUTSHELL_INIT" || exit 1
-```
+Then the entry points say `#!/usr/bin/env nutshell` and stop worrying about it.
+The launcher reads the manifest above the script, resolves the pin, and execs
+the nutshell the project asked for. It takes what is installed if that
+satisfies, then the store, then fetches into the store. A pin naming a branch
+means that branch's head, asked at most once an hour.
 
-It takes what the caller named, then what is installed if that satisfies, then
-the store, then fetches into the store. A pin naming a branch means that
-branch's head, asked at most once an hour.
+**Root level matters.** A bare key after a table header belongs to that table,
+so `nutshell_branch` under `[meta]` is a pin nothing reads and nothing
+complains about.
+
+**State a floor if it matters to you.** A pin that cannot be resolved is not
+fatal by default: the ambient nutshell stays in place and the project runs on
+whatever the machine has. When it is older, the failures land on the project's
+own tests and read as a defect there. `NUTSHELL_VERSION` is exported, so one
+comparison in the entry point says it out loud instead:
+
+```bash
+#!/usr/bin/env nutshell
+: "${NUTSHELL_ROOT:?run this through the nutshell launcher, or install nutshell}"
+_min="0.7.0"
+if [[ "$(printf '%s\n%s\n' "$_min" "${NUTSHELL_VERSION:-0.0.0}" | sort -V | head -1)" != "$_min" ]]; then
+    printf 'needs nutshell %s or newer, resolved %s\n' "$_min" "$NUTSHELL_VERSION" >&2
+    exit 1
+fi
+```
 
 ### Do not carry a copy in the tree
 
-A nutshell inside a project is a second version that drifts from the machine's
-in silence, and there is no moment where that becomes visible: it simply
-resolves modules that existed when it was added and none since, and the error
-names a missing function rather than a stale copy. It happened twice in one day
-in the projects this was written for, and both of them dropped theirs.
+Not a nutshell, and not a resolver either. A copy of anything is a second
+version that drifts from the machine's in silence, and there is no moment where
+that becomes visible: it resolves what existed when it was added and nothing
+since, and the error names a missing function rather than a stale copy.
 
-A vendored copy at `<project>/lib/nutshell` is still the last thing
-`nutshell_find` tries, and it is there for one case: a machine with no network
-that is being rescued. Not as a way to install.
+The symptom, if you have one of these, is a missing function in a file two
+dependencies away: `list_new: command not found` from a library that does
+declare `use list`, because the nutshell underneath it is old enough to still
+call it `array`. A pin is one line in a manifest and its value is in front of
+you. A copied resolver is seven hundred lines with its version in a variable
+default, and nothing ever says which version that is.
+
+There is no vendored fallback path, including for a machine with no network
+being rescued. That case is an installed nutshell, which `./install` puts on
+PATH and which is visible in a way a copy in a tree is not.
 
 ### The store
 
@@ -126,31 +143,18 @@ use os log
 log_info "hello"
 ```
 
-For a script that has to run where nutshell may not be installed, source the
-resolver instead and let it find one:
+For a script that wants a particular nutshell rather than the machine's, the
+shebang is the same and the manifest beside it says which:
 
-```bash
-#!/usr/bin/env bash
-HERE="${BASH_SOURCE[0]%/*}"
-. "$HERE/find-nutshell"
-nutshell_find "$HERE" dev || exit 1
-. "$NUTSHELL_INIT" || exit 1
-
-use os log
-
-log_info "hello"
+```toml
+# nut.toml, root level, above the first table
+nutshell_branch = "dev"
 ```
 
-Both source lines end in `|| exit 1`, and that is not decoration. Sourcing
-`init` can fail: on a bash older than 4 it refuses, and a `return` inside a
-sourced file returns *to* the caller rather than stopping it. Without the
-check, a script prints the refusal and then runs its whole body with nothing
-loaded, reporting success.
-
-That second form is what a project carries when it pins a version, and
-`find-nutshell` is the only file it needs beside its own source. There is no
-third form: a copy of nutshell in the tree is the arrangement the section above
-tells you not to adopt.
+The launcher reads it, resolves it, and execs into it before your first line
+runs. There is no second form and no third: a resolver copied into the tree, or
+a nutshell copied into the tree, is the arrangement the section above tells you
+not to adopt.
 
 ---
 
@@ -158,7 +162,7 @@ tells you not to adopt.
 
 ```
 nutshell/
-├── init                    # what `nutshell` and `find-nutshell` source
+├── init                    # what `nutshell` sources
 ├── check                   # Main QA entry point (executable)
 ├── bin/
 │   └── nutshell           # Interpreter for #!/usr/bin/env nutshell
@@ -597,18 +601,18 @@ log_success "Installation complete!"
 
 ---
 
-## The Init Line Explained
+## The Shebang Line Explained
 
-Every script needs this line:
+Every script starts with this line:
 
 ```bash
-. "$NUTSHELL_INIT" || exit 1
+#!/usr/bin/env nutshell
 ```
 
 Breaking it down:
-- `.` sources a file (same as `source`)
-- `"${0%/*}"` is the directory containing this script
-- `find-nutshell` is the resolver a project carries when it pins a version
+- `env` finds `nutshell` on PATH, wherever `./install` linked it
+- the launcher reads the `nut.toml` above the script and resolves the pin in it
+- it execs into the nutshell the project asked for, then runs your script there
 
 This works regardless of:
 - Where the script is called from (`./scripts/build.sh` or `scripts/build.sh`)
@@ -624,15 +628,15 @@ This works regardless of:
 Nutshell includes a QA system for checking your shell scripts:
 
 ```bash
-./lib/nutshell/check
+./check
 ```
 
 Or with options:
 
 ```bash
-./lib/nutshell/check --builtins      # Only built-in checks
-./lib/nutshell/check --list          # List available checks
-./lib/nutshell/check --help          # Show help
+./check --builtins      # Only built-in checks
+./check --list          # List available checks
+./check --help          # Show help
 ```
 
 ### Configuration
@@ -676,13 +680,12 @@ See `examples/configs/` for configuration templates:
 A: Because a copy in the project is a second version, and it drifts from the
 machine's without saying so. It resolves the modules that existed when it was
 added and none added since, so what you get is an error naming a missing
-function rather than one naming a stale copy. That happened twice in one day in
-the projects this was written for.
+function rather than one naming a stale copy.
 
 **Q: Then what about a fresh clone with nothing installed?**  
-A: `find-nutshell` is for that. One file in the project, depending on nothing,
-which finds an installed one or fetches the version the project pins. It is
-what the second Quick Start form uses.
+A: Install the launcher once per machine, which is the `./install` above. After
+that a fresh clone of anything needs nothing: its `nut.toml` names the nutshell
+it wants and the launcher fetches that into the store on first run.
 
 **Q: Can I use `#!/usr/bin/env nutshell` everywhere?**  
 A: Yes, once `./install` has linked it onto PATH, and that is the shape to

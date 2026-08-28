@@ -39,7 +39,7 @@
 [ -n "${_NUTSHELL_INUSE_SH:-}" ] && return 0
 _NUTSHELL_INUSE_SH=1
 
-use fs xdg
+use fs xdg key
 
 # Where the marks live. Beside the store rather than inside a cache, because a
 # mark surviving a cache wipe is harmless and a mark being wiped mid-read is
@@ -71,15 +71,10 @@ _inuse_key() {
 # process that took it: it never clears, and every update then waits out its
 # full timeout before proceeding anyway.
 #
-# And a helper does not work here even with `$BASHPID` in it, which is how this
-# was first written. Calling it as `$(_inuse_pid)` runs it in a subshell with a
-# `BASHPID` of its own, so the mark was named for a process that was already
-# gone by the time the next line read it. The hold reported success and the
-# holder list came back empty. So this is a variable, not a function, and it is
-# read where it is used.
-_inuse_pid_of_this_shell() {
-    _INUSE_PID="${BASHPID:-$$}"
-}
+# And it is expanded where it is used rather than returned by a helper. Calling
+# a helper as `$(...)` runs it in a subshell with a `BASHPID` of its own, so the
+# mark named a process that was already gone by the time the next line read it:
+# the hold reported success and the holder list came back empty.
 
 #[pub]
 # The live processes holding that path, one pid per line.
@@ -109,12 +104,20 @@ inuse_holders() {
 # Whether anybody other than this process is holding that path.
 # Usage: inuse_held_by_other <dir> -> 0 when somebody else holds it
 inuse_held_by_other() {
-    local other
-    _inuse_pid_of_this_shell
-    local mine="$_INUSE_PID"
+    # Both of this process's pids count as itself, and that is not tidiness.
+    #
+    # A reader marks with `$$` and a mutator with `$BASHPID`, so inside one
+    # session the two are different numbers for the same process tree. Counting
+    # the session's own reader mark as somebody else makes every mutation wait
+    # out its full timeout, which turned a three minute suite into one that
+    # looked hung: the runner holds a session mark on a checkout, and then its
+    # own next test waits thirty seconds to lay anything out.
+    local other mine="${BASHPID:-$$}" session="$$"
     while IFS= read -r other; do
         [ -n "$other" ] || continue
-        [ "$other" = "$mine" ] || return 0
+        [ "$other" = "$mine" ] && continue
+        [ "$other" = "$session" ] && continue
+        return 0
     done <<EOF
 $(inuse_holders "$1")
 EOF
@@ -135,8 +138,7 @@ inuse_hold() {
     d="$(_inuse_root)/$k"
     fs_mkdir "$d" 2>/dev/null || return 1
     printf '%s\n' "$1" > "$d/.path" 2>/dev/null
-    _inuse_pid_of_this_shell
-    : > "$d/$_INUSE_PID" 2>/dev/null || return 1
+    : > "$d/${BASHPID:-$$}" 2>/dev/null || return 1
     _INUSE_HELD="${_INUSE_HELD:-}${_INUSE_HELD:+$'\n'}$1"
     _inuse_arm_trap
     return 0
@@ -179,8 +181,7 @@ inuse_release() {
     local d k kept line
     k="$(_inuse_key "$1")" || return 1
     d="$(_inuse_root)/$k"
-    _inuse_pid_of_this_shell
-    rm -f "$d/$_INUSE_PID" 2>/dev/null
+    rm -f "$d/${BASHPID:-$$}" 2>/dev/null
     # Leave the directory when somebody else is still in it, take it away when
     # nobody is. `rmdir` rather than `rm -rf`, so a directory that is not empty
     # because another process just arrived is left alone rather than deleted

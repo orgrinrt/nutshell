@@ -158,3 +158,24 @@ it_would_lose_a_session_mark_taken_with_the_subshell_pid() {
     assert_eq "$(inuse_holders "$d" | grep -c .)" "0"
     rm -rf "$d"
 }
+
+#[test]
+it_counts_both_of_this_process_pids_as_itself() {
+    # A reader marks with `$$` and a mutator with `$BASHPID`, so inside one
+    # session the two are different numbers for the same process tree. Counting
+    # the session's own reader mark as somebody else makes every mutation wait
+    # out its full timeout: a three minute suite ran for twenty and looked hung,
+    # because the runner held a session mark on a checkout and its own next test
+    # then waited on it.
+    local d; d="$(_iu_dir bothpids)"; fs_mkdir "$d"
+    inuse_hold_session "$d"          # the reader's mark, under $$
+    assert_fails inuse_held_by_other "$d"
+    inuse_hold "$d"                  # and the mutator's, under $BASHPID
+    assert_fails inuse_held_by_other "$d"
+    inuse_release "$d"
+    local k root
+    k="$(nut_key "$d" >/dev/null 2>&1; printf '%s' "$_nk")"
+    root="${NUTSHELL_STORE:+${NUTSHELL_STORE%/}/.inuse}"
+    [ -n "$root" ] || { xdg_set_app_name nutshell; root="$(xdg_app_data)/.inuse"; }
+    rm -rf "$root/$k" "$d"
+}

@@ -214,6 +214,25 @@ _deps_hex() {
         -) _dh=2d ;;  .) _dh=2e ;;  +) _dh=2b ;;  '~') _dh=7e ;;
         0) _dh=30 ;;  1) _dh=31 ;;  2) _dh=32 ;;  3) _dh=33 ;;  4) _dh=34 ;;
         5) _dh=35 ;;  6) _dh=36 ;;  7) _dh=37 ;;  8) _dh=38 ;;  9) _dh=39 ;;
+        a) _dh=61 ;;  b) _dh=62 ;;  c) _dh=63 ;;  d) _dh=64 ;;  e) _dh=65 ;;  f) _dh=66 ;;
+        g) _dh=67 ;;  h) _dh=68 ;;  i) _dh=69 ;;  j) _dh=6a ;;  k) _dh=6b ;;  l) _dh=6c ;;
+        m) _dh=6d ;;  n) _dh=6e ;;  o) _dh=6f ;;  p) _dh=70 ;;  q) _dh=71 ;;  r) _dh=72 ;;
+        s) _dh=73 ;;  t) _dh=74 ;;  u) _dh=75 ;;  v) _dh=76 ;;  w) _dh=77 ;;  x) _dh=78 ;;
+        y) _dh=79 ;;  z) _dh=7a ;;
+        A) _dh=41 ;;  B) _dh=42 ;;  C) _dh=43 ;;  D) _dh=44 ;;  E) _dh=45 ;;  F) _dh=46 ;;
+        G) _dh=47 ;;  H) _dh=48 ;;  I) _dh=49 ;;  J) _dh=4a ;;  K) _dh=4b ;;  L) _dh=4c ;;
+        M) _dh=4d ;;  N) _dh=4e ;;  O) _dh=4f ;;  P) _dh=50 ;;  Q) _dh=51 ;;  R) _dh=52 ;;
+        S) _dh=53 ;;  T) _dh=54 ;;  U) _dh=55 ;;  V) _dh=56 ;;  W) _dh=57 ;;  X) _dh=58 ;;
+        Y) _dh=59 ;;  Z) _dh=5a ;;
+        _) _dh=5f ;;
+        # Anything left: a byte this table does not name. Two nested command
+        # substitutions, which is two subshells per character, and the reason
+        # everything above is written out.
+        #
+        # It used to be the only arm for a letter, so `pkg-config` cost
+        # eighteen subshells to key once, on a path `deps_has` takes for every
+        # tool whose name is not already a variable name. `printf` is a builtin
+        # and costs nothing; the substitution around it is the fork.
         *) _dh="$(printf '%02x' "$(printf '%d' "'$1")")" ;;
     esac
 }

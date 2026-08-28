@@ -1,0 +1,7 @@
+case      reaching a helper, against doing it here, at N=10
+size      10
+repeats   7
+baseline  in-shell arithmetic
+bash      5.3.15(1)-release
+host      Darwin arm64
+taken     2026-08-28T03:34:14Z

@@ -1,0 +1,7 @@
+case      reading attributes over 12334 lines of the library, 3 passes
+size      12334
+repeats   7
+baseline  bash regex, as shipped
+bash      5.3.15(1)-release
+host      Darwin arm64
+taken     2026-08-28T03:36:14Z

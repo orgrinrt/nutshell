@@ -1,0 +1,3 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash regex  as shipped,3095,3163,within the noise,yes
+posix case and expansion,2320,2362,74%,yes

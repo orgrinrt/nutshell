@@ -203,3 +203,93 @@ it_says_nothing_for_a_line_that_defines_nothing() {
     assert_eq "$(attr_defines_on 'plain() { :; }')" "plain"
     assert_eq "$(attr_defines_on 'function old_style {')" "old_style"
 }
+
+# --- the POSIX floor ---------------------------------------------------------
+
+_at_posix_sh() {
+    local cand probe; probe="$(mktemp)"
+    for cand in dash ash yash posh sh; do
+        command -v "$cand" >/dev/null 2>&1 || continue
+        printf 'a=(1 2)\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && continue
+        printf 'x=1\necho "${x:-}"\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && { rm -f "$probe"; printf '%s' "$cand"; return 0; }
+    done
+    rm -f "$probe"; return 1
+}
+
+# Everything the module answers, under one shell, as one string.
+_at_answers() {
+    "$1" -c '
+        use() { return 0; }
+        . "$1/lib/attr.sh" >/dev/null 2>&1
+        printf "on=[%s]"      "$(attr_on "$1/lib/string.sh" str_trim | tr "\n" ",")"
+        attr_has "$1/lib/string.sh" str_trim pub && printf "has=1" || printf "has=0"
+        printf "<find=%s>"    "$(attr_find "$1/lib/attr.sh" pub | wc -l | tr -d " ")"
+        printf "<tests=%s>"   "$(attr_find "$1/tests/attr_test.sh" test | wc -l | tr -d " ")"
+        printf "def=[%s|%s|%s|%s]" \
+            "$(attr_defines_on "foo() {")" \
+            "$(attr_defines_on "function bar {")" \
+            "$(attr_defines_on "  baz ()")" \
+            "$(attr_defines_on "not a definition")"
+        printf "arg=[%s]"     "$(attr_arg "$1/lib/attr.sh" attr_on allow)"
+        # Every function called, so a bashism in one that the calls above do
+        # not reach still shows up.
+        for f in $(grep -oE "^[a-z_][a-zA-Z0-9_]*\(\)" "$1/lib/attr.sh" | sed "s/()//" | sort -u); do
+            printf "%s=" "$f"
+            "$f" x y z >/dev/null 2>&1 && printf "1;" || printf "0;"
+        done
+    ' _ "$2" 2>&1
+}
+
+#[test]
+# It parses there, which everything below depends on.
+it_reads_under_a_posix_shell() {
+    local sh; sh="$(_at_posix_sh)"
+    assert_ne "$sh" ""
+    assert_ok "$sh" -n "${BASH_SOURCE[0]%/*}/../lib/attr.sh"
+}
+
+#[test]
+# Every function in the module, called under a POSIX shell, against bash.
+#
+# The function list is read out of the file rather than written here. A hand
+# list covers what somebody thought to name, and in `validate.sh` the three it
+# missed were the three that were broken: `${val,,}` is fatal when it runs and
+# invisible when it parses, so a parse check said the file was fine.
+#
+# This module was regexes throughout, so the conversion touched every path in
+# it. Answering the same is the only evidence that none of them moved.
+it_answers_the_same_under_both_shells() {
+    local sh root; sh="$(_at_posix_sh)"
+    root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    local p b
+    b="$(_at_answers bash "$root")"
+    p="$(_at_answers "$sh" "$root")"
+    assert_not_contains "$p" "Bad substitution"
+    assert_not_contains "$p" "not found"
+    assert_ne "$b" ""
+    assert_eq "$p" "$b"
+}
+
+#[test]
+# And it answers correctly, not merely identically.
+#
+# The control for the test above. Two shells running a module that defined
+# nothing agree perfectly, which is exactly how the `nut_once` guard hid itself
+# in two other modules: the answers matched because both were empty.
+it_answers_correctly_under_a_posix_shell() {
+    local sh root; sh="$(_at_posix_sh)"
+    root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    local got; got="$(_at_answers "$sh" "$root")"
+    assert_contains "$got" "on=[pub,]"
+    assert_contains "$got" "has=1"
+    # Both spellings of a definition, a leading-space one, and a line that is
+    # not a definition at all.
+    assert_contains "$got" "def=[foo|bar|baz|]"
+    # And it found some, rather than nothing. Delimited, because the function
+    # roll-call below prints `attr_find=0;` and a bare `find=0` matches inside
+    # it: the first version of this assertion failed on a correct run.
+    assert_not_contains "$got" "<find=0>"
+    assert_not_contains "$got" "<tests=0>"
+}

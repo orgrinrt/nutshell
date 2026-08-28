@@ -67,8 +67,22 @@ _ex_tmp() {
 }
 
 _isolate() {
+    # Somewhere that exists, first. Each test `cd`s into a fixture and none of
+    # them comes back, so the next one starts from whatever the last one left,
+    # and once any of those is cleaned up git reports `Unable to read current
+    # working directory` and the failure reads as being about the dependency.
+    cd "$_EX_TMP" 2>/dev/null || cd / || return 1
+
     NUTSHELL_STORE="$(_ex_tmp store)"
     export NUTSHELL_STORE
+
+    # And drop the runner's own anchor. `_extern_manifest` looks at
+    # `NUTSHELL_SCRIPT_DIR` before it looks at `$PWD`, which is right for a
+    # script asking about its own project and wrong for a test that has just
+    # `cd`ed into a fixture. Left set, every one of these reads nutshell's own
+    # manifest, which declares no `fixture`, and thirteen tests fail with a
+    # message about the fixture rather than about the anchor.
+    unset NUTSHELL_SCRIPT_DIR _NUT_ASKING_FROM
 }
 
 #[test]

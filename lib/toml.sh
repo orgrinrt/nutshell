@@ -650,24 +650,39 @@ toml_array() {
         value="$(str_trim "$value")"
         
         # Split on the commas that separate elements, which are the ones
-        # outside every quote and at nesting depth zero. An inline table and a
+        # outside every string and at nesting depth zero. An inline table and a
         # nested array both carry their own commas, and splitting on those cuts
         # one element into several fragments that are each half a value. That
         # is what happened to every `[{ src = "a", dest = "b" }]`: it came back
         # as `{ src = "a"` and `dest = "b" }`.
-        local in_quotes=0
+        #
+        # The quote state holds *which* delimiter opened the string rather than
+        # whether one is open, because TOML has two and each is inert inside the
+        # other. A flag that only knew about `"` read the apostrophes in
+        # `['x&y', 'z']`, with an opening brace where the `&` is, as ordinary
+        # characters. It then counted that brace as a real nesting level and
+        # never came back down.
+        #
+        # The brace is written as an `&` on purpose, and the same goes for
+        # every other one in a comment in this file. `nut-lower` shakes unused
+        # definitions out by counting braces textually, comments included, so a
+        # lone one inside a function body makes the shaker believe the function
+        # never ended and swallow whatever follows it in the lowered file.
+        # `nut_lower_test.sh` has the case.
+        local quote=""
         local depth=0
         local current=""
         local char
         local i
-        
+
         for ((i=0; i<${#value}; i++)); do
             char="${value:$i:1}"
-            
-            if [[ "$char" == '"' ]]; then
-                ((in_quotes = 1 - in_quotes))
-            elif [[ $in_quotes -eq 0 ]]; then
+
+            if [[ -n "$quote" ]]; then
+                [[ "$char" == "$quote" ]] && quote=""
+            else
                 case "$char" in
+                    '"'|"'") quote="$char" ;;
                     '{'|'[') (( depth++ )) ;;
                     '}'|']') (( depth > 0 )) && (( depth-- )) ;;
                     ',') if (( depth == 0 )); then
@@ -678,10 +693,19 @@ toml_array() {
                          fi ;;
                 esac
             fi
-            
+
             current+="$char"
         done
-        
+
+        # An opening that never closed means the value was not the array it
+        # looked like, and every element after the unbalanced bracket is
+        # wrong. Saying so beats handing back a plausible answer: the reader
+        # this exists for turns rows into files on somebody's disk.
+        if (( depth != 0 )) || [[ -n "$quote" ]]; then
+            _arr=()
+            return 1
+        fi
+
         # Don't forget the last element
         current="$(str_trim "$current")"
         [[ -n "$current" ]] && _arr+=("$(_toml_extract_value "$current")")
@@ -723,18 +747,19 @@ toml_inline_get() {
     table="${table#\{}"
     table="${table%\}}"
 
-    # Same scan as the array splitter, and for the same reason: a value may
-    # hold a comma inside its quotes, and a nested table or array holds its own
-    # separators. Depth zero and outside the quotes is the only place a comma
-    # ends a pair.
-    local in_quotes=0 depth=0 current="" char i key val
+    # Same scan as the array splitter, and for the same reasons, both of them:
+    # a value may hold a comma inside its quotes, a nested table or array holds
+    # its own separators, and the quote state has to know which delimiter
+    # opened the string because the other one is inert inside it.
+    local quote="" depth=0 current="" char i key val
     local -a pairs=()
     for ((i=0; i<${#table}; i++)); do
         char="${table:$i:1}"
-        if [[ "$char" == '"' ]]; then
-            ((in_quotes = 1 - in_quotes))
-        elif [[ $in_quotes -eq 0 ]]; then
+        if [[ -n "$quote" ]]; then
+            [[ "$char" == "$quote" ]] && quote=""
+        else
             case "$char" in
+                '"'|"'") quote="$char" ;;
                 '{'|'[') (( depth++ )) ;;
                 '}'|']') (( depth > 0 )) && (( depth-- )) ;;
                 ',') if (( depth == 0 )); then
@@ -744,13 +769,17 @@ toml_inline_get() {
         fi
         current+="$char"
     done
+    (( depth == 0 )) && [[ -z "$quote" ]] || return 1
     pairs+=("$current")
 
     for current in "${pairs[@]}"; do
         current="$(str_trim "$current")"
         [[ -n "$current" ]] || continue
-        # The first `=` outside the quotes separates them. A key is bare or
-        # quoted and neither may contain one, so the first is always right.
+        # Split on the first `=`, which is right for a bare key and for the
+        # quoted keys that hold no `=`. A quoted key *may* hold one, and
+        # `{ "k=y" = "1" }` is legal TOML this cannot read: it looks for a key
+        # called `"k`. Quoted keys are not understood here, in common with the
+        # rest of this module.
         key="${current%%=*}"
         val="${current#*=}"
         [[ "$current" == *=* ]] || continue

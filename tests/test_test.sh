@@ -193,3 +193,28 @@ it_does_not_fail_a_test_for_a_missing_command_that_is_not_an_assertion() {
     assert_contains "$out" "1 passed"
     assert_not_contains "$out" "assertion name was not found"
 }
+
+#[test]
+it_does_not_fail_a_test_that_prints_assert_and_separately_runs_a_missing_command() {
+    # The first version of the guard matched `assert_` and `command not found`
+    # anywhere in the whole output, so the two halves could come from unrelated
+    # lines and an honest test failed with a verdict that was a lie about it.
+    # This file is full of that shape: it builds test sources containing
+    # `assert_eq` and captures the runner's output.
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_prints_a_snippet_then_runs_a_missing_tool() {\n'
+        printf '    printf %s\n' "'the source reads: assert_eq \"a\" \"a\"\\n'"
+        printf '    definitely_not_a_real_tool_xyz\n'
+        printf '    assert_eq "a" "a"\n'
+        printf '}\n'
+    } > "$d/zz_blob_test.sh"
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_blob_test.sh" 2>&1)" || true
+    rm -rf "$d"
+    assert_contains "$out" "1 passed"
+    assert_not_contains "$out" "assertion name was not found"
+}

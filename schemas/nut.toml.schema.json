@@ -482,6 +482,55 @@
     "nutshell_version": {
       "type": "string",
       "description": "Engine pin: the released nutshell version this project wants. Root-level, above the first table header."
+    },
+    "package": {
+      "type": "object",
+      "description": "What this package is, for anything resolving it by name. Distinct from [meta], which describes this file.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "description": "The package's own version. [meta] version is the schema's."
+        },
+        "description": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "features": {
+      "type": "object",
+      "description": "Feature flags, cargo's shape. A name maps to the list of other features it turns on; `default` is the set enabled unless --no-default-features drops it.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "lib": {
+      "type": "object",
+      "description": "The library this package exposes.",
+      "additionalProperties": true
+    },
+    "bin": {
+      "type": "object",
+      "description": "Executables this package ships, a map from command name to path.",
+      "additionalProperties": true
     }
   },
   "additionalProperties": false

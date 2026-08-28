@@ -96,10 +96,13 @@ unset the store is `~/.local/share/nutshell` on Linux and
 `~/Library/Application Support/nutshell` on macOS, which is where each puts
 application data. The point of both is that neither is the cache directory.
 
-`NUTSHELL_STORE` moves the root, `NUTSHELL_TOOLCHAINS` just the toolchains, and
-`NUTSHELL_REMOTE` says where a fetch goes. Under the data directory and not the
-cache directory, because a cache is something a cleaner is entitled to delete
-and this is where every project's dependencies actually live.
+`NUTSHELL_STORE` moves the root and `NUTSHELL_TOOLCHAINS` just the toolchains.
+A fetch goes to whatever the installed checkout's `origin` is, so an HTTPS
+clone fetches over HTTPS and an ssh one over ssh.
+
+Under the data directory and not the cache directory, because a cache is
+something a cleaner is entitled to delete and this is where every project's
+dependencies actually live.
 
 A pin that names a version gets a directory named for that version, and one
 that names a branch gets a directory named for the revision that branch
@@ -219,9 +222,8 @@ myproject/
 Each script is independent. Each one has the init line:
 
 ```bash
-#!/usr/bin/env bash
+#!/usr/bin/env nutshell
 # scripts/build.sh
-. "$NUTSHELL_INIT" || exit 1
 
 use os log fs
 
@@ -237,11 +239,11 @@ fs_mkdir dist
 One script bootstraps, others use the clean shebang:
 
 ```bash
-#!/usr/bin/env bash
-# scripts/main.sh - The entry point
-. "$NUTSHELL_INIT" || exit 1
+#!/usr/bin/env nutshell
+# scripts/main.sh - the entry point
 
-# PATH is already set by init, so internal scripts can use nutshell shebang
+# The launcher put its bin on PATH, so anything this starts gets the same
+# nutshell without resolving again.
 "${0%/*}/internal/build.sh" "$@"
 ```
 
@@ -526,9 +528,8 @@ happens.
 ### Example: Build Script
 
 ```bash
-#!/usr/bin/env bash
+#!/usr/bin/env nutshell
 # scripts/build.sh
-. "$NUTSHELL_INIT" || exit 1
 
 use os log deps fs
 
@@ -553,9 +554,8 @@ log_success "Build complete!"
 ### Example: API Client
 
 ```bash
-#!/usr/bin/env bash
+#!/usr/bin/env nutshell
 # scripts/fetch-data.sh
-. "$NUTSHELL_INIT" || exit 1
 
 use log http json
 
@@ -576,9 +576,8 @@ fi
 ### Example: Interactive Installer
 
 ```bash
-#!/usr/bin/env bash
+#!/usr/bin/env nutshell
 # scripts/install.sh
-. "$NUTSHELL_INIT" || exit 1
 
 use log prompt fs color
 
@@ -622,6 +621,42 @@ This works regardless of:
 **Just copy the line. Don't modify it.**
 
 ---
+
+## Lowering, and feature flags
+
+`nut-lower` resolves a script's `use` lines ahead of time and writes the library
+half as one file, with everything nothing calls removed. The script sources that
+file instead of calling `use`:
+
+```bash
+nut-lower scripts/build.sh -o lowered.sh
+```
+
+```bash
+#!/bin/sh
+. ./lowered.sh
+```
+
+It is the library half, not a runnable copy of the script, so the output is a
+file to source and carries no executable bit.
+
+Two things decide what goes in. A **gate** asks about the machine doing the
+lowering: which shell is running, whether a binary is on PATH. A **feature** is a
+choice about the machine that will run the result. That is the difference that
+lets a POSIX artifact come off a host that has bash.
+
+Features live in `nut.toml` and take cargo's shape:
+
+```toml
+[features]
+default = ["bash"]
+bash    = []
+```
+
+A row in `lib.nut` carrying `#[feature(bash)]` is in when that feature is on.
+`--features a,b` adds to what is enabled and `--no-default-features` drops the
+default set, both the way cargo means them. A manifest declaring no features
+behaves as it did before any of this existed.
 
 ## QA / Check System
 
@@ -809,7 +844,7 @@ If you still choose to use a coding agent:
   agent because you do not understand; you will waste time and energy, both
   yours and the planet's.
 - This repository provides agent instructions for GitHub Copilot
-  (`.github/copilot-instructions.md`) that help, but they do not eliminate the
+  that help, but they do not eliminate the
   problem. You will still need to correct the agent frequently.
 
 The recommendation stands: do this work yourself unless you know what you are doing

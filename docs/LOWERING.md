@@ -216,7 +216,7 @@ in another file is a copy of that file with worse ergonomics.
 The accounting below is what made the case, and it is why the answer went this
 way rather than towards putting `init` itself on the floor.
 
-`init` is 770 lines and eighteen functions, and almost all of it is
+`init` is 969 lines and twenty-four functions, and almost all of it is
 resolution:
 
 - Six functions answer "which file is this module" out of `lib.nut`:

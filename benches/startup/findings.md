@@ -9,6 +9,37 @@ discovered here, by getting it wrong and watching the harness refuse the run
 for arms that disagreed. Measuring a copy meant the numbers were not about the
 thing that ships.
 
+## Superseded, 2026-08-28: `_deps_init` no longer scans at load
+
+Everything below was measured while `deps.sh` resolved all eighteen tools when
+the module was sourced. It does not any more, and the numbers move so far that
+the conclusion inverts.
+
+| arm | then | now |
+|---|---|---|
+| resolved through the manifest | 248 | 249 |
+| lowered, dispatch left to run | 221 | 249 |
+| lowered, `use` resolved already | 216 | **60** |
+| lowered and shaken | 217 | **61** |
+
+The eager scan was 209ms that every arm paid equally, so it hid the difference
+between them. With it gone, **the lowering is a 4x** and what it removes is the
+resolution, which this file called noise because it was measuring underneath a
+much larger constant.
+
+Shaking is still noise: 61 against 60, the spreads touching, exactly as before.
+That part of the old answer stands and is the one the tree-shaking question
+asked.
+
+Per module, now that nothing dominates: `os` 27ms, `string` 26, `validate` 46,
+`deps` 67, `toml` 91, `fs` 99, `text` 102. Before, every one of those was two
+hundred and something and the number was `deps`.
+
+**holds for:** bash 5.3, `Darwin arm64`, this workload's 6 modules, `deps`
+resolving on demand. The section below is kept because it is the reasoning that
+found the scan, and because a superseded measurement with its successor beside
+it is worth more than a deleted one.
+
 ## The answer, and it is not the one this file used to give
 
 **Almost none of the load cost is what a shaker can remove.** `use deps` alone

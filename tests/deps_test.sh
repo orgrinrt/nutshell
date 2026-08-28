@@ -171,9 +171,9 @@ it_resolves_a_tool_whose_name_is_not_a_variable_name() {
     # available list grew by one word per call when the write was silently
     # failing.
     local before after
-    before="$(printf '%s' "$_TOOLS_AVAILABLE" | wc -w | tr -d ' ')"
+    before="$(deps_available | wc -w | tr -d ' ')"
     deps_has pkg-config; deps_has pkg-config; deps_has pkg-config
-    after="$(printf '%s' "$_TOOLS_AVAILABLE" | wc -w | tr -d ' ')"
+    after="$(deps_available | wc -w | tr -d ' ')"
     assert_eq "$after" "$before"
 }
 
@@ -211,6 +211,11 @@ it_lists_only_the_capabilities_that_were_set() {
     # capability nobody set was absent rather than zero. Walking a fixed list
     # of every known capability instead would report the unset ones as zero,
     # which is a different answer, and this pins the one it gives.
+    # The scan first, in this shell. `caps="$(deps_caps)"` puts it in a
+    # subshell, so the parent's `_TOOL_CAN_NAMES` stays empty and the two
+    # counts below compare seventeen against nothing. Detection is lazy now and
+    # a substitution does not carry what it learned back out.
+    _deps_scan_all
     local caps; caps="$(deps_caps)"
     assert_ne "$caps" ""
     local n; n="$(printf '%s\n' "$caps" | wc -l | tr -d ' ')"
@@ -279,7 +284,10 @@ it_reads_under_a_posix_shell() {
 # parse said so.
 it_finds_the_same_tools_under_both_shells() {
     local sh; sh="$(_dt_posix_sh)"
-    local expr='printf "%s" "$_TOOLS_AVAILABLE" | wc -w | tr -d " "'
+    # `deps_available` rather than the variable behind it. Detection is lazy
+    # now, so the variable holds what has been asked for and the function is
+    # what means "everything".
+    local expr='deps_available | wc -w | tr -d " "'
     local p b
     p="$(_dt_under "$sh" "$expr")"
     b="$(_dt_under bash "$expr")"
@@ -304,7 +312,7 @@ it_does_not_leak_a_backgrounded_command_into_a_tool_path() {
     local t
     for t in sed grep awk; do
         local got n
-        got="$(_dt_under "$sh" "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        got="$(_dt_under "$sh" "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
         assert_ne "$got" "" "no path resolved for $t"
         n="$(printf '%s' "$got" | wc -l | tr -d ' ')"
         assert_eq "$n" "0" "the path for $t is more than one line: [$got]"
@@ -319,8 +327,8 @@ it_resolves_the_same_paths_under_both_shells() {
     local t
     for t in sed grep awk stat; do
         local p b
-        p="$(_dt_under "$sh"  "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
-        b="$(_dt_under bash   "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        p="$(_dt_under "$sh"  "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        b="$(_dt_under bash   "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
         assert_eq "$p" "$b" "$t resolved differently"
     done
 }

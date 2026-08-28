@@ -162,6 +162,24 @@ _TOOL_CAN_NAMES=""
 # line so the sixteen call sites below do not all have to change at once.
 _deps_key() { nut_key "$1" || return 1; _dk="$_nk"; return 0; }
 
+# _deps_set_variant <tool> <path>
+#
+# Which flavour of a tool this is, recorded where the dispatchers look. It was
+# inline in the eager scan and is a function because `deps_has` resolves a tool
+# too, and a tool resolved that way had no variant at all: `fs.sh` reads
+# `${_TOOL_VARIANT_stat:-unknown}` and takes a `uname` guess when it is empty,
+# so a lazily resolved `stat` silently took the fallback path.
+_deps_set_variant() {
+    case "$1" in
+        sed)  _deps_set VARIANT "$1" "$(_deps_detect_sed_variant "$2")" ;;
+        awk)  _deps_set VARIANT "$1" "$(_deps_detect_awk_variant "$2")" ;;
+        grep) _deps_set VARIANT "$1" "$(_deps_detect_grep_variant "$2")" ;;
+        stat) _deps_set VARIANT "$1" "$(_deps_detect_stat_variant "$2")" ;;
+        find) _deps_set VARIANT "$1" "$(_deps_detect_find_variant "$2")" ;;
+        *)    _deps_set VARIANT "$1" standard ;;
+    esac
+}
+
 # _deps_get <destvar> <table> <name>
 #
 # Reads one entry into a variable rather than printing it, so a read costs no
@@ -493,28 +511,46 @@ _deps_init() {
     local available=""
     local tool path variant
 
+    # The scan does not run here. It is `_deps_scan_all`, and it runs when
+    # somebody asks a question only a full scan can answer.
+    #
+    # Resolving all eighteen at load time cost 125ms of a 148ms module load, on
+    # a path every consumer of `fs` and `text` takes because they declare
+    # `use deps`. `deps_has` already resolves a tool it has not seen, records
+    # it, and remembers a miss, so the eager pass was a prefetch of answers
+    # most callers never ask for.
+    #
+    # `benches/startup` measured the same thing from the other end and its
+    # findings say so: almost none of the load cost is what a shaker can
+    # remove, because `use deps` alone was 209ms of a 225ms library load.
+    return 0
+}
+
+# Every tool, resolved. What the load used to do, now asked for.
+#
+# Only two questions need it: what is available, and which capabilities are
+# present. Both are whole-table questions and neither is asked by a module
+# picking an implementation.
+# What it costs to be called inside a command substitution, which is worth
+# stating because it is not obvious and it bit the test that pins capabilities:
+# a substitution is a subshell, so the scan happens there and the parent keeps
+# none of it. `x="$(deps_available)"` therefore scans every time it is called.
+#
+# The hot path is unaffected, because it is not a substitution: a dispatcher
+# calls `deps_has` directly and the answer it records stays in the shell that
+# recorded it. Only the two whole-table questions go through a substitution,
+# and neither is asked in a loop.
+_deps_scan_all() {
+    [ "${_DEPS_SCANNED:-0}" = "1" ] && return 0
+    _DEPS_SCANNED=1
+    local tools="sed awk grep perl stat mktemp find sort wc tr
+        head tail dirname basename uname cut tee xargs"
+    local tool
     for tool in $tools; do
-        if path="$(_deps_find_tool "$tool" "$config_file")"; then
-            _deps_set PATH "$tool" "$path"
-            available="${available} ${tool}"
-            
-            # Detect variant for tools that have meaningful variants
-            case "$tool" in
-                sed)  _deps_set VARIANT "$tool" "$(_deps_detect_sed_variant "$path")" ;;
-                awk)  _deps_set VARIANT "$tool" "$(_deps_detect_awk_variant "$path")" ;;
-                grep) _deps_set VARIANT "$tool" "$(_deps_detect_grep_variant "$path")" ;;
-                stat) _deps_set VARIANT "$tool" "$(_deps_detect_stat_variant "$path")" ;;
-                find) _deps_set VARIANT "$tool" "$(_deps_detect_find_variant "$path")" ;;
-                *)    _deps_set VARIANT "$tool" standard ;;
-            esac
-        fi
+        deps_has "$tool" >/dev/null 2>&1 || true
     done
-    
-    # Build space-separated available list
-    _TOOLS_AVAILABLE="${available# }"
-    
-    # Detect capabilities based on what we found
     _deps_detect_capabilities
+    return 0
 }
 
 # Run initialization immediately
@@ -556,6 +592,7 @@ deps_has() {
     local path
     if path="$(_deps_find_tool "$tool" "$_DEPS_CONFIG")"; then
         _deps_set PATH "$tool" "$path"
+        _deps_set_variant "$tool" "$path"
         _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"
         return 0
     fi
@@ -593,6 +630,8 @@ deps_has_any() {
 # Get the list of available tools (space-separated)
 # Usage: deps_available -> "sed awk grep perl stat..."
 deps_available() {
+    # The only question that needs every answer, so it is the one that pays.
+    _deps_scan_all
     echo "$_TOOLS_AVAILABLE"
 }
 
@@ -649,6 +688,9 @@ deps_is_bsd() {
 # Check if a capability is available
 # Usage: deps_can "grep_pcre" -> returns 0 or 1
 deps_can() {
+    # Capabilities are probed against the tools that were found, so the scan
+    # has to have happened. It is once per process.
+    _deps_scan_all
     local cap="${1:-}"
     local _c; _deps_get _c CAN "$cap"
     [ "${_c:-0}" = "1" ]
@@ -667,6 +709,7 @@ deps_cap() {
 # List all capabilities (one per line: cap=value)
 # Usage: deps_caps -> "sed_inplace=1\ngrep_pcre=1\n..."
 deps_caps() {
+    _deps_scan_all
     local cap _c
     for cap in $_TOOL_CAN_NAMES; do
         _deps_get _c CAN "$cap"

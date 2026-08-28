@@ -444,3 +444,20 @@ BAD
     rm -f "$f"
     assert_ne "$hits" "" "an ANSI-C quote was not reported"
 }
+
+#[test]
+# `%-*s` is not a bashism, and the rule that said it was is gone.
+#
+# A commit adding that rule stated "POSIX `printf` has no `*` field width",
+# and `cli.sh` was written around it: the column width goes into the format
+# string rather than through `%-*s`, with a comment repeating the claim.
+#
+# Measured, it is wrong. `dash`, `ksh`, `zsh`, `/bin/sh` and `/usr/bin/printf`
+# all take it. This asserts it in whatever POSIX shell the machine has, so the
+# rule comes back the day one of them does not, rather than the claim being
+# reinstated from memory.
+it_takes_a_star_field_width_in_a_posix_shell() {
+    local sh; sh="$(_posix_shell)" || { skip "no posix shell here"; return 0; }
+    assert_eq "$("$sh" -c 'printf "[%-*s]" 6 hi')" "[hi    ]"
+    assert_eq "$("$sh" -c 'printf "[%*d]" 5 42')"  "[   42]"
+}

@@ -120,8 +120,14 @@ cli_usage() {
         _cu_i=$(( _cu_i + 1 ))
     done
 
-    # The width goes into the format string rather than through `%-*s`, which
-    # is a bash extension: POSIX `printf` has no `*` field width.
+    # The width goes into the format string rather than through `%-*s`.
+    #
+    # Not because it has to. The comment here used to say POSIX `printf` has no
+    # `*` field width, and that is false: `dash`, `ksh`, `zsh`, `/bin/sh` and
+    # `/usr/bin/printf` all take one, and `check_posix_floor_test.sh` asserts it
+    # in whatever POSIX shell the machine has. Left as it is because it works
+    # and reads fine, and rewriting it would be churn; the claim is corrected
+    # rather than the code.
     _cu_i=0
     while [ "$_cu_i" -lt "$_cu_n" ]; do
         list_read _cu_name _CLI_ORDER "$_cu_i"

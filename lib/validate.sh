@@ -98,7 +98,13 @@ is_integer() {
 is_positive_integer() {
     local val="${1:-}"
     case "$val" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$val" -gt 0 ]
+    # Positive is "has a digit that is not zero", which needs no arithmetic and
+    # so has no upper bound. `[ "$val" -gt 0 ]` on a twenty-digit number writes
+    # `integer expected` to stderr and returns 2, and a validator whose whole
+    # job is a quiet yes or no should not print on an input a caller handed it
+    # precisely to be told about.
+    case "$val" in *[1-9]*) return 0 ;; esac
+    return 1
 }
 
 #[pub]
@@ -114,10 +120,16 @@ is_non_negative_integer() {
 # Check if value is a boolean (true/false/yes/no/1/0/on/off)
 # Usage: is_boolean "yes" -> returns 0 (true)
 is_boolean() {
-    local val="${1:-}"
-    local lower="${val,,}"
-    case "$lower" in
-        true|false|yes|no|1|0|on|off) return 0 ;;
+    # Matched case-insensitively rather than lowercased first. `${val,,}` is a
+    # bash expansion and a POSIX shell does not merely ignore it, it refuses to
+    # run the file: `Bad substitution`, fatal, at the point of use. The
+    # alternative that keeps one spelling is `tr`, which is a fork per call for
+    # a set of eight words.
+    case "${1:-}" in
+        [Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee]) return 0 ;;
+        [Yy][Ee][Ss]|[Nn][Oo]) return 0 ;;
+        [Oo][Nn]|[Oo][Ff][Ff]) return 0 ;;
+        1|0) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -126,10 +138,8 @@ is_boolean() {
 # Usage: is_truthy "yes" -> returns 0 (true)
 #[pub]
 is_truthy() {
-    local val="${1:-}"
-    local lower="${val,,}"
-    case "$lower" in
-        1|true|yes|on|y) return 0 ;;
+    case "${1:-}" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy]) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -138,10 +148,8 @@ is_truthy() {
 # Check if value is falsy (0/false/no/off/n/empty)
 # Usage: is_falsy "no" -> returns 0 (true)
 is_falsy() {
-    local val="${1:-}"
-    local lower="${val,,}"
-    case "$lower" in
-        0|false|no|off|n|"") return 0 ;;
+    case "${1:-}" in
+        0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]|[Nn]|"") return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -275,8 +283,15 @@ is_ipv6() {
 # _v6_count <segment> -> how many colon-separated groups it holds
 _v6_count() {
     [ -z "$1" ] && { printf '0'; return 0; }
-    local rest="${1//[^:]/}"
-    printf '%d' $(( ${#rest} + 1 ))
+    # Colons counted by walking them off the front. `${1//[^:]/}` deleted every
+    # non-colon and measured what was left, which is bash's pattern
+    # substitution and is fatal under a POSIX shell rather than ignored.
+    local rest="$1" n=1
+    while [ "${rest#*:}" != "$rest" ]; do
+        n=$(( n + 1 ))
+        rest="${rest#*:}"
+    done
+    printf '%d' "$n"
 }
 
 # _v6_groups_ok <segment> -> every group is one to four hex digits
@@ -307,6 +322,17 @@ is_ip() {
 is_port() {
     local val="${1:-}"
     case "$val" in ''|*[!0-9]*) return 1 ;; esac
+
+    # A leading zero is refused, which is a deliberate change and not what the
+    # old code did. `[[ "$val" -ge 1 ]]` read a leading zero as octal, so `007`
+    # was seven and passed while `08080` had no valid octal reading and failed
+    # with a diagnostic. Neither answer was intended by anybody. Refusing both
+    # is one rule, and it is the rule `is_ipv4` in this file already applies to
+    # an octet.
+    case "$val" in 0?*) return 1 ;; esac
+
+    # Length before arithmetic, for the reason in `is_positive_integer`.
+    [ "${#val}" -gt 5 ] && return 1
     [ "$val" -ge 1 ] && [ "$val" -le 65535 ]
 }
 
@@ -328,8 +354,18 @@ is_hostname() {
     # walking them for the length, and because a pattern that long is read by
     # nobody.
     #
-    # `$val` unquoted with `IFS='.'` splits on dots. A trailing dot yields no
-    # final field, so `a.` passes here and passed the old pattern too.
+    # `$val` unquoted with `IFS='.'` splits on dots, and a trailing dot yields
+    # no final field, so `a.` and `example.com.` pass.
+    #
+    # That is a change and not an equivalence. The old pattern was anchored at
+    # both ends, so a trailing dot failed it whatever the splitting loop saw:
+    # `a.`, `a.b.`, `example.com.` and `a.b.c.` all went from no to yes. The
+    # new answer is the better one, since a trailing dot is the fully-qualified
+    # form and resolvers take it, but it is a decision rather than a tidy-up
+    # and the tests below hold it.
+    #
+    # Everything else agrees. A leading dot, `..`, `a..b` and a bare `.` are
+    # refused by both.
     local label first last
     local IFS='.'
     for label in $val; do

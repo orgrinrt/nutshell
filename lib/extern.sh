@@ -45,7 +45,7 @@
 [ -n "${_NUTSHELL_EXTERN_SH:-}" ] && return 0
 _NUTSHELL_EXTERN_SH=1
 
-use toml string xdg fs log validate
+use toml string xdg fs log validate inuse
 
 # _extern_manifest
 #
@@ -267,6 +267,10 @@ extern_path() {
         _extern_guard "$dir" _extern_lay_out "$name" "$mirror" "$url" "$commit" "$dir" || return 1
     fi
 
+    # Marked for as long as this process lives, so an update elsewhere waits
+    # rather than rewriting a tree being read. The EXIT trap releases it; no
+    # caller has to remember.
+    inuse_hold_session "$dir" 2>/dev/null || true
     map_set _EXTERN_RESOLVED "$name" "$dir"
     printf '%s' "$dir"
 }
@@ -397,7 +401,26 @@ _extern_guard() {
 
     local rc=0
     if ! _extern_is_repo "$dir"; then
-        # Anything already here is the wreckage of an attempt that did not
+        # Wait for anybody reading it. `_extern_is_repo` asks git a question
+        # that a worktree can only answer through its mirror, so a checkout
+        # whose mirror went momentarily unreachable reads as not-a-repo with
+        # every one of its files intact. Deleting that is deleting somebody's
+        # dependency mid-read, and it is what produced a suite reporting a
+        # couple of hundred failures in modules that were on disk throughout.
+        #
+        # Held first, then checked, so the gap between seeing it free and
+        # taking it is closed rather than merely small.
+        inuse_hold "$dir" 2>/dev/null || true
+        if inuse_held_by_other "$dir" 2>/dev/null; then
+            if ! inuse_wait "$dir" "$_EXTERN_LOCK_WAIT_SECONDS" 2>/dev/null; then
+                log_warn "${dir} is being read by another process; not touching it"
+                inuse_release "$dir" 2>/dev/null || true
+                rm -rf "$lock"
+                return 1
+            fi
+        fi
+
+        # Anything still here is the wreckage of an attempt that did not
         # finish, and git will not clone into a directory that is not empty.
         [ -e "$dir" ] && rm -rf "$dir"
 
@@ -410,6 +433,7 @@ _extern_guard() {
             [ -e "$dir" ] && rm -rf "$dir"
         fi
     fi
+    inuse_release "$dir" 2>/dev/null || true
     # Not rmdir: the lock holds the pid file now, and rmdir on a non-empty
     # directory fails silently here, which would leave every later caller
     # waiting on a lock whose holder finished long ago.

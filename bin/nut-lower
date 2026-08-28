@@ -5,8 +5,17 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Takes a script and the modules it loads, and writes one file with the
-# resolution already done and everything nothing calls removed.
+# Takes a script and the modules it loads, and writes **the library half** as
+# one file, with the resolution already done and everything nothing calls
+# removed. The script sources that file instead of calling `use`:
+#
+#     . ./lowered.sh
+#
+# It is not a runnable copy of the script and does not contain the script's own
+# body. An earlier version of this header said "writes one file" and the output
+# was `chmod +x`ed, so running it produced an executable that exited 0 having
+# done nothing, which is the silent-failure shape this project refuses
+# everywhere else.
 #
 # The measurements say which half of that is worth doing, and they say less
 # than this file once claimed. `benches/startup` puts resolving `use` ahead of
@@ -19,7 +28,7 @@
 # first call is about 35ms per process at six dispatched functions.
 #
 # Usage:
-#   nut-lower script.sh -o lowered.sh
+#   nut-lower script.sh -o lowered.sh              # then: . ./lowered.sh
 #   nut-lower script.sh --no-shake -o lowered.sh   # concatenate only
 #   nut-lower script.sh --list                     # what it would include
 # =============================================================================
@@ -39,10 +48,18 @@ _nl_usage() {
     cat <<'USAGE'
 nut-lower - resolve a script's modules ahead of time
 
+Writes the library half as one file. The script sources it instead of calling
+`use`, so it is not a runnable copy of the script and does not contain the
+script's own body:
+
+    nut-lower script.sh -o lowered.sh
+    . ./lowered.sh
+
 usage: nut-lower <script> [-o <out>] [--no-shake] [--list] [--no-prebind]
                  [--features <f,..>] [--no-default-features]
 
-  -o <out>     where to write. Standard output when absent.
+  -o <out>     where to write, as a file to source. Standard output when
+               absent.
   --use <m,..> modules to include beyond the ones the script names. For an
                entry point that loads its modules some other way, or a
                library slice with no entry point of its own.
@@ -495,7 +512,10 @@ main() {
     fi
 
     if [[ -n "$out" ]]; then
-        cp "$final" "$out" && chmod +x "$out"
+        # Not `chmod +x`. The output is a library the script sources, so an
+        # executable bit invites running it, and running it does nothing and
+        # says nothing.
+        cp "$final" "$out"
     else
         cat "$final"
     fi

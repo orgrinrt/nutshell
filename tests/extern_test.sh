@@ -58,17 +58,56 @@ TOML
 # of this file's helpers, and each removes its own directory on the way out.
 # They say `self-cleaned` on the line, which is what the guard below allows.
 _EX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-extern.XXXXXX")"
-trap '[[ -n "${_EX_TMP:-}" ]] && rm -rf "$_EX_TMP"' EXIT
+_EX_OWNER="${BASHPID:-$$}"
+
+# Guarded on the pid that set it, and that is the whole of the bug it fixes.
+#
+# `$( )` inherits an EXIT trap and fires it when the substitution ends. Every
+# fixture here is built inside one, `fix="$(_extern_fixture)"`, so the cleanup
+# ran the instant the fixture was handed back and deleted the directory the
+# test was about to `cd` into. What came out was git saying `Unable to read
+# current working directory` in the middle of a message about a dependency,
+# which sent two readers looking at the dependency code.
+_ex_cleanup() {
+    # `$BASHPID`, not `$$`. In a command substitution `$$` is still the
+    # parent's pid, so a guard written with it is true in exactly the place it
+    # was meant to be false.
+    [ "${BASHPID:-$$}" = "$_EX_OWNER" ] || return 0
+    [ -n "${_EX_TMP:-}" ] && rm -rf "$_EX_TMP"
+}
+trap _ex_cleanup EXIT
 
 # A scratch directory under this file's own root.
+#
+# The root is remade when it is gone. The `EXIT` trap above is set at file
+# scope, and a test that runs in a subshell fires it on its own way out, so the
+# first test took the scratch root with it and every one after ran from a
+# directory that no longer existed. What that looked like was git saying
+# `Unable to read current working directory` in the middle of a message about a
+# dependency, which is a true sentence about the wrong thing.
 _ex_tmp() {
+    [ -d "${_EX_TMP:-}" ] || _EX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-extern.XXXXXX")"
     local d; d="$(mktemp -d "${_EX_TMP}/${1:-d}.XXXXXX")"
     printf '%s' "$d"
 }
 
 _isolate() {
+    # Somewhere that exists, first. Each test `cd`s into a fixture and none of
+    # them comes back, so the next one starts from whatever the last one left,
+    # and once any of those is cleaned up git reports `Unable to read current
+    # working directory` and the failure reads as being about the dependency.
+    cd "$_EX_TMP" 2>/dev/null || cd / || return 1
+
     NUTSHELL_STORE="$(_ex_tmp store)"
     export NUTSHELL_STORE
+
+    # And drop the runner's own anchor. `_extern_manifest` looks at
+    # `NUTSHELL_SCRIPT_DIR` before it looks at `$PWD`, which is right for a
+    # script asking about its own project and wrong for a test that has just
+    # `cd`ed into a fixture. Left set, every one of these reads nutshell's own
+    # manifest, which declares no `fixture`, and thirteen tests fail with a
+    # message about the fixture rather than about the anchor.
+    unset NUTSHELL_SCRIPT_DIR _NUT_ASKING_FROM
 }
 
 #[test]

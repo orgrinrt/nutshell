@@ -1,0 +1,11 @@
+# nut.lock - what each dependency resolved to. Generated; commit it.
+#
+# A commit or a tag in nut.toml is a pin, and this holds the checkout
+# there. A branch is a pin on that branch, meaning its head, and this
+# records what the head was and is rewritten whenever it moves.
+
+[deps.other]
+commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[deps.fixture]
+commit = "e21230456b6825ddaa487827246237d634215203"

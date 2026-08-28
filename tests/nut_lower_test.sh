@@ -490,3 +490,40 @@ it_ratchets_how_many_closures_reach_the_floor() {
     v="ok"; [ "$shaken" -lt "$whole" ] && v="shaken ${shaken} < whole ${whole}"
     assert_eq "$v" "ok" "shaking made fewer closures parse, which it cannot do"
 }
+
+#[test]
+it_produces_a_library_the_script_can_source_and_run_from() {
+    # The gap a review found: no test ran a lowered artifact and asserted it
+    # did what the script did. The artifact is the library half, so the check
+    # is that sourcing it makes the script's own body work without `use`.
+    local d; d="$(mktemp -d)"
+    cat > "$d/prog.sh" <<'PROG'
+#!/usr/bin/env nutshell
+use string
+printf '%s\n' "$(str_upper hello)"
+PROG
+    "${BASH_SOURCE[0]%/*}/../bin/nut-lower" "$d/prog.sh" -o "$d/lowered.sh" >/dev/null 2>&1
+
+    # It exists and holds something.
+    assert_ok test -s "$d/lowered.sh"
+
+    # Sourcing it defines what the script calls. That is the claim, and an
+    # artifact that is merely non-empty satisfies neither half of it.
+    local out
+    out="$(bash -c '. "$1" >/dev/null 2>&1; declare -F str_upper >/dev/null && printf %s "$(str_upper hello)"' _ "$d/lowered.sh")"
+    assert_eq "$out" "HELLO"
+    rm -rf "$d"
+}
+
+#[test]
+it_does_not_mark_the_lowered_file_executable() {
+    # It is a file to source. An executable bit invites running it, and running
+    # it does nothing and says nothing, which is the silent-failure shape this
+    # project refuses everywhere else.
+    local d; d="$(mktemp -d)"
+    printf '#!/usr/bin/env nutshell\nuse string\n' > "$d/prog.sh"
+    "${BASH_SOURCE[0]%/*}/../bin/nut-lower" "$d/prog.sh" -o "$d/lowered.sh" >/dev/null 2>&1
+    assert_ok    test -f "$d/lowered.sh"
+    assert_fails test -x "$d/lowered.sh"
+    rm -rf "$d"
+}

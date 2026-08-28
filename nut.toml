@@ -28,7 +28,20 @@
 #
 # The fields are the ones cargo, npm and deno all agree on, because a package
 # manifest that invents its own vocabulary makes every reader learn it: name,
-# version, description, license, repository, keywords. `# Feature flags, the way cargo has them.
+# version, description, license, repository, keywords. `[lib]` and `[bin]` are
+# cargo's shape, and `[bin]` is a map the way package.json's is.
+
+[package]
+name = "nutshell"
+version = "0.7.0"
+description = "A bash library: modules with a manifest, a QA gate, and dependency resolution."
+license = "MPL-2.0"
+repository = "https://github.com/orgrinrt/nutshell"
+keywords = ["bash", "shell", "posix", "library", "modules"]
+
+# -----------------------------------------------------------------------------
+# Feature flags, the way cargo has them
+# -----------------------------------------------------------------------------
 #
 # A gate asks about the machine: which shell is running, whether a binary is on
 # PATH. A feature is a choice, and the difference matters when the answer is
@@ -57,16 +70,6 @@
 # here produces a file for a machine that has only a POSIX shell.
 default = ["bash"]
 bash = []
-
-[lib]` and `[bin]` are
-# cargo's shape, and `[bin]` is a map the way package.json's is.
-[package]
-name = "nutshell"
-version = "0.7.0"
-description = "A bash library: modules with a manifest, a QA gate, and dependency resolution."
-license = "MPL-2.0"
-repository = "https://github.com/orgrinrt/nutshell"
-keywords = ["bash", "shell", "posix", "library", "modules"]
 
 # The library entry point: the file that says what this package provides, the
 # way `src/lib.rs` does for a crate.

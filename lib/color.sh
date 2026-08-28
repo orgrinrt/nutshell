@@ -20,7 +20,14 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success. That is worse than failing, because the caller has no way
+# to tell.
+[ -n "${_NUTSHELL_COLOR_SH:-}" ] && return 0
+_NUTSHELL_COLOR_SH=1
 
 # =============================================================================
 # Color Support Detection
@@ -32,10 +39,10 @@ _detect_color_support() {
     _COLOR_SUPPORT="none"
     
     # Check for explicit disable
-    [[ -n "${NO_COLOR:-}" ]] && return
+    [ -n "${NO_COLOR:-}" ] && return
     
     # Check if stdout is a terminal
-    [[ ! -t 1 ]] && return
+    [ ! -t 1 ] && return
     
     # Check TERM
     case "${TERM:-}" in
@@ -55,7 +62,7 @@ _detect_color_support() {
     esac
     
     # Check for true color support
-    if [[ "${COLORTERM:-}" == "truecolor" ]] || [[ "${COLORTERM:-}" == "24bit" ]]; then
+    if [ "${COLORTERM:-}" = "truecolor" ] || [ "${COLORTERM:-}" = "24bit" ]; then
         _COLOR_SUPPORT="truecolor"
     fi
 }
@@ -68,7 +75,9 @@ _detect_color_support
 # =============================================================================
 
 # The escape character
-readonly _ESC=$'\033'
+# `$'\033'` is bash's. A substitution costs one fork, once, at load.
+_ESC="$(printf '\033')"
+readonly _ESC
 
 # =============================================================================
 # Standard Colors (Foreground)
@@ -158,7 +167,7 @@ RESET_STRIKETHROUGH=""
 # =============================================================================
 
 _init_colors() {
-    if [[ "$_COLOR_SUPPORT" == "none" ]]; then
+    if [ "$_COLOR_SUPPORT" = "none" ]; then
         # All variables remain empty
         return
     fi
@@ -248,7 +257,7 @@ _init_colors
 # Check if colors are enabled
 # Usage: color_enabled -> returns 0 if colors enabled, 1 otherwise
 color_enabled() {
-    [[ "$_COLOR_SUPPORT" != "none" ]]
+    [ "$_COLOR_SUPPORT" != "none" ]
 }
 
 #[pub]
@@ -262,14 +271,14 @@ color_support() {
 # Check if 256-color mode is supported
 # Usage: color_has_256 -> returns 0 if supported, 1 otherwise
 color_has_256() {
-    [[ "$_COLOR_SUPPORT" == "256" || "$_COLOR_SUPPORT" == "truecolor" ]]
+    [ "$_COLOR_SUPPORT" = "256" ] || [ "$_COLOR_SUPPORT" = "truecolor" ]
 }
 
 #[pub]
 # Check if true color (24-bit) is supported
 # Usage: color_has_truecolor -> returns 0 if supported, 1 otherwise
 color_has_truecolor() {
-    [[ "$_COLOR_SUPPORT" == "truecolor" ]]
+    [ "$_COLOR_SUPPORT" = "truecolor" ]
 }
 
 # =============================================================================
@@ -312,13 +321,24 @@ color_wrap() {
     local color_var="${1:-}"
     local text="${2:-}"
     
-    # Get the color value from the variable name
-    local color="${!color_var:-}"
+    # `${!name}` is bash's indirect expansion and a fatal `Bad substitution`
+    # under a POSIX shell, which is worse than it sounds here: the file parses,
+    # so it counted as floor-ready, and every `color_wrap` call returned the
+    # empty string while the shell carried on at exit zero.
+    #
+    # The name is checked before it reaches `eval`, because it comes from the
+    # caller and `color_wrap 'X}; rm -rf /; :' ...` would otherwise be a command
+    # rather than a lookup.
+    local color=""
+    case "$color_var" in
+        ''|*[!A-Za-z0-9_]*|[0-9]*) color="" ;;
+        *) eval "color=\${${color_var}:-}" ;;
+    esac
     
-    if [[ -n "$color" ]]; then
-        echo -n "${color}${text}${NC}"
+    if [ -n "$color" ]; then
+        printf '%s' "${color}${text}${NC}"
     else
-        echo -n "$text"
+        printf '%s' "$text"
     fi
 }
 
@@ -326,56 +346,56 @@ color_wrap() {
 # Print text in red
 # Usage: color_red "text" -> prints red text with newline
 color_red() {
-    echo -e "${RED}${1:-}${NC}"
+    printf '%b\n' "${RED}${1:-}${NC}"
 }
 
 #[pub]
 # Print text in green
 # Usage: color_green "text" -> prints green text with newline
 color_green() {
-    echo -e "${GREEN}${1:-}${NC}"
+    printf '%b\n' "${GREEN}${1:-}${NC}"
 }
 
 #[pub]
 # Print text in yellow
 # Usage: color_yellow "text" -> prints yellow text with newline
 color_yellow() {
-    echo -e "${YELLOW}${1:-}${NC}"
+    printf '%b\n' "${YELLOW}${1:-}${NC}"
 }
 
 #[pub]
 # Print text in blue
 # Usage: color_blue "text" -> prints blue text with newline
 color_blue() {
-    echo -e "${BLUE}${1:-}${NC}"
+    printf '%b\n' "${BLUE}${1:-}${NC}"
 }
 
 #[pub]
 # Print text in magenta
 # Usage: color_magenta "text" -> prints magenta text with newline
 color_magenta() {
-    echo -e "${MAGENTA}${1:-}${NC}"
+    printf '%b\n' "${MAGENTA}${1:-}${NC}"
 }
 
 #[pub]
 # Print text in cyan
 # Usage: color_cyan "text" -> prints cyan text with newline
 color_cyan() {
-    echo -e "${CYAN}${1:-}${NC}"
+    printf '%b\n' "${CYAN}${1:-}${NC}"
 }
 
 #[pub]
 # Print text in bold
 # Usage: color_bold "text" -> prints bold text with newline
 color_bold() {
-    echo -e "${BOLD}${1:-}${NC}"
+    printf '%b\n' "${BOLD}${1:-}${NC}"
 }
 
 #[pub]
 # Print text in dim
 # Usage: color_dim "text" -> prints dim text with newline
 color_dim() {
-    echo -e "${DIM}${1:-}${NC}"
+    printf '%b\n' "${DIM}${1:-}${NC}"
 }
 
 # =============================================================================
@@ -389,7 +409,7 @@ color_dim() {
 color_fg256() {
     local n="${1:-0}"
     if color_has_256; then
-        echo -n "${_ESC}[38;5;${n}m"
+        printf '%s' "${_ESC}[38;5;${n}m"
     fi
 }
 
@@ -399,7 +419,7 @@ color_fg256() {
 color_bg256() {
     local n="${1:-0}"
     if color_has_256; then
-        echo -n "${_ESC}[48;5;${n}m"
+        printf '%s' "${_ESC}[48;5;${n}m"
     fi
 }
 
@@ -411,9 +431,9 @@ color_text256() {
     local text="${2:-}"
     
     if color_has_256; then
-        echo -e "${_ESC}[38;5;${n}m${text}${NC}"
+        printf '%b\n' "${_ESC}[38;5;${n}m${text}${NC}"
     else
-        echo -e "$text"
+        printf '%b\n' "$text"
     fi
 }
 
@@ -431,11 +451,11 @@ color_fg_rgb() {
     local b="${3:-0}"
     
     if color_has_truecolor; then
-        echo -n "${_ESC}[38;2;${r};${g};${b}m"
+        printf '%s' "${_ESC}[38;2;${r};${g};${b}m"
     elif color_has_256; then
         # Fall back to nearest 256 color
         local n=$(( 16 + 36 * (r / 51) + 6 * (g / 51) + (b / 51) ))
-        echo -n "${_ESC}[38;5;${n}m"
+        printf '%s' "${_ESC}[38;5;${n}m"
     fi
 }
 
@@ -448,10 +468,10 @@ color_bg_rgb() {
     local b="${3:-0}"
     
     if color_has_truecolor; then
-        echo -n "${_ESC}[48;2;${r};${g};${b}m"
+        printf '%s' "${_ESC}[48;2;${r};${g};${b}m"
     elif color_has_256; then
         local n=$(( 16 + 36 * (r / 51) + 6 * (g / 51) + (b / 51) ))
-        echo -n "${_ESC}[48;5;${n}m"
+        printf '%s' "${_ESC}[48;5;${n}m"
     fi
 }
 
@@ -465,12 +485,12 @@ color_text_rgb() {
     local text="${4:-}"
     
     if color_has_truecolor; then
-        echo -e "${_ESC}[38;2;${r};${g};${b}m${text}${NC}"
+        printf '%b\n' "${_ESC}[38;2;${r};${g};${b}m${text}${NC}"
     elif color_has_256; then
         local n=$(( 16 + 36 * (r / 51) + 6 * (g / 51) + (b / 51) ))
-        echo -e "${_ESC}[38;5;${n}m${text}${NC}"
+        printf '%b\n' "${_ESC}[38;5;${n}m${text}${NC}"
     else
-        echo -e "$text"
+        printf '%b\n' "$text"
     fi
 }
 
@@ -528,7 +548,8 @@ color_text_hex() {
 color_strip() {
     local text="${1:-}"
     # Remove all ANSI escape sequences
-    echo -e "$text" | sed 's/\x1b\[[0-9;]*m//g'
+    # `printf '%b'`, not `echo -e`: POSIX `echo` has no `-e` and prints it.
+    printf '%b\n' "$text" | sed 's/\x1b\[[0-9;]*m//g'
 }
 
 #[pub]
@@ -553,10 +574,10 @@ color_pad() {
     local visible_len
     visible_len=$(color_strlen "$text")
     
-    echo -n "$text"
+    printf '%s' "$text"
     
     local padding=$((width - visible_len))
-    if [[ $padding -gt 0 ]]; then
+    if [ "$padding" -gt 0 ]; then
         printf "%${padding}s" "" | tr ' ' "$pad_char"
     fi
 }
@@ -572,13 +593,13 @@ color_center() {
     visible_len=$(color_strlen "$text")
     
     local total_padding=$((width - visible_len))
-    [[ $total_padding -lt 0 ]] && total_padding=0
+    [ "$total_padding" -lt 0 ] && total_padding=0
     
     local left_pad=$((total_padding / 2))
     local right_pad=$((total_padding - left_pad))
     
     printf "%${left_pad}s" ""
-    echo -n "$text"
+    printf '%s' "$text"
     printf "%${right_pad}s" ""
 }
 
@@ -592,40 +613,40 @@ color_center() {
 # Print success message (green)
 # Usage: color_success "message" -> prints green message
 color_success() {
-    echo -e "${GREEN}${1:-}${NC}"
+    printf '%b\n' "${GREEN}${1:-}${NC}"
 }
 
 #[pub]
 # Print error message (red)
 # Usage: color_error "message" -> prints red message
 color_error() {
-    echo -e "${RED}${1:-}${NC}"
+    printf '%b\n' "${RED}${1:-}${NC}"
 }
 
 #[pub]
 # Print warning message (yellow)
 # Usage: color_warning "message" -> prints yellow message
 color_warning() {
-    echo -e "${YELLOW}${1:-}${NC}"
+    printf '%b\n' "${YELLOW}${1:-}${NC}"
 }
 
 #[pub]
 # Print info message (blue)
 # Usage: color_info "message" -> prints blue message
 color_info() {
-    echo -e "${BLUE}${1:-}${NC}"
+    printf '%b\n' "${BLUE}${1:-}${NC}"
 }
 
 #[pub]
 # Print debug message (dim)
 # Usage: color_debug "message" -> prints dim message
 color_debug() {
-    echo -e "${DIM}${1:-}${NC}"
+    printf '%b\n' "${DIM}${1:-}${NC}"
 }
 
 #[pub]
 # Print highlighted/important message (bold + cyan)
 # Usage: color_highlight "message" -> prints highlighted message
 color_highlight() {
-    echo -e "${BOLD}${CYAN}${1:-}${NC}"
+    printf '%b\n' "${BOLD}${CYAN}${1:-}${NC}"
 }

@@ -175,15 +175,33 @@ _nut_age() {
     printf '%s' "$(( now - t ))"
 }
 
+# One repository, so the fetch and the reset refer to the same thing.
+_nut_advance_mirror() {
+    local dir="$1" ref="$2"
+    git -C "$dir" fetch --quiet --depth 1 origin "$ref" 2>/dev/null || return 0
+    git -C "$dir" reset --quiet --hard FETCH_HEAD 2>/dev/null ||
+        log_warn "nutshell: pinned mirror could not advance to ${ref}"
+    return 0
+}
+
 _nut_pinned_root() {
     local ref="$1" url="$2" dir age
     dir="$(_extern_mirror nutshell "$url" "$ref")" || return 1
     age="$(_nut_age "$dir")"
     if (( age >= _NUT_PIN_TTL )); then
-        # One repository, so the fetch and the reset refer to the same thing.
-        if git -C "$dir" fetch --quiet --depth 1 origin "$ref" 2>/dev/null; then
-            git -C "$dir" reset --quiet --hard FETCH_HEAD 2>/dev/null ||
-                log_warn "nutshell: pinned mirror could not advance to ${ref}"
+        # Not while anybody is reading it. This mirror is what every worktree in
+        # the store reads its objects out of, so resetting it under a live
+        # process makes each of those checkouts read as not-a-repo with its
+        # files intact, and the next resolver deletes one as wreckage.
+        #
+        # Skipping is the right failure. The pin is a branch head asked at most
+        # once an hour; being an hour stale is nothing, and taking the directory
+        # away from a reader is not.
+        use inuse
+        if inuse_mutate "$dir" 2 -- _nut_advance_mirror "$dir" "$ref"; then
+            :
+        else
+            log_warn "nutshell: ${ref} not refreshed, the mirror is in use"
         fi
     fi
     [[ -x "$dir/bin/nutshell" ]] || {

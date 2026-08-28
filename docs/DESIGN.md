@@ -596,11 +596,11 @@ fs_exists() {
 
 ### Config Templates
 
-| Template | Philosophy |
+| Template | What it sets |
 |----------|------------|
 | `empty.nut.toml` | All disabled, fully documented (schema reference) |
 | `default.nut.toml` | Sensible defaults, catches obvious issues |
-| `tough.nut.toml` | No compromises, no technical debt |
+| `tough.nut.toml` | Every gate on, every threshold at its tightest |
 
 ## Error Handling
 

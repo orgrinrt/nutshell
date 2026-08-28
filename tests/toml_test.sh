@@ -522,3 +522,89 @@ it_reads_a_section_pair_with_an_escaped_quote_in_it() {
     assert_contains "$pairs" 'say " now'
     assert_contains "$pairs" "n=2"
 }
+
+#[test]
+# The escape decoded under the C locale, which is the case that was broken.
+#
+# It used to be `printf '\uXXXX'`, and that escape is decoded against the
+# current locale: under `LC_ALL=C` bash emitted the escape text unchanged, so
+# a value came back as `caf\u00E9` with no error raised anywhere. A container
+# and a build machine usually run the C locale, so the machines most likely to
+# hit it are the ones least likely to have anyone watching.
+#
+# Both locales are asserted rather than only the broken one, because the fix
+# has to keep the case that already worked.
+it_decodes_a_unicode_escape_in_any_locale() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'two = "caf\\u00e9"\n'
+        printf 'four = "\\U0001F600"\n'
+        printf 'ascii = "tab\\u0009end"\n'
+    } > "$d/t.toml"
+
+    local loc got
+    for loc in C en_US.UTF-8; do
+        got="$(LC_ALL="$loc" toml_get "$d/t.toml" two)"
+        assert_eq "$got" "café" "two-byte codepoint under LC_ALL=${loc}"
+        got="$(LC_ALL="$loc" toml_get "$d/t.toml" four)"
+        assert_eq "$got" "😀" "four-byte codepoint under LC_ALL=${loc}"
+        got="$(LC_ALL="$loc" toml_get "$d/t.toml" ascii)"
+        assert_eq "$got" "tab	end" "one-byte codepoint under LC_ALL=${loc}"
+    done
+    rm -rf "$d"
+}
+
+#[test]
+# What has no encoding is kept as typed rather than turned into something.
+#
+# A surrogate half and anything past the last codepoint are not characters,
+# and a run of hex digits that is too short was never an escape. Each is left
+# exactly as written, because silently producing a replacement character would
+# lose the fact that the file said something impossible.
+it_keeps_an_escape_that_names_no_character() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'lone = "\\uD800"\n'
+        printf 'past = "\\U00110000"\n'
+        printf 'nothex = "\\uZZZZ"\n'
+        printf 'short = "\\u00"\n'
+    } > "$d/t.toml"
+
+    local loc
+    for loc in C en_US.UTF-8; do
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" lone)" '\uD800' \
+            "surrogate half under LC_ALL=${loc}"
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" past)" '\U00110000' \
+            "past the last codepoint under LC_ALL=${loc}"
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" nothex)" '\uZZZZ' \
+            "not hex under LC_ALL=${loc}"
+        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" short)" '\u00' \
+            "too few digits under LC_ALL=${loc}"
+    done
+    rm -rf "$d"
+}
+
+#[test]
+# `_toml_utf8` writes through the names a caller is most likely to pick.
+#
+# It took `local cp="$1" out="$2"`, so a caller asking for its answer in `out`
+# or `cp` lost the write into the callee's own frame and still got a zero
+# return. `srcfile.sh` had been bitten by exactly this and defends against it
+# with prefixes; the same was owed here and was not done.
+#
+# The prefix is a convention rather than a guarantee, so the callee's own
+# `__tu_out` is deliberately not asserted: nothing can defend against that from
+# inside.
+it_writes_the_codepoint_through_a_callers_own_name() {
+    local name
+    for name in out cp result n i value; do
+        eval "local ${name}=untouched"
+        assert_ok _toml_utf8 65 "$name"
+        assert_eq "$(eval "printf '%s' \"\$${name}\"")" "A" \
+            "_toml_utf8 lost the answer into its own '${name}'"
+    done
+
+    # And a name that is not one is still refused rather than eval'd.
+    assert_fails _toml_utf8 65 '1bad'
+    assert_fails _toml_utf8 65 'v; echo X'
+}

@@ -13,7 +13,8 @@
 # construct the running shell cannot parse fails at parse time and no `if`
 # inside it can help:
 #
-#     string  lib/string.sh        when=shell:bash4
+#     #[shell(bash4)]
+#     string  lib/string.sh
 #     string  lib/string.posix.sh
 #
 # **What is missing here, and it is one thing.** `str_split` writes into an
@@ -88,14 +89,31 @@ str_rtrim() {
 #[pub]
 # Replace all occurrences of a substring
 # Usage: str_replace "hello world" "world" "bash" -> "hello bash"
+# Usage: str_replace "$v" "," " " out; printf '%s' "$out"
+#
+# Name a variable as a fourth argument and the answer goes there instead of to
+# stdout, with no trailing newline and no fork. Three modules had grown their
+# own copy of this loop because the printing form costs a fork per call and
+# loses a trailing newline; one of those copies then diverged and shipped an
+# injection hole. The out-name is what lets them share this one.
+#
+# The name is validated **before** either exit, because both reach `eval`.
+# Checking it after the empty-needle shortcut is exactly the bug those copies
+# had: the shortcut ran the name unvalidated.
 #
 # A loop rather than `${x//from/to}`, which is bash. It walks by cutting at the
 # first occurrence and keeping what is either side, which is two POSIX
 # expansions and no tool: `sed` would need the needle escaped as a regular
 # expression, and a caller's needle is a literal.
 str_replace() {
-    _str="${1:-}"; _from="${2:-}"; _to="${3:-}"
-    if [ -z "$_from" ]; then printf '%s\n' "$_str"; return 0; fi
+    _str="${1:-}"; _from="${2:-}"; _to="${3:-}"; _sr_out="${4:-}"
+    if [ -n "$_sr_out" ]; then
+        case "$_sr_out" in ''|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;; esac
+    fi
+    if [ -z "$_from" ]; then
+        if [ -n "$_sr_out" ]; then eval "$_sr_out=\$_str"; else printf '%s\n' "$_str"; fi
+        return 0
+    fi
 
     _out=""
     while :; do
@@ -107,7 +125,9 @@ str_replace() {
         _out="${_out}${_head}${_to}"
         _str="${_str#*"$_from"}"
     done
-    printf '%s\n' "${_out}${_str}"
+    if [ -n "$_sr_out" ]; then eval "$_sr_out=\${_out}\${_str}"; else
+        printf '%s\n' "${_out}${_str}"
+    fi
 }
 
 #[pub]

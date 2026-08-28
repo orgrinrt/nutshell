@@ -203,3 +203,80 @@ it_returns_the_same_text_from_every_backend() {
     _agrees json_set '{"a":{"b":1}}' a.b 9
     _agrees json_delete '{"a":{"b":1,"c":2}}' a.b
 }
+
+# --- the jq backend's own classifiers ----------------------------------------
+
+#[test]
+it_tells_a_json_literal_from_a_string() {
+    # This replaced `[[ "$v" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]` and three `==`
+    # comparisons, because `[[ ]]` is bash and this file is on the POSIX
+    # floor. A `case` recognising the same shape is easy to get subtly wrong
+    # in either direction: too loose and a string gets injected into the jq
+    # program unquoted, too tight and a number arrives quoted.
+    deps_has jq || return 0
+
+    for v in 1 -1 0 1.5 -1.5 10 -0.25 true false null '[1]' '[]' '{}' '{"a":1}'; do
+        assert_ok _jq_is_json_literal "$v"
+    done
+
+    # The near misses. Each of these was accepted by neither the old regex nor
+    # the new case, and each is a shape somebody would expect to work.
+    for v in .5 5. 1.2.3 - -- --1 1a a1 abc '' ' ' 'true ' ' null' 0x10 1e5 +1; do
+        assert_fails _jq_is_json_literal "$v"
+    done
+}
+
+#[test]
+it_builds_a_path_that_tells_an_index_from_a_name() {
+    # A numeric segment is an array index and a name is a key, and putting a
+    # dot in front of the whole path gets the first wrong: `.1` is the number
+    # 0.1, not the second element. Bracket form for both, and a name quoted so
+    # a key holding a dash or a space stays one segment.
+    deps_has jq || return 0
+
+    assert_eq "$(_jq_path '')" "."
+    assert_eq "$(_jq_path '.')" "."
+    assert_eq "$(_jq_path 'a')" '.["a"]'
+    assert_eq "$(_jq_path '.a')" '.["a"]'
+    assert_eq "$(_jq_path 'a.b')" '.["a"]["b"]'
+    assert_eq "$(_jq_path '1')" '.[1]'
+    assert_eq "$(_jq_path 'a.1')" '.["a"][1]'
+    assert_eq "$(_jq_path '1.a')" '.[1]["a"]'
+    assert_eq "$(_jq_path 'a-b')" '.["a-b"]'
+    assert_eq "$(_jq_path 'a..b')" '.["a"]["b"]'
+    # A segment holding a glob character must not be expanded by the split,
+    # which is what `set -f` inside the loop is for.
+    assert_eq "$(_jq_path 'a*b')" '.["a*b"]'
+    assert_eq "$(_jq_path '*')" '.["*"]'
+}
+
+#[test]
+# The escaping `json_object` and `json_array` do before they hand a value over.
+#
+# It was four `${value//from/to}` substitutions, which are bash's, and it had
+# no test: the module's other tests all go through `jq` or `python`, which do
+# their own escaping, so this path could have been broken in either direction
+# without anything saying so.
+#
+# Backslash first, or the escaping escapes the backslashes it just added.
+it_escapes_a_value_before_putting_it_in_an_object() {
+    local v; v="$(printf 'a\\b"c\td\ne')"
+    local got; got="$(json_object k "$v")"
+    assert_eq "$got" '{"k":"a\\b\"c\td\ne"}'
+}
+
+#[test]
+# The same for an array, which carries its own copy of the escaping.
+it_escapes_a_value_before_putting_it_in_an_array() {
+    local v; v="$(printf 'x"y\\z')"
+    local got; got="$(json_array "$v")"
+    assert_eq "$got" '["x\"y\\z"]'
+}
+
+#[test]
+# A value that is only a backslash, which is where an ordering mistake shows
+# up as one character instead of three.
+it_escapes_a_lone_backslash_exactly_once() {
+    local got; got="$(json_object k '\')"
+    assert_eq "$got" '{"k":"\\"}'
+}

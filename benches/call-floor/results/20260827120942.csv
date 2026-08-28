@@ -1,0 +1,4 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+in-shell arithmetic,3,4,within the noise,yes
+forked helper,95,607,3166%,yes
+resident helper,5,6,166%,yes

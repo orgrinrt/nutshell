@@ -9,7 +9,12 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE`
+# and so needs bash. Under a POSIX shell it is not found, the
+# `|| return 0` beside it fires on every load, and the module reports
+# success having defined nothing.
+[ -n "${_NUTSHELL_STRING_SH:-}" ] && return 0
+_NUTSHELL_STRING_SH=1
 
 # -----------------------------------------------------------------------------
 # Public API
@@ -70,8 +75,21 @@ str_replace() {
     local str="${1:-}"
     local from="${2:-}"
     local to="${3:-}"
-    
-    [[ -z "$from" ]] && { echo "$str"; return 0; }
+    local _sr_out="${4:-}"
+
+    # The out-name form, matching the floor half. Both halves have to take the
+    # same four arguments or a caller works on one shell and not the other,
+    # which is the failure the pair exists to prevent.
+    #
+    # Validated before either exit, because both reach an assignment through
+    # `eval`.
+    if [[ -n "$_sr_out" ]]; then
+        case "$_sr_out" in ''|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;; esac
+    fi
+    if [[ -z "$from" ]]; then
+        if [[ -n "$_sr_out" ]]; then eval "$_sr_out=\$str"; else echo "$str"; fi
+        return 0
+    fi
     # The needle is quoted, so it is a literal.
     #
     # Unquoted, `${str//$from/$to}` reads it as a pattern, which is not what
@@ -83,7 +101,18 @@ str_replace() {
     # Found by writing the POSIX floor beside this and comparing the two over
     # the same inputs. The floor could not have this bug: it has no `${x//}`
     # and cuts at the first literal occurrence instead.
-    echo "${str//"$from"/$to}"
+    # **Both** sides quoted. The needle is quoted so it is a literal rather
+    # than a pattern, which is the bug the comment above records. The
+    # replacement has to be quoted for the same class of reason: unquoted,
+    # `$to` goes through quote removal, so a replacement of `\\` collapses to
+    # `\` and `str_replace a a '\\'` answers `\` where the floor half answers
+    # `\\`. That divergence sat here until three modules stopped keeping their
+    # own copy of this loop and started calling it.
+    if [[ -n "$_sr_out" ]]; then
+        printf -v "$_sr_out" '%s' "${str//"$from"/"$to"}"
+    else
+        printf '%s\n' "${str//"$from"/"$to"}"
+    fi
 }
 
 #[pub]

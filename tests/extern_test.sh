@@ -58,17 +58,56 @@ TOML
 # of this file's helpers, and each removes its own directory on the way out.
 # They say `self-cleaned` on the line, which is what the guard below allows.
 _EX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-extern.XXXXXX")"
-trap '[[ -n "${_EX_TMP:-}" ]] && rm -rf "$_EX_TMP"' EXIT
+_EX_OWNER="${BASHPID:-$$}"
+
+# Guarded on the pid that set it, and that is the whole of the bug it fixes.
+#
+# `$( )` inherits an EXIT trap and fires it when the substitution ends. Every
+# fixture here is built inside one, `fix="$(_extern_fixture)"`, so the cleanup
+# ran the instant the fixture was handed back and deleted the directory the
+# test was about to `cd` into. What came out was git saying `Unable to read
+# current working directory` in the middle of a message about a dependency,
+# which sent two readers looking at the dependency code.
+_ex_cleanup() {
+    # `$BASHPID`, not `$$`. In a command substitution `$$` is still the
+    # parent's pid, so a guard written with it is true in exactly the place it
+    # was meant to be false.
+    [ "${BASHPID:-$$}" = "$_EX_OWNER" ] || return 0
+    [ -n "${_EX_TMP:-}" ] && rm -rf "$_EX_TMP"
+}
+trap _ex_cleanup EXIT
 
 # A scratch directory under this file's own root.
+#
+# The root is remade when it is gone. The `EXIT` trap above is set at file
+# scope, and a test that runs in a subshell fires it on its own way out, so the
+# first test took the scratch root with it and every one after ran from a
+# directory that no longer existed. What that looked like was git saying
+# `Unable to read current working directory` in the middle of a message about a
+# dependency, which is a true sentence about the wrong thing.
 _ex_tmp() {
+    [ -d "${_EX_TMP:-}" ] || _EX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-extern.XXXXXX")"
     local d; d="$(mktemp -d "${_EX_TMP}/${1:-d}.XXXXXX")"
     printf '%s' "$d"
 }
 
 _isolate() {
+    # Somewhere that exists, first. Each test `cd`s into a fixture and none of
+    # them comes back, so the next one starts from whatever the last one left,
+    # and once any of those is cleaned up git reports `Unable to read current
+    # working directory` and the failure reads as being about the dependency.
+    cd "$_EX_TMP" 2>/dev/null || cd / || return 1
+
     NUTSHELL_STORE="$(_ex_tmp store)"
     export NUTSHELL_STORE
+
+    # And drop the runner's own anchor. `_extern_manifest` looks at
+    # `NUTSHELL_SCRIPT_DIR` before it looks at `$PWD`, which is right for a
+    # script asking about its own project and wrong for a test that has just
+    # `cd`ed into a fixture. Left set, every one of these reads nutshell's own
+    # manifest, which declares no `fixture`, and thirteen tests fail with a
+    # message about the fixture rather than about the anchor.
+    unset NUTSHELL_SCRIPT_DIR _NUT_ASKING_FROM
 }
 
 #[test]
@@ -541,29 +580,36 @@ it_remembers_a_resolved_path() {
     # Every `use <dep>::<module>` resolved the dependency again: manifest
     # re-read, lockfile re-read, git asked twice. None of it can change while a
     # script runs, and five modules out of one library cost it five times.
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[fixture]="/tmp"
+    # Through the module's own accessors rather than into whatever it keeps
+    # the memo in. These reached into `_EXTERN_RESOLVED[...]` directly and
+    # broke the moment that became a `map`, on a change that altered nothing
+    # about the answer.
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED fixture "/tmp"
     _extern_is_repo() { return 0; }
     assert_eq "$(extern_path fixture)" "/tmp"
 }
 
 #[test]
 it_forgets_one_name_when_asked() {
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[a]="/tmp/a"
-    _EXTERN_RESOLVED[b]="/tmp/b"
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED a "/tmp/a"
+    map_set _EXTERN_RESOLVED b "/tmp/b"
     extern_forget a
-    assert_empty "${_EXTERN_RESOLVED[a]:-}"
-    assert_eq "${_EXTERN_RESOLVED[b]:-}" "/tmp/b"
+    local va="" vb=""
+    map_read va _EXTERN_RESOLVED a
+    map_read vb _EXTERN_RESOLVED b
+    assert_empty "$va"
+    assert_eq "$vb" "/tmp/b"
 }
 
 #[test]
 it_forgets_everything_when_given_no_name() {
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[a]="/tmp/a"
-    _EXTERN_RESOLVED[b]="/tmp/b"
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED a "/tmp/a"
+    map_set _EXTERN_RESOLVED b "/tmp/b"
     extern_forget
-    assert_eq "${#_EXTERN_RESOLVED[@]}" "0"
+    assert_eq "$(map_len _EXTERN_RESOLVED)" "0"
 }
 
 #[test]
@@ -571,11 +617,13 @@ it_does_not_hand_back_a_checkout_that_has_gone() {
     # A cached path whose checkout was removed is worse than no cache: the
     # caller gets a directory git will not answer for, and no explanation.
     # It must fall through and resolve again rather than returning it.
-    _EXTERN_RESOLVED=()
-    _EXTERN_RESOLVED[fixture]="/tmp/definitely-not-a-checkout"
+    map_clear _EXTERN_RESOLVED
+    map_set _EXTERN_RESOLVED fixture "/tmp/definitely-not-a-checkout"
     _extern_is_repo() { return 1; }
     extern_path fixture >/dev/null 2>&1 || true
-    assert_empty "${_EXTERN_RESOLVED[fixture]:-}"
+    local v=""
+    map_read v _EXTERN_RESOLVED fixture
+    assert_empty "$v"
 }
 
 # --- how a module path is spelled ----------------------------------------------

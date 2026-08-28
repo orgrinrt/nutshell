@@ -7,7 +7,7 @@
 # name would fail, and the failure arrived mid-run under `set -eo pipefail`
 # with nothing to read.
 
-use extern test
+use extern test toml
 
 DECLARE="${BASH_SOURCE[0]%/*}/../bin/nut-declare"
 ROOT_DIR="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
@@ -448,4 +448,201 @@ PROBE
     local out; out="$(NUT_ROOT="$ROOT_DIR" bash "$f" 2>&1)"
     rm -f "$f"
     assert_ok grep -q 'COUNT=1' <<<"$out"
+}
+
+# --- the package declares its own version ------------------------------------
+#
+# It was a constant in `init` that somebody had to remember to bump, and
+# forgetting it is silent: this repository shipped a tag whose constant named
+# the release before it, because that release was documentation and its bump
+# got reverted before merging. A release with nothing else to change is
+# exactly when it gets forgotten.
+
+#[test]
+it_reads_the_version_from_the_package_section() {
+    local v; v="$(toml_get "$ROOT_DIR/nut.toml" package.version)"
+    assert_ne "$v" ""
+    assert_eq "$NUTSHELL_VERSION" "$v"
+}
+
+#[test]
+it_does_not_read_the_schema_version_as_the_packages() {
+    # `[meta] version` is the schema's and a review read it as nutshell's
+    # twice. The two have to be able to differ, and here they do.
+    local pkg schema
+    pkg="$(toml_get "$ROOT_DIR/nut.toml" package.version)"
+    schema="$(toml_get "$ROOT_DIR/nut.toml" meta.version)"
+    assert_ne "$pkg" "$schema"
+    assert_eq "$NUTSHELL_VERSION" "$pkg"
+}
+
+#[test]
+it_declares_the_metadata_a_package_manifest_carries() {
+    # The fields cargo, npm and deno all agree on. A manifest that invents its
+    # own vocabulary makes every reader learn it.
+    local k
+    for k in name version description license repository; do
+        assert_ne "$(toml_get "$ROOT_DIR/nut.toml" "package.$k")" "" "package.$k"
+    done
+    assert_ne "$(toml_get "$ROOT_DIR/nut.toml" lib.path)" ""
+    assert_ne "$(toml_get "$ROOT_DIR/nut.toml" bin.nutshell)" ""
+}
+
+#[test]
+it_points_at_files_that_are_there() {
+    # A manifest naming an entry point that does not exist is worse than one
+    # naming none: a reader trusts it.
+    assert_ok test -f "$ROOT_DIR/$(toml_get "$ROOT_DIR/nut.toml" lib.path)"
+    assert_ok test -f "$ROOT_DIR/$(toml_get "$ROOT_DIR/nut.toml" bin.nutshell)"
+}
+
+#[test]
+# A feature is a choice; a gate is an observation about the machine.
+#
+# `#[shell(bash4)]` asks the running shell, so on a machine with bash a paired
+# module always answers with its bash half. That is the right answer to the
+# question the gate asks, and it makes producing a POSIX artifact from a
+# machine that has bash structurally impossible, which is why features exist.
+it_selects_a_paired_module_by_feature_rather_than_by_shell() {
+    local root="${BASH_SOURCE[0]%/*}/.."
+
+    # Defaults on: the bash half, which is also what the shell gate would say.
+    local on; on="$(bash -c '. "$1"/init >/dev/null 2>&1; _lib_nut_lookup "$1" map' _ "$root" 2>/dev/null)"
+    assert_contains "$on" "map.bash.sh"
+
+    # Defaults off: the floor half, on the same machine and the same shell.
+    local off
+    off="$(NUT_NO_DEFAULT_FEATURES=1 bash -c '. "$1"/init >/dev/null 2>&1; _lib_nut_lookup "$1" map' _ "$root" 2>/dev/null)"
+    assert_contains "$off" "map.sh"
+    assert_not_contains "$off" "bash.sh"
+    assert_ne "$on" "$off"
+}
+
+#[test]
+# The set follows cargo: `default` is a set like any other, `NUT_FEATURES` adds
+# to what is left, and a feature's list turns on what it names.
+it_resolves_the_feature_set_the_way_cargo_does() {
+    local root="${BASH_SOURCE[0]%/*}/.."
+    local plain off extra
+    plain="$(bash -c '. "$1"/init >/dev/null 2>&1; nutshell_features | sort | tr "\n" " "' _ "$root" 2>/dev/null)"
+    off="$(NUT_NO_DEFAULT_FEATURES=1 bash -c '. "$1"/init >/dev/null 2>&1; nutshell_features | tr "\n" " "' _ "$root" 2>/dev/null)"
+    extra="$(NUT_FEATURES=zzz bash -c '. "$1"/init >/dev/null 2>&1; nutshell_features | sort | tr "\n" " "' _ "$root" 2>/dev/null)"
+
+    assert_contains "$plain" "default"
+    assert_contains "$plain" "bash"
+    assert_eq "${off// /}" ""
+    assert_contains "$extra" "zzz"
+    # Additive: asking for one more does not drop what was already on.
+    assert_contains "$extra" "bash"
+}
+
+#[test]
+# A feature nobody asked for is off, and a gate naming one is simply false.
+#
+# A gate that errors takes the module with it, so a name that was never
+# requested is not an error: it is a question with the answer no. Asking for a
+# name nothing declares is the other case and is reported, which is the test
+# below this one. Silence here is also the control for that report: it must not
+# fire on every gate that happens to name something absent.
+it_treats_an_undeclared_feature_as_off() {
+    local root="${BASH_SOURCE[0]%/*}/.."
+    local out
+    out="$(bash -c '. "$1"/init >/dev/null 2>&1
+        _nut_gate "feature(nosuchfeature)" && echo ON || echo OFF
+        _nut_gate "feature()" && echo ON || echo OFF
+        _nut_gate "feature(has spaces)" && echo ON || echo OFF' _ "$root" 2>&1)"
+    assert_eq "$out" "OFF
+OFF
+OFF"
+}
+
+# A manifest of our own to parse, beside a copy of `init`, so a case can be
+# written without editing the repository's own `nut.toml`.
+_ln_features() {
+    local d; d="$(mktemp -d)"
+    cp "${BASH_SOURCE[0]%/*}/../init" "$d/init"
+    #  sources the key encoder by path, so a copy of it needs one too.
+    mkdir -p "$d/lib"
+    cp "${BASH_SOURCE[0]%/*}/../lib/key.sh" "$d/lib/key.sh"
+    printf '%s' "$1" > "$d/nut.toml"
+    printf '%s' "$d"
+}
+
+# What the set comes out as for that manifest, with stderr folded in so a
+# report is visible to the assertion rather than silently dropped.
+_ln_set() {
+    local d="$1"; shift
+    env "$@" bash -c '. "$1"/init >/dev/null 2>&1
+        _nut_feature_on __probe__
+        printf "%s" "$_NUT_FEATURES"' _ "$d" 2>&1
+}
+
+#[test]
+# A list written across several lines, which is ordinary TOML and was being
+# read as empty: the parse took everything after the `[`, found nothing on that
+# line, and dropped every name the list actually held. A feature that turns
+# others on then turned none of them on, and the modules gated on those were
+# absent with nothing said.
+it_reads_a_feature_list_written_across_lines() {
+    local d; d="$(_ln_features '[features]
+default = [
+  "a",
+  "b"
+]
+a = []
+b = []
+')"
+    local out; out="$(_ln_set "$d")"
+    rm -rf "$d"
+    assert_contains "$out" " a "
+    assert_contains "$out" " b "
+}
+
+#[test]
+# An indented table header, which is also ordinary TOML. Without trimming the
+# line first, `  [features]` was not a table at all, so every feature in the
+# file was undeclared at once.
+it_reads_an_indented_features_table() {
+    local d; d="$(_ln_features '  [features]
+  default = ["a"]
+  a = []
+')"
+    local out; out="$(_ln_set "$d")"
+    rm -rf "$d"
+    assert_contains "$out" " a "
+}
+
+#[test]
+# Asking for a name the manifest does not declare is reported. Distinct from
+# the case above, where a gate merely names something absent: this one is a
+# `--features` argument or a `default` entry that is a typo, and the module
+# gated on the correct spelling is then missing for a reason nobody can see.
+#
+# Reported rather than fatal, matching `_nut_gate`'s own arm for a gate it does
+# not know. Cargo refuses outright here; this is one rung softer, because
+# `init` is sourced and a hard failure would take the caller's shell with it.
+it_reports_a_requested_feature_that_nothing_declares() {
+    local d; d="$(_ln_features '[features]
+default = ["a"]
+a = []
+')"
+    local out; out="$(_ln_set "$d" NUT_FEATURES=ghost)"
+    rm -rf "$d"
+    assert_contains "$out" "unknown feature ghost"
+}
+
+#[test]
+# The control for that report, and the one that decides whether it survives: a
+# manifest asking only for names it declares must be silent. A report that
+# fires on the ordinary case is noise on every load and gets deleted within a
+# week.
+it_says_nothing_when_every_requested_feature_is_declared() {
+    local d; d="$(_ln_features '[features]
+default = ["a", "b"]
+a = ["b"]
+b = []
+')"
+    local out; out="$(_ln_set "$d")"
+    rm -rf "$d"
+    assert_not_contains "$out" "unknown feature"
 }

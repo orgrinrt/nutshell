@@ -66,3 +66,314 @@ it_refuses_an_absent_tool_through_every_door() {
     assert_fails deps_run "$absent" true
     assert_fails deps_path "$absent"
 }
+
+# --- the tables are variables now, not associative arrays --------------------
+
+#[test]
+it_encodes_a_name_that_is_not_a_variable_name() {
+    # The tool tables are one variable per entry, so the name is part of a
+    # variable name. A name that already is one is used as itself, which is
+    # what keeps `${_TOOL_PATH_jq}` a plain expansion in the sixteen modules
+    # that read these literally.
+    _deps_key sed;        assert_eq "$_dk" "sed"
+    _deps_key grep_pcre;  assert_eq "$_dk" "grep_pcre"
+    _deps_key _x;         assert_eq "$_dk" "_x"
+    _deps_key a1;         assert_eq "$_dk" "a1"
+
+    # Anything else is encoded rather than refused. An earlier version refused,
+    # and `deps_has pkg-config` then answered yes with an empty path while
+    # growing the available-tools list on every call. Half the binaries worth
+    # asking about have a hyphen or a leading digit.
+    _deps_key pkg-config; assert_ne "$_dk" "pkg-config"
+    assert_eq "${_dk#enc_}" "706b672d636f6e666967"
+    _deps_key 7z;         assert_eq "${_dk%${_dk#enc_}}" "enc_"
+
+    # One to one, which is the property the whole scheme rests on. A safe name
+    # beginning `enc_` takes the encoded path too, or it would collide with
+    # whatever hex-encodes to it.
+    _deps_key enc_706b67; local a="$_dk"
+    _deps_key pkg;        local b="$_dk"
+    assert_ne "$a" "$b"
+
+    # Byte-wise, which is what makes the concatenation prefix-free. `printf
+    # '%d' "'c"` gives a codepoint and `%02x` is a minimum width, so a
+    # character above U+00FF produced four digits and one character could
+    # occupy the space of two: `€` and a space followed by `¬` both encoded to
+    # `20ac`, and the second name read the first's path.
+    local a b
+    _deps_key '€';  a="$_dk"
+    _deps_key ' ¬'; b="$_dk"
+    assert_ne "$a" "$b"
+    assert_eq "$a" "enc_e282ac"
+    assert_eq "$b" "enc_20c2ac"
+
+    # `é` is two bytes and the raw byte 0xe9 is one. They collided at `e9`.
+    _deps_key 'é'; assert_eq "$_dk" "enc_c3a9"
+
+    # Every encoded name is an even number of hex digits, which is the property
+    # the fixed width buys and the thing a variable width breaks.
+    local n v
+    for v in 'a-b' '7z' 'pkg-config' '€' 'é' 'a b' 'x.y'; do
+        _deps_key "$v"
+        n="${_dk#enc_}"
+        assert_eq "$(( ${#n} % 2 ))" "0"
+    done
+
+    # And an empty name is not a name at all.
+    assert_fails _deps_key ""
+}
+
+#[test]
+it_does_not_let_two_tool_names_reach_one_variable() {
+    # The property the whole scheme rests on, checked as a property rather than
+    # on the pair that motivated it. Every name here must reach its own
+    # variable; any two landing on one is a silent wrong-path bug in
+    # `deps_path` and `deps_run`, which are public.
+    local seen="" v k
+    for v in sed grep_pcre _x a1 pkg-config git-lfs 7z 'a b' 'x.y' 'a+b' \
+             '€' ' ¬' 'é' 'enc_706b67' pkg 'enc_' 'a' 'aa' 'a-' '-a'; do
+        _deps_key "$v" || continue
+        k="$_dk"
+        assert_not_contains "$seen" "|${k}|"
+        seen="${seen}|${k}|"
+    done
+}
+
+#[test]
+it_refuses_a_capability_name_that_is_not_a_variable_name() {
+    # Capabilities are internal literals and are refused rather than encoded,
+    # because `_TOOL_CAN_NAMES` is a space-separated list that `deps_caps`
+    # splits. An encoded name and a raw one in one list disagree the moment
+    # either holds a space, and `deps_caps` then emits two rows with empty
+    # values.
+    assert_fails _deps_can_set "a b" 1
+    assert_fails _deps_can_set "a-b" 1
+    assert_fails _deps_can_set "" 1
+    assert_ok    _deps_can_set nut_test_cap 1
+    assert_contains "$(deps_caps)" "nut_test_cap=1"
+    # Every row still has a value, which is what a raw name in an encoded
+    # table would have broken.
+    assert_not_contains "$(deps_caps)" "="$'\n'
+}
+
+#[test]
+it_resolves_a_tool_whose_name_is_not_a_variable_name() {
+    # The regression this replaced a refusal to fix. Answering yes with an
+    # empty path is worse than either answering no or answering correctly.
+    command -v pkg-config >/dev/null 2>&1 || return 0
+
+    assert_ok deps_has pkg-config
+    local p; p="$(deps_path pkg-config)"
+    assert_ne "$p" ""
+    assert_ok test -x "$p"
+
+    # And the miss is remembered, so the lookup does not re-fork forever. The
+    # available list grew by one word per call when the write was silently
+    # failing.
+    local before after
+    before="$(deps_available | wc -w | tr -d ' ')"
+    deps_has pkg-config; deps_has pkg-config; deps_has pkg-config
+    after="$(deps_available | wc -w | tr -d ' ')"
+    assert_eq "$after" "$before"
+}
+
+#[test]
+it_does_not_execute_what_a_caller_puts_in_a_tool_name() {
+    # The negative control for the one above, driven through the public
+    # surface rather than the validator, because that is where a caller
+    # reaches it.
+    # Encoded rather than refused now, so the defence is that the name never
+    # reaches `eval` as text: it is hex by the time it gets there.
+    local out
+    out="$(deps_has 'x; echo PWNED' 2>&1; deps_path 'y$(echo PWNED)' 2>&1; deps_cap 'z`echo PWNED`' 2>&1)"
+    assert_not_contains "$out" "PWNED"
+    # And a name built to look like an assignment does not become one.
+    deps_has 'q=1; echo PWNED2; :' >/dev/null 2>&1
+    assert_eq "${q:-unset}" "unset"
+}
+
+#[test]
+it_answers_the_same_through_the_accessor_and_the_variable() {
+    # A literal read outside this module expands `${_TOOL_PATH_sed}` directly
+    # and never calls the accessor. The two have to agree or every consumer
+    # sees something different from what `deps_path` reports.
+    deps_has sed || return 0
+    local viafn viavar
+    viafn="$(deps_path sed)"
+    viavar="${_TOOL_PATH_sed:-}"
+    assert_eq "$viavar" "$viafn"
+    assert_ne "$viavar" ""
+}
+
+#[test]
+it_lists_only_the_capabilities_that_were_set() {
+    # `deps_caps` used to walk the keys of an associative array, so a
+    # capability nobody set was absent rather than zero. Walking a fixed list
+    # of every known capability instead would report the unset ones as zero,
+    # which is a different answer, and this pins the one it gives.
+    # The scan first, in this shell. `caps="$(deps_caps)"` puts it in a
+    # subshell, so the parent's `_TOOL_CAN_NAMES` stays empty and the two
+    # counts below compare seventeen against nothing. Detection is lazy now and
+    # a substitution does not carry what it learned back out.
+    _deps_scan_all
+    local caps; caps="$(deps_caps)"
+    assert_ne "$caps" ""
+    local n; n="$(printf '%s\n' "$caps" | wc -l | tr -d ' ')"
+    local names; names="$(printf '%s' "$_TOOL_CAN_NAMES" | wc -w | tr -d ' ')"
+    assert_eq "$n" "$names"
+    # Every line is name=0 or name=1, never an empty value, which is what a
+    # read through a missing variable would have produced.
+    #
+    # The `assert_not_contains` is the whole check. A `while | case ... return 1`
+    # loop stood here and could not fail: the pipeline puts the loop in a
+    # subshell, its status becomes the function's return value, and the harness
+    # discards that in favour of the tally. Inverting the arm so every line took
+    # the failing branch still reported a pass. It was four lines below the
+    # commit that exists to fix exactly that class.
+    assert_not_contains "$caps" "="$'\n'
+}
+
+#[test]
+it_remembers_a_tool_it_could_not_find() {
+    # A miss is paid for once. The table holding that is now a variable, so
+    # this checks the variable rather than trusting the second call was fast.
+    deps_has definitely_not_a_real_tool_xyzzy && return 1
+    assert_eq "${_TOOL_MISSING_definitely_not_a_real_tool_xyzzy:-}" "1"
+    deps_has definitely_not_a_real_tool_xyzzy && return 1
+    return 0
+}
+
+# --- the POSIX floor ---------------------------------------------------------
+
+# A POSIX shell that is one, or nothing. Same probe the floor check uses: it
+# has to reject an array and still accept ordinary POSIX.
+_dt_posix_sh() {
+    local cand probe; probe="$(mktemp)"
+    for cand in dash ash yash posh sh; do
+        command -v "$cand" >/dev/null 2>&1 || continue
+        printf 'a=(1 2)\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && continue
+        printf 'x=1\necho "${x:-}"\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && { rm -f "$probe"; printf '%s' "$cand"; return 0; }
+    done
+    rm -f "$probe"; return 1
+}
+
+# What `deps` answers when loaded directly under one shell. `os` first, because
+# that is what it declares, and `init` is not involved: the point is the module
+# on its own.
+_dt_under() {
+    local sh="$1" expr="$2"
+    "$sh" -c '. "$1/lib/key.sh" >/dev/null 2>&1
+              . "$1/lib/os.sh" >/dev/null 2>&1
+              . "$1/lib/deps.sh" >/dev/null 2>&1
+              eval "$2"' _ "$NUTSHELL_ROOT" "$expr" 2>&1
+}
+
+#[test]
+# It parses there at all, which is the precondition for everything below.
+it_reads_under_a_posix_shell() {
+    local sh; sh="$(_dt_posix_sh)"
+    assert_ne "$sh" ""
+    assert_ok "$sh" -n "${NUTSHELL_ROOT}/lib/deps.sh"
+}
+
+#[test]
+# Parsing is not running, and this module is the reason that sentence is in the
+# rules. It parsed under `dash` while answering wrong, and nothing about the
+# parse said so.
+it_finds_the_same_tools_under_both_shells() {
+    local sh; sh="$(_dt_posix_sh)"
+    # `deps_available` rather than the variable behind it. Detection is lazy
+    # now, so the variable holds what has been asked for and the function is
+    # what means "everything".
+    local expr='deps_available | wc -w | tr -d " "'
+    local p b
+    p="$(_dt_under "$sh" "$expr")"
+    b="$(_dt_under bash "$expr")"
+    assert_ne "$b" "0"
+    assert_eq "$p" "$b"
+}
+
+#[test]
+# The regression, and it is worth its own test because of how it looked.
+#
+# `command -v which &>/dev/null` is a bashism a POSIX shell does not refuse: it
+# reads `&>` as a background `&` followed by a redirect, so `which` ran in the
+# background and printed its own path into the answer. `_TOOL_PATH_sed` came
+# back as two lines, `/usr/bin/which` and then `/usr/bin/sed`, and the file
+# passed `dash -n` the whole time.
+#
+# So the assertion is that a resolved path is one line. A comparison against
+# bash catches this one too, but only because bash happens to be right; the
+# shape of the bug is a tool path with something else in it.
+it_does_not_leak_a_backgrounded_command_into_a_tool_path() {
+    local sh; sh="$(_dt_posix_sh)"
+    local t
+    for t in sed grep awk; do
+        local got n
+        got="$(_dt_under "$sh" "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        assert_ne "$got" "" "no path resolved for $t"
+        n="$(printf '%s' "$got" | wc -l | tr -d ' ')"
+        assert_eq "$n" "0" "the path for $t is more than one line: [$got]"
+        assert_ok test -x "$got"
+    done
+}
+
+#[test]
+# And the answers themselves agree, not only their shape.
+it_resolves_the_same_paths_under_both_shells() {
+    local sh; sh="$(_dt_posix_sh)"
+    local t
+    for t in sed grep awk stat; do
+        local p b
+        p="$(_dt_under "$sh"  "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        b="$(_dt_under bash   "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        assert_eq "$p" "$b" "$t resolved differently"
+    done
+}
+
+
+
+#[test]
+# Every public function answers from a cold shell, with nothing asked first.
+#
+# Detection is lazy, so a function reading the VARIANT or CAN table answers
+# from an empty table unless it resolves first. Four did not: `deps_variant`,
+# `deps_is_gnu`, `deps_is_bsd` and `deps_cap`. They returned `unknown`, false,
+# false and `0`, with no error, and the suite stayed green at 785 because no
+# caller in this tree uses any of them. The break was confined to the public
+# surface, which is the one place a suite cannot speak for.
+#
+# So this asks each of them in a shell that has done nothing else, which is the
+# only state that distinguishes resolving from reading what somebody else
+# resolved. `stat` and `sed` are used because both carry a real variant here.
+it_answers_from_a_cold_shell_without_being_primed() {
+    local root; root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    local one
+    one() {
+        bash -c '. "$1"/init >/dev/null 2>&1; use deps; shift; eval "$*"' _ "$root" "$@" 2>&1
+    }
+
+    # A variant, through all three doors that report one.
+    assert_eq "$(one 'deps_variant stat')" "$(one 'deps_scan_first=1; _deps_scan_all; deps_variant stat')"
+    assert_ne "$(one 'deps_variant stat')" "unknown"
+    assert_ok   bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_bsd stat || deps_is_gnu stat' _ "$root"
+
+    # And a capability, which reads the other table.
+    assert_ne "$(one 'deps_cap stat_format')" "0"
+    assert_ok bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_can stat_format' _ "$root"
+}
+
+#[test]
+# The control, and it is what stops the fix above from being "scan everywhere".
+#
+# A tool that is not there still answers, and answers no, rather than hanging
+# or erroring on the resolve that now sits in front of these.
+it_still_answers_no_for_a_tool_that_is_not_there() {
+    local root; root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    assert_eq "$(bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_variant definitely_not_a_tool' _ "$root" 2>&1)" "unknown"
+    assert_fails bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_bsd definitely_not_a_tool' _ "$root"
+    assert_fails bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_gnu definitely_not_a_tool' _ "$root"
+    assert_eq "$(bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_cap no_such_capability' _ "$root" 2>&1)" "0"
+}

@@ -1,0 +1,524 @@
+#!/usr/bin/env bash
+# =============================================================================
+# nutshell/bin/nut-lower - Resolve a script's modules ahead of time
+# =============================================================================
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# Takes a script and the modules it loads, and writes **the library half** as
+# one file, with the resolution already done and everything nothing calls
+# removed. The script sources that file instead of calling `use`:
+#
+#     . ./lowered.sh
+#
+# It is not a runnable copy of the script and does not contain the script's own
+# body. An earlier version of this header said "writes one file" and the output
+# was `chmod +x`ed, so running it produced an executable that exited 0 having
+# done nothing, which is the silent-failure shape this project refuses
+# everywhere else.
+#
+# The measurements say which half of that is worth doing, and they say less
+# than this file once claimed. `benches/startup` puts resolving `use` ahead of
+# time inside the noise and dropping what nothing calls at about 11%, 233ms
+# against 261. An earlier 3.7x was a broken shaker, not a win, and that file
+# records what it was.
+#
+# `benches/lazy-dispatch` found the larger one, a level down: baking in the
+# answer to `deps_has` buys nothing measurable, and not reading the module at
+# first call is about 35ms per process at six dispatched functions.
+#
+# Usage:
+#   nut-lower script.sh -o lowered.sh              # then: . ./lowered.sh
+#   nut-lower script.sh --no-shake -o lowered.sh   # concatenate only
+#   nut-lower script.sh --list                     # what it would include
+# =============================================================================
+
+set -uo pipefail
+
+_NL_SELF="${BASH_SOURCE[0]}"
+_NL_ROOT="$(cd "${_NL_SELF%/*}/.." && pwd)"
+
+# shellcheck source=/dev/null
+. "${_NL_ROOT}/init" >/dev/null 2>&1 || {
+    printf 'nut-lower: cannot load nutshell from %s\n' "$_NL_ROOT" >&2
+    exit 1
+}
+
+_nl_usage() {
+    cat <<'USAGE'
+nut-lower - resolve a script's modules ahead of time
+
+Writes the library half as one file. The script sources it instead of calling
+`use`, so it is not a runnable copy of the script and does not contain the
+script's own body:
+
+    nut-lower script.sh -o lowered.sh
+    . ./lowered.sh
+
+usage: nut-lower <script> [-o <out>] [--no-shake] [--list] [--no-prebind]
+                 [--features <f,..>] [--no-default-features]
+
+  -o <out>     where to write, as a file to source. Standard output when
+               absent.
+  --use <m,..> modules to include beyond the ones the script names. For an
+               entry point that loads its modules some other way, or a
+               library slice with no entry point of its own.
+  --no-shake   concatenate and resolve, keep every definition.
+  --list       print the files it would include, in load order.
+  --no-prebind decide the lazy dispatch at first call rather than here.
+
+  --features <f,..>      turn these on, on top of the default set.
+  --no-default-features  start from nothing rather than from `default`.
+
+Features come out of `[features]` in `nut.toml` and choose between modules
+that `lib.nut` marks with a `#[feature(...)]` gate. The distinction worth
+holding: an ordinary gate asks the machine doing the lowering, and a feature
+is a choice about the machine that will run the result. That is what lets a
+POSIX artifact be built on a bash one, which no gate can do, because on a
+machine with bash the answer to "is there bash" is yes.
+
+The result needs nothing from nutshell. `--no-prebind` is the exception and
+says so: with the dispatch still to run it needs the resolver, so it keeps
+`init` and stays a bash artifact.
+USAGE
+}
+
+# --- what a file loads -------------------------------------------------------
+
+# Every module a file names, by `use` or by `nut_reload`.
+#
+# A module reached only by the lazy dispatch is as much a dependency as one
+# reached by `use`. Following only `use` leaves the implementation out of the
+# closure, and the function it backs then answers nothing.
+#
+# That is possible at all because every `nut_reload` in this library is written
+# literally. Assembled from a variable there is nothing here to follow, which
+# is why `fs.sh` writes its three out in a `case` rather than building the name.
+_nl_uses_in() {
+    local file="$1" line m
+    while IFS= read -r line; do
+        case "$line" in
+            *use[[:space:]]*) ;;
+            *) continue ;;
+        esac
+        # Command position only. `# use foo` in prose is not a load.
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "$line" in
+            use[[:space:]]*) ;;
+            *) continue ;;
+        esac
+        line="${line#use }"
+        for m in $line; do
+            case "$m" in
+                -*|'||'*|'&&'*|'{'*) continue ;;
+            esac
+            m="${m%%;*}"; m="${m%\"}"; m="${m#\"}"
+            [[ -n "$m" ]] && printf '%s\n' "${m#super::}"
+        done
+    done < "$file"
+
+    # Anywhere in a line rather than at the start of one, because `fs.sh` puts
+    # its three inside `case` arms and an anchored pattern finds none of them.
+    grep -hE 'nut_reload[[:space:]]' "$file" 2>/dev/null \
+        | grep -vE '^[[:space:]]*#' \
+        | grep -oE 'nut_reload[[:space:]]+"?[^";[:space:]]+' \
+        | sed -e 's/^nut_reload[[:space:]]*//' -e 's/"//g' -e 's/^super:://'
+}
+
+# The closure, in load order: a module's dependencies before the module.
+declare -A _NL_SEEN=()
+declare -a _NL_ORDER=()
+declare -a _NL_NAMES=()
+_nl_walk() {
+    local m="$1" file dep
+    [[ -n "${_NL_SEEN[$m]:-}" ]] && return 0
+    _NL_SEEN[$m]=1
+    file="$(_lib_nut_lookup "$_NL_ROOT" "$m" 2>/dev/null)" || return 0
+    while IFS= read -r dep; do
+        [[ -n "$dep" ]] && _nl_walk "$dep"
+    done < <(_nl_uses_in "$file")
+    _NL_ORDER+=("$file")
+    _NL_NAMES+=("$m")
+}
+
+# --- the lazy dispatch, decided here -----------------------------------------
+
+# Which implementation each dispatched function picks on this machine.
+#
+# Not parsed. `text.sh` picks with a chain of `deps_has`; `fs.sh` picks on a
+# tool variant with a `uname` fallback under it, and a reader that understood
+# both would still be wrong about the third one somebody writes. So the real
+# dispatch decides and this only watches which module it asks for.
+#
+# The watching is the trick. `nut_reload` is swapped for a recorder, so the
+# stub names its choice and then calls itself, and `nut_lazy_guard` stops it
+# there because the implementation it wanted was never loaded. The answer
+# arrives and none of the work behind it runs, which is what makes this safe
+# to do to a function whose arguments we do not have.
+#
+# The recorder writes to a fd of its own. On stdout it went into the same
+# `>/dev/null` that keeps the function quiet, and every probe reported nothing.
+declare -A _NL_WINNER=()
+
+_nl_lazy_winner() {
+    bash -c '
+        exec 9>&1
+        . "'"$_NL_ROOT"'/init" >/dev/null 2>&1 || exit 1
+        use '"$1"' >/dev/null 2>&1 || exit 1
+        nut_reload() { printf "%s\n" "$@" >&9; return 0; }
+        '"$2"' >/dev/null 2>&1
+    ' 2>/dev/null | head -1
+}
+
+_nl_prebind_scan() {
+    local i=0 mod file fns fn win
+    for mod in "${_NL_NAMES[@]}"; do
+        file="${_NL_ORDER[$i]}"; i=$(( i + 1 ))
+        fns="$(sed -n 's/^[[:space:]]*nut_lazy_guard[[:space:]]\{1,\}\([a-z_][a-zA-Z0-9_]*\).*/\1/p' "$file" 2>/dev/null)"
+        [[ -n "$fns" ]] || continue
+        for fn in $fns; do
+            win="$(_nl_lazy_winner "$mod" "$fn")"
+            [[ -n "$win" ]] || continue
+            _NL_WINNER["${win#super::}"]=1
+        done
+    done
+}
+
+# --- the concatenation -------------------------------------------------------
+
+_nl_emit() {
+    # With the dispatch decided here, the file needs nothing from `init`.
+    #
+    # `init` is the development-time resolver: six of its functions answer
+    # "which file is this module" out of `lib.nut`, four more make a module
+    # load once, and a lowered file has already had both done to it. What it
+    # actually referenced was `use` at file scope, `nut_reload` and
+    # `nut_lazy_guard` inside stubs that pre-binding overwrites, and one
+    # `NUTSHELL_ROOT`. So those four are declared here in nine lines and the
+    # 770 go.
+    #
+    # That is what lets an artifact reach the floor, and it is necessary
+    # rather than sufficient. `init` opens with `declare -gA`, the first thing
+    # a POSIX shell refuses, so while the file sourced it every module
+    # underneath could be perfectly POSIX and none of it was reachable. With
+    # it gone the closure decides: one unconverted module in the set and a
+    # POSIX shell is still shut out, only now it fails inside a module rather
+    # than on line 40 of the preamble. Thirteen of the twenty-eight
+    # single-module closures parse under `dash` today, eleven without the
+    # shaking,
+    # and that gap is what dropping unreached functions buys. The rest are
+    # the modules nobody has converted, not anything in here.
+    # `nut_lower_test.sh` holds both numbers as a ratchet, so they are
+    # measured rather than remembered.
+    #
+    # Only with pre-binding. Without it a stub still runs, still calls
+    # `nut_reload`, and a no-op there leaves the function never replaced and
+    # re-dispatching into itself. So `--no-prebind` keeps the old preamble and
+    # stays a bash artifact.
+    #
+    # Which is why the guard below is stubbed to refuse where the other two
+    # allow. The real one answers 0 on a first call and 1 on re-entry, and
+    # re-entry is exactly what a surviving stub does. Allowing it recurses
+    # until bash reports a nesting limit, or exhausts the stack where nothing
+    # reports one: `/bin/sh` has no `FUNCNEST`. Refusing makes a stub that
+    # should not have survived fail at its first call, which is a wrong answer
+    # somebody sees instead of a dead shell.
+    if [[ "${_NL_PREBIND:-1}" -eq 1 ]]; then
+        printf '#!/bin/sh\n'
+        printf '# Generated by nut-lower. Every module this script loads,\n'
+        printf '# resolved and concatenated. Edit the sources, not this.\n'
+        printf '#\n'
+        printf '# The implementation each dispatched function picks was decided\n'
+        printf '# when this was written, on the machine that wrote it. It is\n'
+        printf '# bound to the tools that machine had.\n\n'
+        printf 'NUTSHELL_ROOT="${NUTSHELL_ROOT:-%s}"; export NUTSHELL_ROOT\n' "$_NL_ROOT"
+        printf '\n'
+        printf '# Everything this file loads is already in it.\n'
+        printf 'use() { return 0; }\n'
+        printf 'nut_reload() { return 0; }\n'
+        printf 'nut_lazy_guard() { return 1; }\n\n'
+        _nl_emit_bodies
+        return 0
+    fi
+
+    printf '#!/usr/bin/env bash\n'
+    printf '# Generated by nut-lower. Every module this script loads, resolved\n'
+    printf '# and concatenated. Edit the sources, not this.\n\n'
+    printf '. "%s/init" >/dev/null 2>&1 || exit 1\n' "$_NL_ROOT"
+
+    # Every registration before any body.
+    #
+    # It registers what it contains rather than stubbing the resolver.
+    # `use() { return 0; }` looks equivalent and is not: `nut_reload` goes
+    # through `use`, so a stub breaks the lazy dispatch and the dispatched
+    # function answers nothing.
+    #
+    # Emitted per module they interleave with the code, and anything reading up
+    # to the first module marker then sees one of them.
+    local m
+    # Keyed by the canonical path, because that is the key `use` computes: it
+    # resolves the module, runs the path through `_nut_realpath`, and checks
+    # that. Keyed by the module name instead, nothing matches, so every `use`
+    # in the lowered file resolves and sources its file again.
+    #
+    # The answers stay correct and the work is done twice, which is why nothing
+    # in the test suite saw it. `benches/startup` saw it at once, as the shaken
+    # arm going from 71ms to 261ms, and that is the whole reason that bench
+    # measures this tool rather than a copy of it.
+    local i=0 real
+    for m in "${_NL_NAMES[@]}"; do
+        real="$(_nut_realpath "${_NL_ORDER[$i]}" 2>/dev/null)" || real="${_NL_ORDER[$i]}"
+        [[ -n "$real" ]] || real="${_NL_ORDER[$i]}"
+        printf '_nut_loaded_set LOADED "%s" 1\n' "$real"
+        printf '_nut_loaded_set LOADED_AS "%s" "%s"\n' "$m" "$real"
+        i=$(( i + 1 ))
+    done
+    printf '\n'
+
+    _nl_emit_bodies
+}
+
+# The module bodies, and then the winning implementations.
+#
+# Its own function because both preambles emit the same thing after them.
+_nl_emit_bodies() {
+    # The winning implementations come last, because a later definition wins.
+    #
+    # In dependency order they land *before* the module holding the stub, so
+    # the stub overwrites the very function it exists to be replaced by. The
+    # dispatch then still runs at first call, `nut_reload` still forces a
+    # re-source off disk, and the lowering has saved nothing: nothing fails,
+    # and nothing is faster.
+    local f mod_of_f i2=0
+    for f in "${_NL_ORDER[@]}"; do
+        mod_of_f="${_NL_NAMES[$i2]}"; i2=$(( i2 + 1 ))
+        [[ -n "${_NL_WINNER[$mod_of_f]:-}" ]] && continue
+        printf '# --- %s ---\n' "${f#"$_NL_ROOT/"}"
+        # The per-file inclusion guard goes, and `super::` is rewritten away.
+        #
+        # `nut_once` answers about the file being sourced, and concatenated
+        # every file is the same file: the first call registers the lowered one
+        # and every guard after says already-loaded and returns from the whole
+        # thing, so the result defines one module and nothing else. Inclusion
+        # was decided here; there is nothing left to guard at run time.
+        #
+        # `super::` resolves relative to the file that wrote the call, through
+        # `BASH_SOURCE[1]`, and concatenated every call comes from the lowered
+        # file. Wherever that lands, the relative name means something else. A
+        # lowering knows the unit, which is the point, so it writes the name the
+        # resolver can answer.
+        sed -e 's/^nut_once || return 0$//' \
+            -e 's/^nut_once || return$//' \
+            -e 's/^\[ -n "${_NUTSHELL_[A-Z_]*:-}" \] \&\& return 0$//' \
+            -e 's/super:://g' "$f"
+        printf '\n'
+    done
+
+    local j=0
+    for f in "${_NL_ORDER[@]}"; do
+        mod_of_f="${_NL_NAMES[$j]}"; j=$(( j + 1 ))
+        [[ -n "${_NL_WINNER[$mod_of_f]:-}" ]] || continue
+        printf '# --- %s (bound ahead of the dispatch) ---\n' "${f#"$_NL_ROOT/"}"
+        sed -e 's/^nut_once || return 0$//' \
+            -e 's/^nut_once || return$//' \
+            -e 's/^\[ -n "${_NUTSHELL_[A-Z_]*:-}" \] && return 0$//' \
+            -e 's/super:://g' "$f"
+        printf '\n'
+    done
+}
+
+
+# --- the shake ---------------------------------------------------------------
+
+# What the entry script can reach, transitively.
+#
+# It reads names rather than parsing shell, so it over-retains: a name in a
+# comment or a string counts. That is the safe direction, and what it drops is
+# a floor on what a real pass could rather than a claim about what it would.
+#
+# What it cannot see is a name assembled at run time, which is why every
+# `nut_reload` here is literal.
+_nl_retained() {
+    local lowered="$1" entry="$2" roots="$3"
+
+    # Roots: what the entry script names, and what the lowered file calls at
+    # file scope.
+    #
+    # The second half is not optional. A module that does work when it loads
+    # calls a function outside any definition, and that call appears nowhere in
+    # the entry script, so nothing seeds it: `deps.sh` ends on a bare
+    # `_deps_init`. Its definition then gets dropped while the call stays, and
+    # the lowered file loads with a dangling call and an empty tool table.
+    #
+    # Extracted here rather than inside the walk below, because that runs as a
+    # quoted program and an awk script does not survive the nesting.
+    {
+        grep -ohE '\b[a-z_][a-zA-Z0-9_]*\b' "$entry"
+        awk '
+            depth == 0 && match($0, /^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_-]*[[:space:]]*\(\)[[:space:]]*\{?[[:space:]]*$/) {
+                infn = 1; depth = 0; next
+            }
+            infn {
+                depth += gsub(/\{/, "{"); depth -= gsub(/\}/, "}")
+                if (depth <= 0) infn = 0
+                next
+            }
+            # The comment goes before the names are read. Left in, every word
+            # of every file-scope comment is a root, and this library comments
+            # heavily at file scope: it retained 148 definitions of 157 and the
+            # lowering saved nothing.
+            { sub(/#.*$/, ""); if ($0 ~ /[^[:space:]]/) print }
+        ' "$lowered" | grep -ohE '\b[a-z_][a-zA-Z0-9_]*\b'
+    } | sort -u > "$roots"
+
+    bash -c '
+        set -uo pipefail
+        . "$1" >/dev/null 2>&1 || exit 1
+        declare -A BODY=()
+        while IFS= read -r fn; do
+            BODY["$fn"]="$(declare -f "$fn" 2>/dev/null)"
+        done < <(declare -F | sed "s/^declare -f //")
+
+        declare -A KEEP=(); declare -a WORK=()
+        _seed() {
+            local n
+            while IFS= read -r n; do
+                [ -n "${BODY[$n]:-}" ] || continue
+                [ -n "${KEEP[$n]:-}" ] && continue
+                KEEP["$n"]=1; WORK+=("$n")
+            done
+        }
+        _seed < "$2"
+        while [ ${#WORK[@]} -gt 0 ]; do
+            fn="${WORK[0]}"; WORK=("${WORK[@]:1}")
+            _seed < <(printf "%s" "${BODY[$fn]}" | grep -ohE "\b[a-z_][a-zA-Z0-9_]*\b" | sort -u)
+        done
+        printf "%s\n" "${!KEEP[@]}"
+    ' _ "$lowered" "$roots"
+}
+
+# Cut the definitions nothing retained out of the file, leaving everything else
+# exactly where it was.
+#
+# Filtered rather than rebuilt from `declare -f`. Rebuilt, the result is
+# functions and nothing else, so every module's file-scope initialisation goes:
+# `deps.sh` populating its tool table at load time is the one that shows, and
+# the dispatched functions then read an empty table and choose nothing.
+#
+# So the unit of shaking is one function definition. Anything outside one is
+# kept, because nothing here can tell what it was for.
+_nl_shake() {
+    local lowered="$1" keepfile="$2"
+    # Through a file, not `-v`: an awk variable cannot hold a newline and the
+    # retained set is one name per line.
+    awk -v keepfile="$keepfile" '
+        BEGIN { while ((getline line < keepfile) > 0) if (line != "") K[line] = 1 }
+        depth == 0 && match($0, /^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_-]*[[:space:]]*\(\)[[:space:]]*\{?[[:space:]]*$/) {
+            name = $0
+            sub(/^[[:space:]]*/, "", name); sub(/^function[[:space:]]+/, "", name)
+            sub(/[[:space:]]*\(\).*$/, "", name)
+            infn = 1; depth = 0; drop = (name in K) ? 0 : 1
+        }
+        {
+            if (infn) {
+                depth += gsub(/\{/, "{")
+                depth -= gsub(/\}/, "}")
+                if (!drop) print
+                if (depth <= 0) { infn = 0; drop = 0 }
+                next
+            }
+            print
+        }
+    ' "$lowered"
+}
+
+# --- the tool ----------------------------------------------------------------
+
+main() {
+    local entry="" out="" shake=1 list=0 extra="" prebind=1 features="" nodefault=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) _nl_usage; return 0 ;;
+            -o) out="${2:-}"; shift 2 ;;
+            --use) extra="${extra},${2:-}"; shift 2 ;;
+            --no-shake) shake=0; shift ;;
+            --no-prebind) prebind=0; shift ;;
+            --features) features="${2:-}"; shift 2 ;;
+            --no-default-features) nodefault=1; shift ;;
+            --list) list=1; shift ;;
+            -*) printf 'nut-lower: unknown option %s\n' "$1" >&2; return 64 ;;
+            *) entry="$1"; shift ;;
+        esac
+    done
+
+    [[ -n "$entry" ]] || { _nl_usage >&2; return 64; }
+    [[ -r "$entry" ]] || { printf 'nut-lower: cannot read %s\n' "$entry" >&2; return 1; }
+
+    # Before the closure is walked, because the walk is what resolves each
+    # module and the feature set is what decides which half of a pair it takes.
+    # Set after the walk they are accepted and change nothing, which is the
+    # worst of the three possible behaviours and is where they were first put.
+    #
+    # A gate asks the running shell, so on a machine with bash a
+    # `#[shell(bash4)]` pair always answers bash. The feature is how a lowering
+    # asks for the other half anyway, which is the whole point of having both.
+    [[ -n "$features" ]] && export NUT_FEATURES="$features"
+    [[ "$nodefault" -eq 1 ]] && export NUT_NO_DEFAULT_FEATURES=1
+
+    local m
+    while IFS= read -r m; do
+        [[ -n "$m" ]] && _nl_walk "$m"
+    done < <(_nl_uses_in "$entry")
+
+    # Split on commas without touching `IFS`, which a `local IFS=,` here did
+    # not survive and which the loops around this one read.
+    #
+    # `|| [[ -n "$m" ]]`, because `printf '%s'` writes no trailing newline and
+    # `read` returns non-zero on the last field when there is none. Without it
+    # the final module of every `--use` was dropped in silence: `--use text,fs`
+    # lowered `text` and left `fs` out, and the lowered file then loaded and
+    # answered nothing for half of what was asked for.
+    while IFS= read -r m || [[ -n "$m" ]]; do
+        [[ -n "$m" ]] && _nl_walk "$m"
+    done < <(printf '%s' "$extra" | tr ',' '\n')
+
+    if [[ "${#_NL_ORDER[@]}" -eq 0 ]]; then
+        printf 'nut-lower: %s loads no modules, so there is nothing to lower\n' "$entry" >&2
+        return 1
+    fi
+
+    if [[ "$prebind" -eq 1 ]]; then _nl_prebind_scan; fi
+
+    if [[ "$list" -eq 1 ]]; then
+        printf '%s\n' "${_NL_ORDER[@]#"$_NL_ROOT/"}"
+        return 0
+    fi
+
+    local tmp; tmp="$(mktemp -d "${TMPDIR:-/tmp}/nut-lower.XXXXXX")" || return 1
+    [[ -n "${NUT_LOWER_KEEP_TMP:-}" ]] || trap 'rm -rf "$tmp"' RETURN
+    [[ -z "${NUT_LOWER_KEEP_TMP:-}" ]] || printf 'nut-lower: work in %s\n' "$tmp" >&2
+
+    # Seen by `_nl_emit`, which picks the preamble on it: with the dispatch
+    # decided the file needs nothing from `init`, and without it the stubs
+    # still run and still do.
+    _NL_PREBIND="$prebind"
+    _nl_emit > "$tmp/lowered.sh"
+
+    local final="$tmp/lowered.sh"
+    if [[ "$shake" -eq 1 ]]; then
+        _nl_retained "$tmp/lowered.sh" "$entry" "$tmp/roots.txt" > "$tmp/keep.txt"
+        _nl_shake "$tmp/lowered.sh" "$tmp/keep.txt" > "$tmp/shaken.sh"
+        final="$tmp/shaken.sh"
+    fi
+
+    if [[ -n "$out" ]]; then
+        # Not `chmod +x`. The output is a library the script sources, so an
+        # executable bit invites running it, and running it does nothing and
+        # says nothing.
+        cp "$final" "$out"
+    else
+        cat "$final"
+    fi
+}
+
+main "$@"

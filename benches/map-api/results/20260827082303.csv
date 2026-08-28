@@ -1,0 +1,5 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash  one associative array,2101,2175,within the noise,yes
+posix floor  encoded names,4383,4446,208%,yes
+bash  read into a variable,1948,1992,92%,yes
+posix floor  read into a variable,4257,4404,202%,yes

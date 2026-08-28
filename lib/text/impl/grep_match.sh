@@ -15,10 +15,10 @@ _text_grep_grep_impl() {
     local pattern="${1:-}"
     local file="${2:-}"
     
-    [[ -z "$pattern" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$pattern" ] && return 1
+    [ ! -f "$file" ] && return 1
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
     
     # Use -E for extended regex by default
     "$grep_path" -E "$pattern" "$file" 2>/dev/null || true
@@ -29,10 +29,10 @@ _text_contains_grep_impl() {
     local pattern="${1:-}"
     local file="${2:-}"
     
-    [[ -z "$pattern" ]] && return 1
-    [[ ! -f "$file" ]] && return 1
+    [ -z "$pattern" ] && return 1
+    [ ! -f "$file" ] && return 1
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
     
     # -q for quiet mode; just return exit status
     "$grep_path" -qE "$pattern" "$file" 2>/dev/null
@@ -43,26 +43,28 @@ _text_count_matches_grep_impl() {
     local pattern="${1:-}"
     local file="${2:-}"
     
-    [[ -z "$pattern" ]] && { echo "0"; return 1; }
-    [[ ! -f "$file" ]] && { echo "0"; return 1; }
+    [ -z "$pattern" ] && { echo "0"; return 1; }
+    [ ! -f "$file" ] && { echo "0"; return 1; }
     
-    local grep_path="${_TOOL_PATH[grep]:-grep}"
+    local grep_path="${_TOOL_PATH_grep:-grep}"
     
     # -c counts matching lines
     "$grep_path" -cE "$pattern" "$file" 2>/dev/null || echo "0"
 }
 
-# When sourced: redefine the public functions
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    text_grep() {
-        _text_grep_grep_impl "$@"
-    }
-    
-    text_contains() {
-        _text_contains_grep_impl "$@"
-    }
-    
-    text_count_matches() {
-        _text_count_matches_grep_impl "$@"
-    }
-fi
+# Sourced, always: the resolver is the only thing that opens this file, and it
+# sources it. The `if [[ "${BASH_SOURCE[0]}" != "${0}" ]]` this replaces asked
+# whether that was so, which is a question with one answer and a bad
+# substitution under a POSIX shell, where there is no `BASH_SOURCE` to
+# subscript.
+text_grep() {
+    _text_grep_grep_impl "$@"
+}
+
+text_contains() {
+    _text_contains_grep_impl "$@"
+}
+
+text_count_matches() {
+    _text_count_matches_grep_impl "$@"
+}

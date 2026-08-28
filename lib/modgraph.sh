@@ -49,7 +49,12 @@
 #   MODGRAPH_NOCACHE - set to 1 to rebuild every time (for developing a check)
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE`
+# and so needs bash. Under a POSIX shell it is not found, the
+# `|| return 0` beside it fires on every load, and the module reports
+# success having defined nothing.
+[ -n "${_NUTSHELL_MODGRAPH_SH:-}" ] && return 0
+_NUTSHELL_MODGRAPH_SH=1
 
 use fs xdg deps
 
@@ -61,7 +66,14 @@ declare -gA _MG_DECLARES=()
 declare -gA _MG_DEFINES=()
 declare -gA _MG_CALLS=()
 declare -gA _MG_OWNER=()
-# Visibility per function: `pub`, `lib`, or absent for module-private.
+# Visibility per function: `pub`, `lib`, `super`, or absent for module-private.
+#
+# `super` is the rung between `lib` and private, and it means what it means in
+# Rust: visible to the module above this one, and to anything under that. An
+# implementation under `json::impl::jq` marked `#[pub(super)]` is callable from
+# `json` and from its siblings under `json`, and from nowhere else. That is the
+# shape the `impl` trees here already have by convention, and the marker is
+# what makes it checkable rather than a convention.
 declare -gA _MG_VIS=()
 declare -ga _MG_MODULES=()
 _MG_ROOT=""
@@ -134,13 +146,60 @@ _mg_scan() {
         }
 
         # A declaration of intent.
-        /^[[:space:]]*use[[:space:]]+/ {
+        # A `use` where it is a command word, which is at the start of the
+        # line or after `&&`, `||`, `;` or `{`. `json.sh` writes
+        # `deps_has jq && use super::json::impl::jq`, and anchoring to the line
+        # start missed all three of those, which is why the graph reported the
+        # whole `json::impl` tree as reachable from nothing.
+        #
+        # The comment is cut first. Matching `use` anywhere in the raw line
+        # reads every sentence with the word "use" in it as a declaration, and
+        # the prose in these very files produced forty-odd of them.
+        #
+        # Each name is then checked for the shape of a module name, which is
+        # what tells a real declaration from `use strict;` inside the perl
+        # program that `json::impl::perl` passes to `perl -e`: a trailing semicolon
+        # is not part of a module name.
+        {
+            uline = $0
+            sub(/#.*$/, "", uline)
+            if (uline ~ /(^|&&|\|\||;|\{)[[:space:]]*use[[:space:]]+/) {
+                sub(/^.*(&&|\|\||;|\{)[[:space:]]*use[[:space:]]+/, "", uline)
+                sub(/^[[:space:]]*use[[:space:]]+/, "", uline)
+                n = split(uline, parts, /[[:space:]]+/)
+                for (i = 1; i <= n; i++) {
+                    cand = parts[i]
+                    if (cand == "") continue
+                    # `super::` is relative to the module declaring it and
+                    # resolves to the same name without it.
+                    sub(/^super::/, "", cand)
+                    if (cand ~ /^[A-Za-z_][A-Za-z0-9_-]*(::[A-Za-z_][A-Za-z0-9_-]*)*$/)
+                        declares[cand] = 1
+                }
+                next
+            }
+        }
+
+        # `nut_reload <module>` is a declaration too. It is how a module picks
+        # an implementation at first call and swaps itself for it, and it names
+        # the module literally for exactly this reason: a name built from a
+        # variable would be invisible here, which the note above the call sites
+        # in `fs.sh` says in as many words.
+        #
+        # Without this the three `fs::impl::stat_*` modules were reachable from
+        # nothing and `fs` was calling into a module it never declared, six
+        # findings that were the graph not looking rather than the code being
+        # wrong. `super::` is relative and is resolved against the caller.
+        /nut_reload[[:space:]]+[a-zA-Z_:]/ {
             line = $0
-            sub(/^[[:space:]]*use[[:space:]]+/, "", line)
+            sub(/^.*nut_reload[[:space:]]+/, "", line)
+            sub(/[[:space:]].*$/, "", line)
             sub(/#.*$/, "", line)
-            n = split(line, parts, /[[:space:]]+/)
-            for (i = 1; i <= n; i++) if (parts[i] != "") declares[parts[i]] = 1
-            next
+            gsub(/["\047]/, "", line)
+            if (line != "") {
+                sub(/^super::/, "", line)
+                declares[line] = 1
+            }
         }
 
         # A definition. Consumes whatever attributes were pending.
@@ -265,9 +324,20 @@ _mg_module_of() {
     while read -r name f _rest || [[ -n "$name" ]]; do
         [[ -z "$name" || "${name:0:1}" == "#" ]] && continue
         if [[ "$f" == "$rel" ]]; then
-            # The leaf, since this graph works in file-stem names throughout
-            # and a `::` path would not match anything else in it.
-            printf '%s' "${name##*::}"
+            # The full name, not the leaf.
+            #
+            # It returned the leaf, on the reasoning that the graph works in
+            # file-stem names. It does not: a `use` line records what it wrote,
+            # which is the full `json::impl::jq`, so every declaration of a
+            # nested module failed to match the module it named and the audit
+            # reported it undeclared. Twenty-three of those, all artifacts.
+            #
+            # The leaf also collapses `toml::write` and any other `write` onto
+            # one module, which silently merges two files' calls and
+            # definitions.
+            #
+            # And `#[pub(super)]` needs the parent, which a leaf does not have.
+            printf '%s' "$name"
             return 0
         fi
     done < "${root}/lib.nut"
@@ -279,7 +349,16 @@ _mg_analyse() {
     # The library root, so the manifest can say which module a file is. `dir`
     # is the lib directory; the manifest sits above it.
     local root="${MODGRAPH_ROOT:-${dir%/*}}"
-    for file in "$dir"/*.sh; do
+    # Every level, not just the first. `"$dir"/*.sh` stopped at the top, so
+    # every module under an `impl/` tree was invisible to this: fourteen files
+    # and fourteen declared modules, a third of the library, that the audit
+    # reported nothing about because it had never read them. A check that
+    # cannot see a file agrees with it.
+    #
+    # It matters most for `#[pub(super)]`, since the `impl` trees are the whole
+    # reason that rung exists, and the audit could not have enforced it on a
+    # single one of them.
+    while IFS= read -r file; do
         [[ -f "$file" ]] || continue
         mod="$(_mg_module_of "$file" "$root")"
         # A module already seen is a variant of it. Its calls and definitions
@@ -310,7 +389,7 @@ _mg_analyse() {
             _MG_VIS[${pair%%=*}]="${pair#*=}"
         done
         _MG_VISRAW=""
-    done
+    done < <(find "$dir" -name '*.sh' -type f | sort)
 }
 
 # One record per fact, never one record per module with several payloads.
@@ -407,7 +486,7 @@ modgraph_owner() { printf '%s' "${_MG_OWNER[$1]:-}"; }
 # library may, and nothing at all when it is module-private.
 #
 #[pub]
-# Usage: modgraph_visibility str_trim -> prints "pub", "lib", or nothing
+# Usage: modgraph_visibility str_trim -> prints "pub", "lib", "super", or nothing
 modgraph_visibility() { printf '%s' "${_MG_VIS[$1]:-}"; }
 
 # -----------------------------------------------------------------------------
@@ -464,7 +543,8 @@ modgraph_cycle() {
 #
 #   cycle       <path>                  the declaration graph loops
 #   undeclared  <module> <fn> <owner>   a cross-module call with no `use`
-#   private     <module> <fn> <owner>   a call to something not visible here
+#   private        <module> <fn> <owner>   a call to something not visible here
+#   super_at_root  <module> <fn> <owner>   `#[pub(super)]` where there is no super
 #   unreachable <module>                nothing uses it and it exports nothing
 #   unused      <module> <dep>          declared, and nothing called from it
 #
@@ -516,16 +596,70 @@ modgraph_audit() {
             # function the caller supplies. Not ours to judge.
             [[ -z "$owner" || "$owner" == "$mod" ]] && continue
 
+            # Or defined right here. The owner map holds one module per name
+            # and the three `fs::impl::stat_*` alternatives all define
+            # `fs_size`, so two of them were reported as calling into the
+            # third. They are alternatives, only one is ever loaded, and each
+            # defines what it calls.
+            [[ " ${_MG_DEFINES[$mod]:-} " == *" $fn "* ]] && continue
+
             if [[ "$declared" != *" $owner "* ]]; then
                 printf 'undeclared\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
                 found=1
             fi
 
             vis="${_MG_VIS[$fn]:-}"
-            if [[ "$vis" != "pub" && "$vis" != "lib" ]]; then
-                printf 'private\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
-                found=1
-            fi
+            case "$vis" in
+                pub | lib ) ;;
+                super )
+                    # Visible to any module above the owner, and to anything
+                    # under the owner's immediate parent. `json::impl::jq`
+                    # exports to `json` and to `json::impl::perl`; `text`
+                    # cannot reach it.
+                    #
+                    # The upward half is deliberately every ancestor rather
+                    # than the immediate parent, which is what Rust means by
+                    # `pub(super)`. Here the immediate parent is frequently not
+                    # a module at all: `json::impl` names no file and nothing
+                    # can be written in it, so a strict reading would make this
+                    # rung unusable in the one layout it exists for. A path
+                    # segment that holds no code cannot be the audience for a
+                    # visibility rule.
+                    #
+                    # An owner with nothing above it has no super to be visible
+                    # to, so the marker there means module-private and is
+                    # reported rather than silently read as public.
+                    if [[ "$owner" != *"::"* ]]; then
+                        printf 'super_at_root\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
+                        found=1
+                    elif [[ "$owner" == "${mod}::"* ]]; then
+                        : # the caller is an ancestor of the owner
+                    elif [[ "$mod" == "${owner%::*}" || "$mod" == "${owner%::*}::"* ]]; then
+                        : # the caller is the parent, or sits under it
+                    else
+                        printf 'private\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
+                        found=1
+                    fi
+                    ;;
+                * )
+                    # A module may reach into a module above it. That is Rust's
+                    # rule for a child and its ancestors, and it is the shape
+                    # here too: `toml::json` is part of `toml`, written in a
+                    # second file because one file would be too long, and
+                    # calling `toml`'s own helpers is not reaching into a
+                    # stranger.
+                    #
+                    # The reverse is not true: `toml` calling `toml::json`'s
+                    # internals is a parent reaching into a child, and that
+                    # needs the child to export.
+                    if [[ "$mod" == "${owner}::"* ]]; then
+                        :
+                    else
+                        printf 'private\t%s\t%s\t%s\n' "$mod" "$fn" "$owner"
+                        found=1
+                    fi
+                    ;;
+            esac
         done
 
         # Declared and never called. Reported, not failed: a module can depend

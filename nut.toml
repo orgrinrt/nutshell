@@ -4,27 +4,87 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# This is the TOUGH template - strict conventions for high-quality codebases.
-# No compromises. No technical debt. No cutting corners.
+# The tough template. Every gate on, every threshold at the tightest value the
+# checks offer.
 #
-# Use this if you believe in:
-#   - Code quality over velocity
-#   - Preventing problems over fixing them
-#   - Self-documenting code
-#   - Small, focused modules
+# What that means in practice: a file over 300 lines of code fails, a public
+# function without a `Usage:` line fails, two functions whose names score above
+# 0.85 similar fail, and a `TODO` is a finding rather than a note.
+#
+# Pick it when a failing gate is what you want from a gate. The default
+# template is the same checks at values a codebase can adopt without a week of
+# work first.
 #
 # For gentler defaults, see: examples/configs/default.nut.toml
 # For all options documented: examples/configs/empty.nut.toml
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# What this package is
+# -----------------------------------------------------------------------------
+# Its own section, because `[meta]` is about this file and this is about the
+# thing the file describes. A review read `[meta] version` as nutshell's twice,
+# and it is the schema's.
+#
+# The fields are the ones cargo, npm and deno all agree on, because a package
+# manifest that invents its own vocabulary makes every reader learn it: name,
+# version, description, license, repository, keywords. `[lib]` and `[bin]` are
+# cargo's shape, and `[bin]` is a map the way package.json's is.
+
+[package]
+name = "nutshell"
+version = "0.7.0"
+description = "A bash library: modules with a manifest, a QA gate, and dependency resolution."
+license = "MPL-2.0"
+repository = "https://github.com/orgrinrt/nutshell"
+keywords = ["bash", "shell", "posix", "library", "modules"]
+
+# -----------------------------------------------------------------------------
+# Feature flags, the way cargo has them
+# -----------------------------------------------------------------------------
+#
+# A gate asks about the machine: which shell is running, whether a binary is on
+# PATH. A feature is a choice, and the difference matters when the answer is
+# being written into a file that runs somewhere else. Lowering on a machine
+# with bash takes the bash half of every `#[shell(bash4)]` pair, because that
+# gate asks the running shell and gets the right answer; selecting features is
+# how you ask for the other half anyway.
+#
+# The rules are cargo's. Enabling a feature only ever adds. `default` is a set
+# like any other and `NUT_NO_DEFAULT_FEATURES=1` drops it. `NUT_FEATURES` adds
+# to whatever is left. A row in `lib.nut` with no `#[feature(...)]` is always
+# in, so a manifest that declares none behaves as it did before this existed.
+#
+#   [features]
+#   default = ["bash"]
+#   bash    = []
+#
+# A feature's list names other features it turns on, which is the one part of
+# the model that is more than a set.
+[features]
+# The bash halves of the paired modules: `map`, `list`, `string` and the
+# prompt. On by default, because the machine this is developed on has bash and
+# the bash halves are faster where they run.
+#
+# `nut-lower --no-default-features` drops them, which is how a lowering made
+# here produces a file for a machine that has only a POSIX shell.
+default = ["bash"]
+bash = []
+
+# The library entry point: the file that says what this package provides, the
+# way `src/lib.rs` does for a crate.
+[lib]
+path = "lib.nut"
+
+# Command name to the file behind it.
+[bin]
+nutshell = "bin/nutshell"
+
 [meta]
-# The schema's version, not nutshell's. `examples/configs/empty.nut.toml` says
-# so where the field is documented, and a review read it as a third claim about
-# what nutshell is, next to `init`'s constant and the newest tag. Said here so
-# the next reader does not have to go and check.
+# The schema's version, not this package's. That is `[package] version` above.
 version = "1.0.0"
 name = "nutshell"
-description = "Everything you need, in a nutshell. Strict conventions, no compromises."
+description = "A bash library: modules with a manifest, a QA gate, and dependency resolution."
 
 # -----------------------------------------------------------------------------
 # Paths

@@ -409,13 +409,18 @@ it_reads_a_real_mtime_and_size_through_whichever_stat_it_picked() {
     _stat_stub "$d" gnu
     printf '0123456789' > "$d/probe.txt"
 
+    # Read through the module's own reader rather than into whatever it keeps
+    # the stamps in. This asserted on the internal `_NUT_CACHE_STAMP` array and
+    # broke the moment the store became a `map`, on a change that altered
+    # nothing about the answer. The note is here rather than inside the quoted
+    # program below, where an apostrophe ends the quoting.
     local got
     got="$(bash -c '
         PATH="$1"; export PATH
         . "$2"/init || exit 1
         use checkcache
         _nut_cache_stat_into "$3"
-        printf "%s" "${_NUT_CACHE_STAMP[$3]:-}"
+        _nut_cache_stamp_of "$3"
     ' _ "$d" "$NUTSHELL_ROOT" "$d/probe.txt" 2>/dev/null)"
 
     assert_ne "$got" ""

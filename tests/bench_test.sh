@@ -13,18 +13,32 @@
 use test
 use bench
 
+# The clearing half is `bench_reset`, which is the harness's own and is what a
+# bench file with two cases calls. This adds only what a test needs on top: a
+# lower repeat count and a results directory that gets thrown away.
 _bench_fresh() {
-    BENCH_TITLE=""; BENCH_VERIFY=""; BENCH_SIZE=0; BENCH_REPEATS=2
-    _BENCH_LABEL=(); _BENCH_FN=(); _BENCH_CEIL=(); _BENCH_NOTE=()
+    bench_reset
+    BENCH_REPEATS=2
     BENCH_RESULTS="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-bench.XXXXXX")"
     export BENCH_RESULTS
 }
 _bench_done() { rm -rf "$BENCH_RESULTS"; unset BENCH_RESULTS; }
 
 # Two arms that agree, and one that does not.
-_arm_a()      { printf 'the same'; }
-_arm_b()      { printf 'the same'; }
-_arm_liar()   { printf 'something else'; }
+#
+# Each does enough work to be measurable. Written as a bare `printf` they take
+# zero milliseconds, and the harness refuses a baseline of zero because nothing
+# can be a ratio against it. That is the guard working, and it made
+# `it_measures_two_arms_that_agree` fail about one run in ten: passing on its
+# own, failing inside the full suite where the machine is busier.
+_spin() {
+    local i s=0
+    for (( i = 0; i < 3000; i++ )); do s=$(( s + i )); done
+    printf '%s' "$1"
+}
+_arm_a()      { _spin 'the same'; }
+_arm_b()      { _spin 'the same'; }
+_arm_liar()   { _spin 'something else'; }
 _answer_of()  { "$1"; }
 
 # --- it measures at all ------------------------------------------------------
@@ -181,5 +195,78 @@ it_uses_the_note_an_arm_gave_for_why_it_did_not_run() {
     bench_arm "absent" _arm_b 10 "no memory filesystem here"
 
     assert_contains "$(bench_run 2>&1)" "no memory filesystem here"
+    _bench_done
+}
+
+# --- a second case in one file -----------------------------------------------
+
+#[test]
+it_clears_the_arms_so_a_second_case_can_run() {
+    # Two workloads are two questions. Without this a file asking both declares
+    # its second pair on top of its first, and the agreement control refuses
+    # the run because arms answering different strings are not competing.
+    _bench_fresh
+    bench_case "the first question"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_run >/dev/null 2>&1
+
+    bench_reset
+    # All four, not just the functions. They are parallel arrays read by index
+    # when the table is printed, so a reset clearing one and not another
+    # desynchronises them and a check on `_BENCH_FN` alone would not see it.
+    assert_eq "${#_BENCH_FN[@]}" "0"
+    assert_eq "${#_BENCH_LABEL[@]}" "0"
+    assert_eq "${#_BENCH_CEIL[@]}" "0"
+    assert_eq "${#_BENCH_NOTE[@]}" "0"
+    assert_eq "$BENCH_TITLE" ""
+    assert_eq "$BENCH_VERIFY" ""
+    assert_eq "$BENCH_SIZE" "0"
+    _bench_done
+}
+
+#[test]
+it_refuses_a_second_case_that_does_not_name_itself() {
+    # The reset clears the title and the verify function too, so a second case
+    # cannot inherit them. A file that resets and then declares arms without
+    # naming the new question is refused rather than reported under the
+    # previous one's heading.
+    _bench_fresh
+    bench_case "the first question"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_run >/dev/null 2>&1
+
+    bench_reset
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    assert_ne "$rc" "0"
+    assert_contains "$out" "no case named"
+    _bench_done
+}
+
+#[test]
+it_runs_a_second_case_after_a_reset() {
+    # The positive control for the two refusals above. A reset that cleared
+    # everything and left the harness unusable would pass both of them.
+    _bench_fresh
+    bench_case "the first question"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_run >/dev/null 2>&1
+
+    bench_reset
+    bench_case "the second question"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    assert_eq "$rc" "0"
+    assert_contains "$out" "the second question"
+    assert_not_contains "$out" "the first question"
     _bench_done
 }

@@ -48,25 +48,30 @@
 #   fi
 # =============================================================================
 
-[[ -n "${_NUTSHELL_CHECKCACHE_SH:-}" ]] && return 0
+[ -n "${_NUTSHELL_CHECKCACHE_SH:-}" ] && return 0
 readonly _NUTSHELL_CHECKCACHE_SH=1
 
-if ! declare -F use >/dev/null 2>&1; then
+if ! command -v use >/dev/null 2>&1; then
     printf 'nutshell: source nutshell first\n' >&2
     return 1
 fi
 
 # Off by default until a caller turns it on, because a cache that is wrong is
 # worse than a check that is slow.
-declare -g NUT_CACHE_ENABLED="${NUT_CACHE:-0}"
+NUT_CACHE_ENABLED="${NUT_CACHE:-0}"
 
 # Bumped when the entry format or the meaning of a stamp changes, so entries
 # written by an older nutshell are misses rather than lies.
-declare -g _NUT_CACHE_FORMAT=2
+_NUT_CACHE_FORMAT=2
 
-declare -gA _NUT_CACHE_STAMP=()
-declare -g  _NUT_CACHE_BASE=""
-declare -g  _NUT_CACHE_STAT=""
+# The stamps live in a `map` rather than an associative array, which is bash's.
+# `map` is on the floor and does the same job through one variable per entry;
+# `map_read` leaves the answer in a variable so a lookup costs no fork, which
+# matters here because this is the hot path of the checker.
+use map
+map_new _NUT_CACHE_STAMP
+_NUT_CACHE_BASE=""
+_NUT_CACHE_STAT=""
 
 # Which `stat` this machine has, decided once by what it prints rather than by
 # what it returns.
@@ -90,7 +95,7 @@ declare -g  _NUT_CACHE_STAT=""
 #
 # Prints `-f` or `-c`, or nothing when neither works.
 _nut_cache_stat_flag() {
-    [[ -n "$_NUT_CACHE_STAT" ]] && { printf '%s' "${_NUT_CACHE_STAT#none}"; return 0; }
+    [ -n "$_NUT_CACHE_STAT" ] && { printf '%s' "${_NUT_CACHE_STAT#none}"; return 0; }
 
     local probe out flag fmt rc=1
     probe="$(mktemp "${TMPDIR:-/tmp}/nutshell-stat.XXXXXX")" || { _NUT_CACHE_STAT="none"; return 1; }
@@ -104,16 +109,16 @@ _nut_cache_stat_flag() {
         esac
         out="$(stat "$flag" "$fmt" "$probe" 2>/dev/null)" || continue
         # `<mtime> <size>`, and the size has to be the one just written.
-        [[ "$out" == *' '* ]] || continue
-        [[ "${out%% *}" =~ ^[0-9]+$ ]] || continue
-        [[ "${out##* }" == "10" ]] || continue
+        case "$out" in *' '*) ;; *) continue ;; esac
+        case "${out%% *}" in ''|*[!0-9]*) continue ;; esac
+        [ "${out##* }" = "10" ] || continue
         _NUT_CACHE_STAT="$flag"
         rc=0
         break
     done
 
     rm -f "$probe"
-    [[ "$rc" -eq 0 ]] || { _NUT_CACHE_STAT="none"; return 1; }
+    [ "$rc" -eq 0 ] || { _NUT_CACHE_STAT="none"; return 1; }
     printf '%s' "$_NUT_CACHE_STAT"
     return 0
 }
@@ -129,9 +134,21 @@ _nut_cache_stat_fmt() {
 
 # `<mtime> <size>` for a set of paths, in one call.
 _nut_cache_stat_into() {
-    local line mtime size path
+    local line mtime size path flag fmt out
+    # Gathered first, then walked from a here-document.
+    #
+    # It was `done < <(...)`, which is bash's, and the loop cannot go on the
+    # right of a pipe instead: the body calls `map_set`, so a subshell would
+    # record every stamp somewhere that dies when the loop ends and the cache
+    # would simply never fill. A here-document keeps the loop in this shell,
+    # and the text is one short line per input path.
+    flag="$(_nut_cache_stat_flag)" || return 0
+    fmt="$(_nut_cache_stat_fmt)"   || return 0
+    out="$(stat "$flag" "$fmt" "$@" 2>/dev/null)" || return 0
+    [ -n "$out" ] || return 0
+
     while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
+        [ -n "$line" ] || continue
         # `<mtime> <size> <path>`, split from the front. Taking the size with
         # `${v##* }` takes the last field, which is the path, so the size was
         # stat'd and then thrown away and a content change landing on the same
@@ -139,27 +156,24 @@ _nut_cache_stat_into() {
         # `touch -r`.
         mtime="${line%% *}"; line="${line#* }"
         size="${line%% *}";  path="${line#* }"
-        [[ -n "$path" ]] || continue
-        _NUT_CACHE_STAMP["$path"]="${mtime} ${size}"
-    done < <(
-        local flag fmt
-        flag="$(_nut_cache_stat_flag)" || exit 0
-        fmt="$(_nut_cache_stat_fmt)"   || exit 0
-        stat "$flag" "$fmt" "$@" 2>/dev/null
-    )
+        [ -n "$path" ] || continue
+        map_set _NUT_CACHE_STAMP "$path" "${mtime} ${size}"
+    done <<EOF
+$out
+EOF
     return 0
 }
 
 # The stamp for one path, or nothing when it could not be read.
 _nut_cache_stamp_of() {
     local p="${1:-}" v
-    [[ -n "$p" ]] || return 1
-    v="${_NUT_CACHE_STAMP[$p]:-}"
-    if [[ -z "$v" ]]; then
+    [ -n "$p" ] || return 1
+    map_read v _NUT_CACHE_STAMP "$p"
+    if [ -z "$v" ]; then
         _nut_cache_stat_into "$p"
-        v="${_NUT_CACHE_STAMP[$p]:-}"
+        map_read v _NUT_CACHE_STAMP "$p"
     fi
-    [[ -n "$v" ]] || return 1
+    [ -n "$v" ] || return 1
     # Already `<mtime> <size>`; there is nothing to re-parse out of it.
     printf '%s' "$v"
 }
@@ -170,9 +184,9 @@ _nut_cache_stamp_of() {
 # moves it and every entry becomes a miss, which is the coarse but correct
 # answer to "the checker is more than one file".
 _nut_cache_base() {
-    [[ -n "$_NUT_CACHE_BASE" ]] && { printf '%s' "$_NUT_CACHE_BASE"; return 0; }
+    [ -n "$_NUT_CACHE_BASE" ] && { printf '%s' "$_NUT_CACHE_BASE"; return 0; }
     local root="${NUTSHELL_ROOT:-}" newest=""
-    if [[ -n "$root" && -d "$root/lib" ]]; then
+    if [ -n "$root" ] && [ -d "$root/lib" ]; then
         # The newest *file*, not the directory's own mtime. A directory's mtime
         # moves when an entry is added or removed and not when a file inside it
         # is edited, so stat'ing `lib` caught `git pull` and a new module and
@@ -182,7 +196,7 @@ _nut_cache_base() {
         # One `find` and one batched `stat`, per run rather than per file.
         local flag fmt
         flag="$(_nut_cache_stat_flag)" && case "$flag" in -f) fmt='%m' ;; *) fmt='%Y' ;; esac
-        [[ -n "${flag:-}" ]] && newest="$(
+        [ -n "${flag:-}" ] && newest="$(
             find "$root/lib" "$root/init" -type f -exec stat "$flag" "$fmt" {} + 2>/dev/null
         )"
         newest="$(printf '%s\n' "$newest" | sort -rn | head -1)"
@@ -194,11 +208,11 @@ _nut_cache_base() {
 # Where an answer is kept. Under the store, beside the toolchains and externs,
 # because it is derived data about this machine and not part of any project.
 _nut_cache_root() {
-    if [[ -n "${NUT_CACHE_DIR:-}" ]]; then
+    if [ -n "${NUT_CACHE_DIR:-}" ]; then
         printf '%s' "${NUT_CACHE_DIR%/}"
         return 0
     fi
-    if declare -F nutshell_store_root >/dev/null 2>&1; then
+    if command -v nutshell_store_root >/dev/null 2>&1; then
         printf '%s/checks' "$(nutshell_store_root)"
         return 0
     fi
@@ -210,21 +224,31 @@ _nut_cache_root() {
 # The path is percent-encoded rather than flattened. Replacing every `/` with
 # `_` maps `lib/toml/json.sh` and `lib/toml_json.sh` onto one entry, and the
 # answer for one is then served for the other.
+# Percent-encode anything that is not safe in a file name.
+#
+# Walked by cutting the first character off rather than indexing, because
+# `${in:i:1}` is bash's and so is the C-style `for`. A safe run is taken whole
+# instead of one character at a time, which is fewer passes on the common case
+# where most of a path is already safe.
 _nut_cache_escape() {
-    local in="${1:-}" out="" i c
-    for (( i = 0; i < ${#in}; i++ )); do
-        c="${in:i:1}"
-        case "$c" in
-            [A-Za-z0-9._-]) out+="$c" ;;
-            *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
-        esac
+    local in="${1:-}" out="" run c
+    while [ -n "$in" ]; do
+        run="${in%%[!A-Za-z0-9._-]*}"
+        if [ -n "$run" ]; then
+            out="${out}${run}"
+            in="${in#"$run"}"
+            continue
+        fi
+        c="${in%"${in#?}"}"
+        out="${out}$(printf '%%%02X' "'$c")"
+        in="${in#?}"
     done
     printf '%s' "$out"
 }
 
 _nut_cache_path() {
     local check="${1:-}" file="${2:-}"
-    [[ -n "$check" && -n "$file" ]] || return 1
+    { [ -n "$check" ] && [ -n "$file" ]; } || return 1
     printf '%s/%s/%s' "$(_nut_cache_root)" \
         "$(_nut_cache_escape "$check")" "$(_nut_cache_escape "$file")"
 }
@@ -252,13 +276,13 @@ _nut_cache_key() {
 # the test and the entry hit anyway.
 # Usage: nut_cache_hit <check> <file> -> returns 0 on a usable answer
 nut_cache_hit() {
-    [[ "${NUT_CACHE_ENABLED:-0}" == "1" ]] || return 1
+    [ "${NUT_CACHE_ENABLED:-0}" = "1" ] || return 1
     local check="${1:-}" file="${2:-}" entry want have
     entry="$(_nut_cache_path "$check" "$file")" || return 1
-    [[ -f "$entry" ]] || return 1
+    [ -f "$entry" ] || return 1
     want="$(_nut_cache_key "$file")" || return 1
     IFS= read -r have < "$entry" 2>/dev/null || return 1
-    [[ "$have" == "$want" ]]
+    [ "$have" = "$want" ]
 }
 
 #[pub]
@@ -266,7 +290,7 @@ nut_cache_hit() {
 # Usage: nut_cache_read <check> <file> -> prints what was cached
 nut_cache_read() {
     local entry; entry="$(_nut_cache_path "$1" "$2")" || return 1
-    [[ -r "$entry" ]] || return 1
+    [ -r "$entry" ] || return 1
     tail -n +2 "$entry"
 }
 
@@ -276,7 +300,7 @@ nut_cache_read() {
 # will not have it next time.
 # Usage: nut_cache_write <check> <file> <findings>
 nut_cache_write() {
-    [[ "${NUT_CACHE_ENABLED:-0}" == "1" ]] || return 0
+    [ "${NUT_CACHE_ENABLED:-0}" = "1" ] || return 0
     local entry key
     entry="$(_nut_cache_path "$1" "$2")" || return 0
     key="$(_nut_cache_key "$2")" || return 0
@@ -290,7 +314,7 @@ nut_cache_write() {
 # Usage: nut_cache_clear [check]
 nut_cache_clear() {
     local root; root="$(_nut_cache_root)"
-    if [[ -n "${1:-}" ]]; then
+    if [ -n "${1:-}" ]; then
         rm -rf "${root}/$(_nut_cache_escape "$1")"
     else
         rm -rf "$root"

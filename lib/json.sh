@@ -26,7 +26,13 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success.
+[ -n "${_NUTSHELL_JSON_SH:-}" ] && return 0
+_NUTSHELL_JSON_SH=1
 
 # -----------------------------------------------------------------------------
 # Dependencies
@@ -35,7 +41,13 @@ nut_once || return 0
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
-use deps
+use deps string
+
+# A newline and a tab as themselves. There is no `$'\n'` here to write one
+# inline with, and the trailing `.` is because command substitution strips the
+# trailing newline, which is the character being asked for.
+_JSON_NL="$(printf '\n.')"; _JSON_NL="${_JSON_NL%.}"
+_JSON_TAB="$(printf '\t.')"; _JSON_TAB="${_JSON_TAB%.}"
 
 # -----------------------------------------------------------------------------
 # Module Status
@@ -95,8 +107,8 @@ json_get() {
     local json="${1:-}"
     local path="${2:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
     
     case "$_JSON_IMPL" in
         jq)     _json_get_jq "$json" "$path" ;;
@@ -115,8 +127,8 @@ json_set() {
     local path="${2:-}"
     local value="${3:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
     
     case "$_JSON_IMPL" in
         jq)     _json_set_jq "$json" "$path" "$value" ;;
@@ -134,8 +146,8 @@ json_keys() {
     local json="${1:-}"
     local path="${2:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
     
     case "$_JSON_IMPL" in
         jq)     _json_keys_jq "$json" "$path" ;;
@@ -152,8 +164,8 @@ json_keys() {
 json_valid() {
     local json="${1:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && return 1
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && return 1
     
     case "$_JSON_IMPL" in
         jq)     _json_valid_jq "$json" ;;
@@ -169,8 +181,8 @@ json_valid() {
 json_pretty() {
     local json="${1:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
     
     case "$_JSON_IMPL" in
         jq)     _json_pretty_jq "$json" ;;
@@ -186,8 +198,8 @@ json_pretty() {
 json_compact() {
     local json="${1:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
     
     case "$_JSON_IMPL" in
         jq)     _json_compact_jq "$json" ;;
@@ -209,8 +221,8 @@ json_type() {
     local json="${1:-}"
     local path="${2:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
     
     case "$_JSON_IMPL" in
         jq)     _json_type_jq "$json" "$path" ;;
@@ -228,8 +240,8 @@ json_length() {
     local json="${1:-}"
     local path="${2:-}"
     
-    [[ -z "$json" ]] && return 1
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ -z "$json" ] && return 1
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
     
     case "$_JSON_IMPL" in
         jq)     _json_length_jq "$json" "$path" ;;
@@ -253,7 +265,7 @@ json_has() {
     
     local result
     result=$(json_get "$json" "$path" 2>/dev/null)
-    [[ -n "$result" && "$result" != "null" ]]
+    [ -n "$result" ] && [ "$result" != "null" ]
 }
 
 #[pub]
@@ -269,7 +281,7 @@ json_get_or() {
     local result
     result=$(json_get "$json" "$path" 2>/dev/null)
     
-    if [[ -n "$result" && "$result" != "null" ]]; then
+    if [ -n "$result" ] && [ "$result" != "null" ]; then
         echo "$result"
     else
         echo "$default"
@@ -284,24 +296,25 @@ json_object() {
     local result="{"
     local first=1
     
-    while [[ $# -ge 2 ]]; do
+    while [ $# -ge 2 ]; do
         local key="$1"
         local value="$2"
         shift 2
         
-        [[ $first -eq 0 ]] && result+=","
+        [ "$first" -eq 0 ] && result="${result},"
         first=0
         
         # Escape special characters in value
-        value="${value//\\/\\\\}"
-        value="${value//\"/\\\"}"
-        value="${value//$'\n'/\\n}"
-        value="${value//$'\t'/\\t}"
+        # Backslash first. Any other order escapes the backslashes it adds.
+        str_replace "$value" '\' '\\' value
+        str_replace "$value" '"' '\"' value
+        str_replace "$value" "$_JSON_NL" '\n' value
+        str_replace "$value" "$_JSON_TAB" '\t' value
         
-        result+="\"${key}\":\"${value}\""
+        result="${result}""\"${key}\":\"${value}\""
     done
     
-    result+="}"
+    result="${result}""}"
     echo "$result"
 }
 
@@ -314,19 +327,20 @@ json_array() {
     local first=1
     
     for value in "$@"; do
-        [[ $first -eq 0 ]] && result+=","
+        [ "$first" -eq 0 ] && result="${result},"
         first=0
         
         # Escape special characters
-        value="${value//\\/\\\\}"
-        value="${value//\"/\\\"}"
-        value="${value//$'\n'/\\n}"
-        value="${value//$'\t'/\\t}"
+        # Backslash first. Any other order escapes the backslashes it adds.
+        str_replace "$value" '\' '\\' value
+        str_replace "$value" '"' '\"' value
+        str_replace "$value" "$_JSON_NL" '\n' value
+        str_replace "$value" "$_JSON_TAB" '\t' value
         
-        result+="\"${value}\""
+        result="${result}""\"${value}\""
     done
     
-    result+="]"
+    result="${result}""]"
     echo "$result"
 }
 
@@ -338,7 +352,7 @@ json_merge() {
     local json1="${1:-\{\}}"
     local json2="${2:-\{\}}"
 
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
 
     case "$_JSON_IMPL" in
         jq)     _json_merge_jq "$json1" "$json2" ;;
@@ -355,9 +369,12 @@ json_delete() {
     local json="${1:-}"
     local path="${2:-}"
 
-    [[ "$_JSON_READY" != "1" ]] && { echo "$_JSON_ERROR" >&2; return 1; }
+    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
 
-    [[ "$path" != "."* ]] && path=".${path}"
+    case "$path" in
+        .*) ;;
+        *) path=".${path}" ;;
+    esac
 
     case "$_JSON_IMPL" in
         jq)     _json_delete_jq "$json" "$path" ;;
@@ -373,7 +390,7 @@ json_delete() {
 json_read() {
     local file="${1:-}"
     
-    [[ ! -f "$file" ]] && { echo "File not found: $file" >&2; return 1; }
+    [ ! -f "$file" ] && { echo "File not found: $file" >&2; return 1; }
     
     cat "$file"
 }
@@ -386,7 +403,7 @@ json_write() {
     local json="${1:-}"
     local file="${2:-}"
     
-    [[ -z "$file" ]] && return 1
+    [ -z "$file" ] && return 1
     
     json_pretty "$json" > "$file"
 }
@@ -399,7 +416,7 @@ json_write() {
 # Check if JSON module is ready
 # Usage: json_ready -> returns 0 if ready, 1 if not
 json_ready() {
-    [[ "$_JSON_READY" == "1" ]]
+    [ "$_JSON_READY" = "1" ]
 }
 
 #[pub]

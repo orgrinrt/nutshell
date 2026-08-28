@@ -12,23 +12,27 @@
 # that, on first call, select and source the appropriate implementation.
 # =============================================================================
 
-# Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell `nut_once` is not found, the `|| return
+# 0` returns from the whole file, and the module then defines nothing while
+# reporting success.
+[ -n "${_NUTSHELL_FS_SH:-}" ] && return 0
+_NUTSHELL_FS_SH=1
 
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 
-_NUTSHELL_FS_DIR="${BASH_SOURCE[0]%/*}"
-# Handle case when sourced from same directory (BASH_SOURCE[0] has no path component)
-[[ "$_NUTSHELL_FS_DIR" == "${BASH_SOURCE[0]}" ]] && _NUTSHELL_FS_DIR="."
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
 use deps
 
-# Path to impl directory
-readonly _FS_IMPL_DIR="${_NUTSHELL_FS_DIR}/fs/impl"
+# The two variables that were here computed a path to the implementation
+# directory from `BASH_SOURCE`, and nothing read the second. They are from
+# before the resolver, when an implementation was sourced by path; it is loaded
+# by name now, which is what makes the module contract checkable at all.
 
 # -----------------------------------------------------------------------------
 # Module status
@@ -53,7 +57,7 @@ fi
 # Check if path exists (file or directory)
 # Usage: fs_exists "path" -> returns 0 (true) or 1 (false)
 fs_exists() {
-    [[ -e "${1:-}" ]]
+    [ -e "${1:-}" ]
 }
 
 #[pub]
@@ -61,7 +65,7 @@ fs_exists() {
 # Check if path is a regular file
 # Usage: fs_is_file "path" -> returns 0 (true) or 1 (false)
 fs_is_file() {
-    [[ -f "${1:-}" ]]
+    [ -f "${1:-}" ]
 }
 
 #[pub]
@@ -69,7 +73,7 @@ fs_is_file() {
 # Check if path is a directory
 # Usage: fs_is_dir "path" -> returns 0 (true) or 1 (false)
 fs_is_dir() {
-    [[ -d "${1:-}" ]]
+    [ -d "${1:-}" ]
 }
 
 #[pub]
@@ -77,7 +81,7 @@ fs_is_dir() {
 # Check if path is a symbolic link
 # Usage: fs_is_link "path" -> returns 0 (true) or 1 (false)
 fs_is_link() {
-    [[ -L "${1:-}" ]]
+    [ -L "${1:-}" ]
 }
 
 #[pub]
@@ -85,7 +89,7 @@ fs_is_link() {
 # Check if file is readable
 # Usage: fs_is_readable "path" -> returns 0 (true) or 1 (false)
 fs_is_readable() {
-    [[ -r "${1:-}" ]]
+    [ -r "${1:-}" ]
 }
 
 #[pub]
@@ -93,7 +97,7 @@ fs_is_readable() {
 # Check if file is writable
 # Usage: fs_is_writable "path" -> returns 0 (true) or 1 (false)
 fs_is_writable() {
-    [[ -w "${1:-}" ]]
+    [ -w "${1:-}" ]
 }
 
 #[pub]
@@ -101,7 +105,7 @@ fs_is_writable() {
 # Check if file is executable
 # Usage: fs_is_executable "path" -> returns 0 (true) or 1 (false)
 fs_is_executable() {
-    [[ -x "${1:-}" ]]
+    [ -x "${1:-}" ]
 }
 
 #[pub]
@@ -109,7 +113,7 @@ fs_is_executable() {
 # Check if file is non-empty
 # Usage: fs_is_nonempty "path" -> returns 0 (true) or 1 (false)
 fs_is_nonempty() {
-    [[ -s "${1:-}" ]]
+    [ -s "${1:-}" ]
 }
 
 # -----------------------------------------------------------------------------
@@ -121,8 +125,8 @@ fs_is_nonempty() {
 # Usage: fs_mkdir "/path/to/dir" -> returns 0 on success
 fs_mkdir() {
     local path="${1:-}"
-    [[ -z "$path" ]] && return 1
-    [[ -d "$path" ]] && return 0
+    [ -z "$path" ] && return 1
+    [ -d "$path" ] && return 0
     mkdir -p "$path"
 }
 
@@ -135,8 +139,8 @@ fs_mkdir() {
 # Usage: fs_rm "/path/to/remove" -> returns 0 on success
 fs_rm() {
     local path="${1:-}"
-    [[ -z "$path" ]] && return 1
-    [[ ! -e "$path" ]] && return 0
+    [ -z "$path" ] && return 1
+    [ ! -e "$path" ] && return 0
     rm -rf "$path"
 }
 
@@ -146,8 +150,8 @@ fs_rm() {
 fs_cp() {
     local src="${1:-}"
     local dst="${2:-}"
-    [[ -z "$src" || -z "$dst" ]] && return 1
-    [[ ! -e "$src" ]] && return 1
+    { [ -z "$src" ] || [ -z "$dst" ]; } && return 1
+    [ ! -e "$src" ] && return 1
     cp -r "$src" "$dst"
 }
 
@@ -157,8 +161,8 @@ fs_cp() {
 fs_mv() {
     local src="${1:-}"
     local dst="${2:-}"
-    [[ -z "$src" || -z "$dst" ]] && return 1
-    [[ ! -e "$src" ]] && return 1
+    { [ -z "$src" ] || [ -z "$dst" ]; } && return 1
+    [ ! -e "$src" ] && return 1
     mv "$src" "$dst"
 }
 
@@ -171,11 +175,11 @@ fs_mv() {
 # Usage: fs_realpath "relative/path" -> "/absolute/path"
 fs_realpath() {
     local path="${1:-}"
-    [[ -z "$path" ]] && return 1
+    [ -z "$path" ] && return 1
     
-    if [[ -d "$path" ]]; then
+    if [ -d "$path" ]; then
         (cd "$path" && pwd -P)
-    elif [[ -f "$path" ]]; then
+    elif [ -f "$path" ]; then
         local dir base
         dir="$(cd "$(dirname "$path")" && pwd -P)"
         base="$(basename "$path")"
@@ -185,7 +189,7 @@ fs_realpath() {
         local dir base
         dir="$(dirname "$path")"
         base="$(basename "$path")"
-        if [[ -d "$dir" ]]; then
+        if [ -d "$dir" ]; then
             echo "$(cd "$dir" && pwd -P)/${base}"
         else
             echo "$path"
@@ -198,7 +202,7 @@ fs_realpath() {
 # Usage: fs_dirname "/path/to/file" -> "/path/to"
 fs_dirname() {
     local path="${1:-}"
-    [[ -z "$path" ]] && return 1
+    [ -z "$path" ] && return 1
     dirname "$path"
 }
 
@@ -207,7 +211,7 @@ fs_dirname() {
 # Usage: fs_basename "/path/to/file.txt" -> "file.txt"
 fs_basename() {
     local path="${1:-}"
-    [[ -z "$path" ]] && return 1
+    [ -z "$path" ] && return 1
     basename "$path"
 }
 
@@ -220,8 +224,15 @@ fs_extension() {
     base="$(basename "$path")"
     
     # No extension if no dot or starts with dot
-    [[ "$base" != *.* ]] && return 0
-    [[ "$base" == .* && "${base#.}" != *.* ]] && return 0
+    case "$base" in
+        *.*) ;;
+        *) return 0 ;;
+    esac
+    # A name that is only a leading dot and one word is all extension and no
+    # stem, which is a dotfile rather than a file with a suffix.
+    case "$base" in
+        .*) case "${base#.}" in *.*) ;; *) return 0 ;; esac ;;
+    esac
     
     echo "${base##*.}"
 }
@@ -235,8 +246,13 @@ fs_basename_no_ext() {
     base="$(basename "$path")"
     
     # No extension to remove
-    [[ "$base" != *.* ]] && { echo "$base"; return 0; }
-    [[ "$base" == .* && "${base#.}" != *.* ]] && { echo "$base"; return 0; }
+    case "$base" in
+        *.*) ;;
+        *) echo "$base"; return 0 ;;
+    esac
+    case "$base" in
+        .*) case "${base#.}" in *.*) ;; *) echo "$base"; return 0 ;; esac ;;
+    esac
     
     echo "${base%.*}"
 }
@@ -256,7 +272,7 @@ fs_size() {
     local impl=""
     
     if deps_has "stat"; then
-        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+        local variant="${_TOOL_VARIANT_stat:-unknown}"
         case "$variant" in
             gnu)     impl="stat_gnu" ;;
             bsd)     impl="stat_bsd" ;;
@@ -298,7 +314,7 @@ fs_size() {
         perl_stat) nut_reload super::fs::impl::perl_stat ;;
     esac
 
-    if [[ -z "$impl" ]]; then
+    if [ -z "$impl" ]; then
         fs_size() {
             echo "[ERROR] fs_size: no stat tool available" >&2
             return 1
@@ -319,7 +335,7 @@ fs_mtime() {
     local impl=""
     
     if deps_has "stat"; then
-        local variant="${_TOOL_VARIANT[stat]:-unknown}"
+        local variant="${_TOOL_VARIANT_stat:-unknown}"
         case "$variant" in
             gnu)     impl="stat_gnu" ;;
             bsd)     impl="stat_bsd" ;;
@@ -359,7 +375,7 @@ fs_mtime() {
         perl_stat) nut_reload super::fs::impl::perl_stat ;;
     esac
 
-    if [[ -z "$impl" ]]; then
+    if [ -z "$impl" ]; then
         fs_mtime() {
             echo "[ERROR] fs_mtime: no stat tool available" >&2
             return 1
@@ -381,7 +397,7 @@ fs_temp_file() {
     local prefix="${1:-tmp}"
     
     if deps_has "mktemp"; then
-        "${_TOOL_PATH[mktemp]}" "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+        "${_TOOL_PATH_mktemp}" "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
     else
         # Fallback using $$ and RANDOM
         local path="${TMPDIR:-/tmp}/${prefix}.${$}.${RANDOM}"
@@ -396,7 +412,7 @@ fs_temp_dir() {
     local prefix="${1:-tmp}"
     
     if deps_has "mktemp"; then
-        "${_TOOL_PATH[mktemp]}" -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+        "${_TOOL_PATH_mktemp}" -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
     else
         # Fallback using $$ and RANDOM
         local path="${TMPDIR:-/tmp}/${prefix}.${$}.${RANDOM}"
@@ -412,7 +428,7 @@ fs_temp_dir() {
 # Check if fs module is ready to use
 # Usage: fs_ready -> returns 0 if ready, 1 if not
 fs_ready() {
-    [[ "$_FS_READY" == "1" ]]
+    [ "$_FS_READY" = "1" ]
 }
 
 #[pub]

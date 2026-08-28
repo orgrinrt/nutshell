@@ -29,9 +29,17 @@
 #                      which is EX_USAGE from sysexits.h)
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
+# `printf -v`. A file on the floor cannot ask a bash-only function whether it
+# has been loaded: under a POSIX shell the function is not found, the
+# `|| return 0` returns from the whole file, and the module defines nothing
+# while reporting success.
+[ -n "${_NUTSHELL_CLI_SH:-}" ] && return 0
+_NUTSHELL_CLI_SH=1
 
 use string
+use list
+use map
 
 CLI_EXIT_UNKNOWN="${CLI_EXIT_UNKNOWN:-64}"
 
@@ -39,9 +47,13 @@ CLI_EXIT_UNKNOWN="${CLI_EXIT_UNKNOWN:-64}"
 # Registration state
 # -----------------------------------------------------------------------------
 
-declare -ga _CLI_ORDER=()
-declare -gA _CLI_SUMMARY=()
-declare -gA _CLI_HANDLER=()
+# Registration order is a list and the two lookups are maps, so this file
+# needs no bash array and reads on the floor. Command names go through the
+# map's own encoding, so a name holding a dash or a dot is a key like any
+# other.
+list_new _CLI_ORDER
+map_new _CLI_SUMMARY
+map_new _CLI_HANDLER
 _CLI_NAME="${0##*/}"
 _CLI_SUMMARY_LINE=""
 _CLI_EPILOGUE=""
@@ -76,10 +88,14 @@ cli_epilogue() { _CLI_EPILOGUE="$1"; }
 #[pub]
 # Usage: cli_command build "compile everything" do_build -> registers one
 cli_command() {
-    local name="$1" summary="$2" handler="$3"
-    _CLI_ORDER+=("$name")
-    _CLI_SUMMARY["$name"]="$summary"
-    _CLI_HANDLER["$name"]="$handler"
+    _cc_name="$1"; _cc_summary="$2"; _cc_handler="$3"
+    # Registering a name twice keeps one entry in the order, or the help would
+    # list it twice while the second registration silently won the dispatch.
+    if ! map_has _CLI_HANDLER "$_cc_name"; then
+        list_push _CLI_ORDER "$_cc_name"
+    fi
+    map_set _CLI_SUMMARY "$_cc_name" "$_cc_summary"
+    map_set _CLI_HANDLER "$_cc_name" "$_cc_handler"
 }
 
 # -----------------------------------------------------------------------------
@@ -90,21 +106,37 @@ cli_command() {
 # Usage: cli_usage -> prints the whole usage text, commands in registration order
 cli_usage() {
     printf '%s' "$_CLI_NAME"
-    [[ -n "$_CLI_SUMMARY_LINE" ]] && printf ': %s' "$_CLI_SUMMARY_LINE"
+    [ -n "$_CLI_SUMMARY_LINE" ] && printf ': %s' "$_CLI_SUMMARY_LINE"
     printf '\n\nusage: %s <command> [options]\n\n' "$_CLI_NAME"
 
     # Width from the longest name, so the column does not drift as commands
     # are added and nobody has to maintain a magic number.
-    local width=0 name
-    for name in "${_CLI_ORDER[@]}"; do
-        (( ${#name} > width )) && width=${#name}
+    _cu_width=0
+    _cu_n="$(list_len _CLI_ORDER)"
+    _cu_i=0
+    while [ "$_cu_i" -lt "$_cu_n" ]; do
+        list_read _cu_name _CLI_ORDER "$_cu_i"
+        [ "${#_cu_name}" -gt "$_cu_width" ] && _cu_width="${#_cu_name}"
+        _cu_i=$(( _cu_i + 1 ))
     done
 
-    for name in "${_CLI_ORDER[@]}"; do
-        printf '  %-*s  %s\n' "$width" "$name" "${_CLI_SUMMARY[$name]}"
+    # The width goes into the format string rather than through `%-*s`.
+    #
+    # Not because it has to. The comment here used to say POSIX `printf` has no
+    # `*` field width, and that is false: `dash`, `ksh`, `zsh`, `/bin/sh` and
+    # `/usr/bin/printf` all take one, and `check_posix_floor_test.sh` asserts it
+    # in whatever POSIX shell the machine has. Left as it is because it works
+    # and reads fine, and rewriting it would be churn; the claim is corrected
+    # rather than the code.
+    _cu_i=0
+    while [ "$_cu_i" -lt "$_cu_n" ]; do
+        list_read _cu_name _CLI_ORDER "$_cu_i"
+        map_read _cu_sum _CLI_SUMMARY "$_cu_name"
+        printf "  %-${_cu_width}s  %s\n" "$_cu_name" "$_cu_sum"
+        _cu_i=$(( _cu_i + 1 ))
     done
 
-    if [[ -n "$_CLI_EPILOGUE" ]]; then
+    if [ -n "$_CLI_EPILOGUE" ]; then
         printf '\n%s\n' "$_CLI_EPILOGUE"
     fi
 }
@@ -121,18 +153,22 @@ cli_usage() {
 #[pub]
 # Usage: cli_nearest buidl -> "build", or nothing when nothing is close
 cli_nearest() {
-    local input="$1" name best="" best_d=99 d limit
-    limit=2
-    (( ${#input} <= 4 )) && limit=1
+    _cn_input="$1"; _cn_best=""; _cn_best_d=99
+    _cn_limit=2
+    [ "${#_cn_input}" -le 4 ] && _cn_limit=1
 
-    for name in "${_CLI_ORDER[@]}"; do
-        d=$(str_distance "$input" "$name")
-        if (( d <= limit && d < best_d )); then
-            best_d=$d
-            best="$name"
+    _cn_n="$(list_len _CLI_ORDER)"
+    _cn_i=0
+    while [ "$_cn_i" -lt "$_cn_n" ]; do
+        list_read _cn_name _CLI_ORDER "$_cn_i"
+        _cn_d="$(str_distance "$_cn_input" "$_cn_name")"
+        if [ "$_cn_d" -le "$_cn_limit" ] && [ "$_cn_d" -lt "$_cn_best_d" ]; then
+            _cn_best_d="$_cn_d"
+            _cn_best="$_cn_name"
         fi
+        _cn_i=$(( _cn_i + 1 ))
     done
-    printf '%s' "$best"
+    printf '%s' "$_cn_best"
 }
 
 # -----------------------------------------------------------------------------
@@ -146,24 +182,23 @@ cli_nearest() {
 #[pub]
 # Usage: cli_run "$@" -> dispatches, or explains and exits 64
 cli_run() {
-    local cmd="${1:-}"
+    _cr_cmd="${1:-}"
 
-    if [[ -z "$cmd" || "$cmd" == "help" || "$cmd" == "-h" || "$cmd" == "--help" ]]; then
-        cli_usage
-        return 0
-    fi
+    case "$_cr_cmd" in
+        "" | help | -h | --help ) cli_usage; return 0 ;;
+    esac
 
-    if [[ -n "${_CLI_HANDLER[$cmd]:-}" ]]; then
+    if map_has _CLI_HANDLER "$_cr_cmd"; then
+        map_read _cr_fn _CLI_HANDLER "$_cr_cmd"
         shift
-        "${_CLI_HANDLER[$cmd]}" "$@"
+        "$_cr_fn" "$@"
         return $?
     fi
 
-    printf '%s: no command %s\n' "$_CLI_NAME" "'$cmd'" >&2
-    local near
-    near="$(cli_nearest "$cmd")"
-    if [[ -n "$near" ]]; then
-        printf "did you mean '%s'?\n" "$near" >&2
+    printf '%s: no command %s\n' "$_CLI_NAME" "'$_cr_cmd'" >&2
+    _cr_near="$(cli_nearest "$_cr_cmd")"
+    if [ -n "$_cr_near" ]; then
+        printf "did you mean '%s'?\n" "$_cr_near" >&2
     else
         printf "try '%s help'\n" "$_CLI_NAME" >&2
     fi

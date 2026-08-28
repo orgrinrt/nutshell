@@ -41,7 +41,7 @@ _NUTSHELL_DEPS_SH=1
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
-use os
+use os key
 
 # -----------------------------------------------------------------------------
 # Configuration file location
@@ -156,84 +156,27 @@ _TOOLS_AVAILABLE=""
 # set, and there is no `${!table[@]}` to ask any more.
 _TOOL_CAN_NAMES=""
 
-# A tool or capability name, as the tail of a variable name. One-to-one.
-#
-# A name that is already `[A-Za-z0-9_]` and does not begin `enc_` is used as
-# itself, so `${_TOOL_PATH_jq}` and `${_TOOL_PATH_grep_pcre}` stay plain
-# expansions and the sixteen modules reading them literally pay nothing.
-#
-# Anything else is hex-encoded whole, behind `enc_`. A name that is safe but
-# begins `enc_` takes the encoded path too, which is what makes the mapping
-# one-to-one: without that, a tool genuinely called `enc_706b67` would collide
-# with `pkg` and one of them would read the other's path.
-#
-# Refusing instead was tried and was wrong. `deps_has` is documented to look up
-# anything not in the eager list, and half the binaries worth asking about have
-# a hyphen or a digit in them: `pkg-config`, `git-lfs`, `7z`. Refusing made
-# `deps_has pkg-config` answer yes with an empty path, which is the one outcome
-# that is worse than either alternative.
-_deps_key() {
-    case "${1:-}" in
-        "" ) _dk=""; return 1 ;;
-        enc_* ) : ;;
-        [0-9]* ) : ;;
-        *[!A-Za-z0-9_]* ) : ;;
-        * ) _dk="$1"; return 0 ;;
-    esac
-    # Bytes, not characters, and that is what `LC_ALL=C` is for.
-    #
-    # `printf '%d' "'c"` gives a codepoint and `%02x` is a minimum width rather
-    # than a fixed one, so a character above U+00FF produces four hex digits
-    # and the concatenation stops being prefix-free. `€` is `20ac`; so is a
-    # space followed by `¬`. Two names, one variable, and the second reads the
-    # first's path. Under `LC_ALL=C` both the character walk and the numeric
-    # conversion go byte-wise, every byte is exactly two digits, and the
-    # property holds.
-    _dk_loc="${LC_ALL:-}"
-    LC_ALL=C
-    _dk="enc_"
-    _dk_in="$1"
-    while [ -n "$_dk_in" ]; do
-        _dk_c="${_dk_in%"${_dk_in#?}"}"
-        _dk_in="${_dk_in#?}"
-        _deps_hex "$_dk_c"
-        _dk="${_dk}${_dh}"
-    done
-    LC_ALL="$_dk_loc"
-    [ -n "$_dk_loc" ] || unset LC_ALL
-    return 0
-}
+# The key encoder lives in `key.sh` now, because it was never about tools: it
+# turns any string into the tail of a variable name, and `use` needs the same
+# thing for its loaded table. `_deps_key` here is the old spelling, kept as one
+# line so the sixteen call sites below do not all have to change at once.
+_deps_key() { nut_key "$1" || return 1; _dk="$_nk"; return 0; }
 
-# One byte as two hex digits, without a fork.
+# _deps_set_variant <tool> <path>
 #
-# It ran two command substitutions per byte, which is the pattern taken out of
-# `lib/map.sh` in the same branch. The table covers what a tool name actually
-# holds; anything else falls back to the fork and is rare enough not to matter.
-_deps_hex() {
+# Which flavour of a tool this is, recorded where the dispatchers look. It was
+# inline in the eager scan and is a function because `deps_has` resolves a tool
+# too, and a tool resolved that way had no variant at all: `fs.sh` reads
+# `${_TOOL_VARIANT_stat:-unknown}` and takes a `uname` guess when it is empty,
+# so a lazily resolved `stat` silently took the fallback path.
+_deps_set_variant() {
     case "$1" in
-        -) _dh=2d ;;  .) _dh=2e ;;  +) _dh=2b ;;  '~') _dh=7e ;;
-        0) _dh=30 ;;  1) _dh=31 ;;  2) _dh=32 ;;  3) _dh=33 ;;  4) _dh=34 ;;
-        5) _dh=35 ;;  6) _dh=36 ;;  7) _dh=37 ;;  8) _dh=38 ;;  9) _dh=39 ;;
-        a) _dh=61 ;;  b) _dh=62 ;;  c) _dh=63 ;;  d) _dh=64 ;;  e) _dh=65 ;;  f) _dh=66 ;;
-        g) _dh=67 ;;  h) _dh=68 ;;  i) _dh=69 ;;  j) _dh=6a ;;  k) _dh=6b ;;  l) _dh=6c ;;
-        m) _dh=6d ;;  n) _dh=6e ;;  o) _dh=6f ;;  p) _dh=70 ;;  q) _dh=71 ;;  r) _dh=72 ;;
-        s) _dh=73 ;;  t) _dh=74 ;;  u) _dh=75 ;;  v) _dh=76 ;;  w) _dh=77 ;;  x) _dh=78 ;;
-        y) _dh=79 ;;  z) _dh=7a ;;
-        A) _dh=41 ;;  B) _dh=42 ;;  C) _dh=43 ;;  D) _dh=44 ;;  E) _dh=45 ;;  F) _dh=46 ;;
-        G) _dh=47 ;;  H) _dh=48 ;;  I) _dh=49 ;;  J) _dh=4a ;;  K) _dh=4b ;;  L) _dh=4c ;;
-        M) _dh=4d ;;  N) _dh=4e ;;  O) _dh=4f ;;  P) _dh=50 ;;  Q) _dh=51 ;;  R) _dh=52 ;;
-        S) _dh=53 ;;  T) _dh=54 ;;  U) _dh=55 ;;  V) _dh=56 ;;  W) _dh=57 ;;  X) _dh=58 ;;
-        Y) _dh=59 ;;  Z) _dh=5a ;;
-        _) _dh=5f ;;
-        # Anything left: a byte this table does not name. Two nested command
-        # substitutions, which is two subshells per character, and the reason
-        # everything above is written out.
-        #
-        # It used to be the only arm for a letter, so `pkg-config` cost
-        # eighteen subshells to key once, on a path `deps_has` takes for every
-        # tool whose name is not already a variable name. `printf` is a builtin
-        # and costs nothing; the substitution around it is the fork.
-        *) _dh="$(printf '%02x' "$(printf '%d' "'$1")")" ;;
+        sed)  _deps_set VARIANT "$1" "$(_deps_detect_sed_variant "$2")" ;;
+        awk)  _deps_set VARIANT "$1" "$(_deps_detect_awk_variant "$2")" ;;
+        grep) _deps_set VARIANT "$1" "$(_deps_detect_grep_variant "$2")" ;;
+        stat) _deps_set VARIANT "$1" "$(_deps_detect_stat_variant "$2")" ;;
+        find) _deps_set VARIANT "$1" "$(_deps_detect_find_variant "$2")" ;;
+        *)    _deps_set VARIANT "$1" standard ;;
     esac
 }
 
@@ -568,28 +511,46 @@ _deps_init() {
     local available=""
     local tool path variant
 
+    # The scan does not run here. It is `_deps_scan_all`, and it runs when
+    # somebody asks a question only a full scan can answer.
+    #
+    # Resolving all eighteen at load time cost 125ms of a 148ms module load, on
+    # a path every consumer of `fs` and `text` takes because they declare
+    # `use deps`. `deps_has` already resolves a tool it has not seen, records
+    # it, and remembers a miss, so the eager pass was a prefetch of answers
+    # most callers never ask for.
+    #
+    # `benches/startup` measured the same thing from the other end and its
+    # findings say so: almost none of the load cost is what a shaker can
+    # remove, because `use deps` alone was 209ms of a 225ms library load.
+    return 0
+}
+
+# Every tool, resolved. What the load used to do, now asked for.
+#
+# Only two questions need it: what is available, and which capabilities are
+# present. Both are whole-table questions and neither is asked by a module
+# picking an implementation.
+# What it costs to be called inside a command substitution, which is worth
+# stating because it is not obvious and it bit the test that pins capabilities:
+# a substitution is a subshell, so the scan happens there and the parent keeps
+# none of it. `x="$(deps_available)"` therefore scans every time it is called.
+#
+# The hot path is unaffected, because it is not a substitution: a dispatcher
+# calls `deps_has` directly and the answer it records stays in the shell that
+# recorded it. Only the two whole-table questions go through a substitution,
+# and neither is asked in a loop.
+_deps_scan_all() {
+    [ "${_DEPS_SCANNED:-0}" = "1" ] && return 0
+    _DEPS_SCANNED=1
+    local tools="sed awk grep perl stat mktemp find sort wc tr
+        head tail dirname basename uname cut tee xargs"
+    local tool
     for tool in $tools; do
-        if path="$(_deps_find_tool "$tool" "$config_file")"; then
-            _deps_set PATH "$tool" "$path"
-            available="${available} ${tool}"
-            
-            # Detect variant for tools that have meaningful variants
-            case "$tool" in
-                sed)  _deps_set VARIANT "$tool" "$(_deps_detect_sed_variant "$path")" ;;
-                awk)  _deps_set VARIANT "$tool" "$(_deps_detect_awk_variant "$path")" ;;
-                grep) _deps_set VARIANT "$tool" "$(_deps_detect_grep_variant "$path")" ;;
-                stat) _deps_set VARIANT "$tool" "$(_deps_detect_stat_variant "$path")" ;;
-                find) _deps_set VARIANT "$tool" "$(_deps_detect_find_variant "$path")" ;;
-                *)    _deps_set VARIANT "$tool" standard ;;
-            esac
-        fi
+        deps_has "$tool" >/dev/null 2>&1 || true
     done
-    
-    # Build space-separated available list
-    _TOOLS_AVAILABLE="${available# }"
-    
-    # Detect capabilities based on what we found
     _deps_detect_capabilities
+    return 0
 }
 
 # Run initialization immediately
@@ -631,6 +592,7 @@ deps_has() {
     local path
     if path="$(_deps_find_tool "$tool" "$_DEPS_CONFIG")"; then
         _deps_set PATH "$tool" "$path"
+        _deps_set_variant "$tool" "$path"
         _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"
         return 0
     fi
@@ -668,6 +630,8 @@ deps_has_any() {
 # Get the list of available tools (space-separated)
 # Usage: deps_available -> "sed awk grep perl stat..."
 deps_available() {
+    # The only question that needs every answer, so it is the one that pays.
+    _deps_scan_all
     echo "$_TOOLS_AVAILABLE"
 }
 
@@ -694,6 +658,10 @@ deps_path() {
 # Usage: deps_variant "sed" -> "gnu" or "bsd"
 deps_variant() {
     local tool="${1:-}"
+    # Resolve first. The variant is set when a tool is found, and finding is
+    # lazy now, so asking about a tool nobody has asked for reads an empty
+    # table and answers `unknown` rather than the truth.
+    deps_has "$tool" >/dev/null 2>&1 || true
     local _v; _deps_get _v VARIANT "$tool"
     echo "${_v:-unknown}"
 }
@@ -703,6 +671,7 @@ deps_variant() {
 # Usage: deps_is_gnu "sed" -> returns 0 or 1
 deps_is_gnu() {
     local tool="${1:-}"
+    deps_has "$tool" >/dev/null 2>&1 || true
     local variant; _deps_get variant VARIANT "$tool"
     [ "$variant" = "gnu" ] || [ "$variant" = "gawk" ]
 }
@@ -712,6 +681,7 @@ deps_is_gnu() {
 # Usage: deps_is_bsd "sed" -> returns 0 or 1
 deps_is_bsd() {
     local tool="${1:-}"
+    deps_has "$tool" >/dev/null 2>&1 || true
     local variant; _deps_get variant VARIANT "$tool"
     [ "$variant" = "bsd" ]
 }
@@ -724,6 +694,9 @@ deps_is_bsd() {
 # Check if a capability is available
 # Usage: deps_can "grep_pcre" -> returns 0 or 1
 deps_can() {
+    # Capabilities are probed against the tools that were found, so the scan
+    # has to have happened. It is once per process.
+    _deps_scan_all
     local cap="${1:-}"
     local _c; _deps_get _c CAN "$cap"
     [ "${_c:-0}" = "1" ]
@@ -733,6 +706,11 @@ deps_can() {
 # Get capability value (1 or 0)
 # Usage: deps_cap "grep_pcre" -> "1" or "0"
 deps_cap() {
+    # The scan, for the same reason `deps_can` needs it: capabilities are
+    # probed against the tools that were found. One letter apart from
+    # `deps_can` and it was the one that did not, which is exactly where this
+    # went wrong.
+    _deps_scan_all
     local cap="${1:-}"
     local _c; _deps_get _c CAN "$cap"
     echo "${_c:-0}"
@@ -742,6 +720,7 @@ deps_cap() {
 # List all capabilities (one per line: cap=value)
 # Usage: deps_caps -> "sed_inplace=1\ngrep_pcre=1\n..."
 deps_caps() {
+    _deps_scan_all
     local cap _c
     for cap in $_TOOL_CAN_NAMES; do
         _deps_get _c CAN "$cap"

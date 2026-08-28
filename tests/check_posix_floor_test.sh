@@ -411,3 +411,53 @@ GOOD
     rm -f "$f"
     assert_eq "$hits" ""
 }
+
+#[test]
+# `$$` before a closing quote is a process id, not an ANSI-C quote.
+#
+# The rule was a bare `\$'`, which matches the last two characters of
+# `kill -INT $$'` and reported a trap handler in `the-whole-shebang` as a
+# bashism. A false positive here costs more than a missed one: somebody goes
+# looking for a construct that is not there, and the next false report gets
+# assumed to be another.
+it_does_not_read_a_pid_before_a_quote_as_an_ansi_c_quote() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'GOOD'
+trap 'x; kill -INT $$' INT
+b="pid is $$"
+GOOD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_eq "$hits" ""
+}
+
+#[test]
+# And the control: a real ANSI-C quote is still reported. Narrowing a rule
+# until it stops firing is the failure this pairs against.
+it_still_reports_a_real_ansi_c_quote() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'BAD'
+a=$'\033'
+c=$'\t'
+BAD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_ne "$hits" "" "an ANSI-C quote was not reported"
+}
+
+#[test]
+# `%-*s` is not a bashism, and the rule that said it was is gone.
+#
+# A commit adding that rule stated "POSIX `printf` has no `*` field width",
+# and `cli.sh` was written around it: the column width goes into the format
+# string rather than through `%-*s`, with a comment repeating the claim.
+#
+# Measured, it is wrong. `dash`, `ksh`, `zsh`, `/bin/sh` and `/usr/bin/printf`
+# all take it. This asserts it in whatever POSIX shell the machine has, so the
+# rule comes back the day one of them does not, rather than the claim being
+# reinstated from memory.
+it_takes_a_star_field_width_in_a_posix_shell() {
+    local sh; sh="$(_posix_shell)" || { skip "no posix shell here"; return 0; }
+    assert_eq "$("$sh" -c 'printf "[%-*s]" 6 hi')" "[hi    ]"
+    assert_eq "$("$sh" -c 'printf "[%*d]" 5 42')"  "[   42]"
+}

@@ -207,8 +207,7 @@ _posix_bashisms() {
         -e 'set[[:space:]]+-o[[:space:]]+pipefail' \
         -e '[^0-9&>]&>' \
         -e '\$\{[A-Za-z0-9_]+(\^\^|,,)' \
-        -e '%[-0-9]*\*[sd]' \
-        -e "\\$'" \
+        -e "(^|[^\\$])\\$'" \
         -e 'BASH_[A-Z]' \
         -e '(mapfile|readarray)[[:space:]]' \
         -e '(^|[[:space:];&|])nut_once([[:space:]]|$)' \

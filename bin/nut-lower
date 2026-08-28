@@ -252,8 +252,8 @@ _nl_emit() {
     for m in "${_NL_NAMES[@]}"; do
         real="$(_nut_realpath "${_NL_ORDER[$i]}" 2>/dev/null)" || real="${_NL_ORDER[$i]}"
         [[ -n "$real" ]] || real="${_NL_ORDER[$i]}"
-        printf '_NUTSHELL_LOADED["%s"]=1\n' "$real"
-        printf '_NUTSHELL_LOADED_AS["%s"]="%s"\n' "$m" "$real"
+        printf '_nut_loaded_set LOADED "%s" 1\n' "$real"
+        printf '_nut_loaded_set LOADED_AS "%s" "%s"\n' "$m" "$real"
         i=$(( i + 1 ))
     done
     printf '\n'

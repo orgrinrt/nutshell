@@ -19,6 +19,7 @@ fs::impl::stat_bsd       lib/fs/impl/stat_bsd.sh      internal
 fs::impl::stat_gnu       lib/fs/impl/stat_gnu.sh      internal
 git                      lib/git.sh
 http                     lib/http.sh
+key                      lib/key.sh
 json                     lib/json.sh
 json::impl::jq           lib/json/impl/jq.sh          internal
 json::impl::perl         lib/json/impl/perl.sh        internal

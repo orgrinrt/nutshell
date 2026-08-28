@@ -171,9 +171,9 @@ it_resolves_a_tool_whose_name_is_not_a_variable_name() {
     # available list grew by one word per call when the write was silently
     # failing.
     local before after
-    before="$(printf '%s' "$_TOOLS_AVAILABLE" | wc -w | tr -d ' ')"
+    before="$(deps_available | wc -w | tr -d ' ')"
     deps_has pkg-config; deps_has pkg-config; deps_has pkg-config
-    after="$(printf '%s' "$_TOOLS_AVAILABLE" | wc -w | tr -d ' ')"
+    after="$(deps_available | wc -w | tr -d ' ')"
     assert_eq "$after" "$before"
 }
 
@@ -211,6 +211,11 @@ it_lists_only_the_capabilities_that_were_set() {
     # capability nobody set was absent rather than zero. Walking a fixed list
     # of every known capability instead would report the unset ones as zero,
     # which is a different answer, and this pins the one it gives.
+    # The scan first, in this shell. `caps="$(deps_caps)"` puts it in a
+    # subshell, so the parent's `_TOOL_CAN_NAMES` stays empty and the two
+    # counts below compare seventeen against nothing. Detection is lazy now and
+    # a substitution does not carry what it learned back out.
+    _deps_scan_all
     local caps; caps="$(deps_caps)"
     assert_ne "$caps" ""
     local n; n="$(printf '%s\n' "$caps" | wc -l | tr -d ' ')"
@@ -259,7 +264,8 @@ _dt_posix_sh() {
 # on its own.
 _dt_under() {
     local sh="$1" expr="$2"
-    "$sh" -c '. "$1/lib/os.sh" >/dev/null 2>&1
+    "$sh" -c '. "$1/lib/key.sh" >/dev/null 2>&1
+              . "$1/lib/os.sh" >/dev/null 2>&1
               . "$1/lib/deps.sh" >/dev/null 2>&1
               eval "$2"' _ "$NUTSHELL_ROOT" "$expr" 2>&1
 }
@@ -278,7 +284,10 @@ it_reads_under_a_posix_shell() {
 # parse said so.
 it_finds_the_same_tools_under_both_shells() {
     local sh; sh="$(_dt_posix_sh)"
-    local expr='printf "%s" "$_TOOLS_AVAILABLE" | wc -w | tr -d " "'
+    # `deps_available` rather than the variable behind it. Detection is lazy
+    # now, so the variable holds what has been asked for and the function is
+    # what means "everything".
+    local expr='deps_available | wc -w | tr -d " "'
     local p b
     p="$(_dt_under "$sh" "$expr")"
     b="$(_dt_under bash "$expr")"
@@ -303,7 +312,7 @@ it_does_not_leak_a_backgrounded_command_into_a_tool_path() {
     local t
     for t in sed grep awk; do
         local got n
-        got="$(_dt_under "$sh" "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        got="$(_dt_under "$sh" "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
         assert_ne "$got" "" "no path resolved for $t"
         n="$(printf '%s' "$got" | wc -l | tr -d ' ')"
         assert_eq "$n" "0" "the path for $t is more than one line: [$got]"
@@ -318,68 +327,53 @@ it_resolves_the_same_paths_under_both_shells() {
     local t
     for t in sed grep awk stat; do
         local p b
-        p="$(_dt_under "$sh"  "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
-        b="$(_dt_under bash   "printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        p="$(_dt_under "$sh"  "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
+        b="$(_dt_under bash   "deps_has ${t} >/dev/null; printf '%s' \"\${_TOOL_PATH_${t}:-}\"")"
         assert_eq "$p" "$b" "$t resolved differently"
     done
 }
 
+
+
 #[test]
-# Every character the hex table names, against what that character actually is.
+# Every public function answers from a cold shell, with nothing asked first.
 #
-# The table is fifty-odd arms written by hand, so a typo in one of them is the
-# real risk and it would be silent: a wrong hex digit still produces a valid
-# variable name, so the tool resolves to the wrong entry or to nothing, and
-# nothing anywhere says a byte was mis-encoded.
+# Detection is lazy, so a function reading the VARIANT or CAN table answers
+# from an empty table unless it resolves first. Four did not: `deps_variant`,
+# `deps_is_gnu`, `deps_is_bsd` and `deps_cap`. They returned `unknown`, false,
+# false and `0`, with no error, and the suite stayed green at 785 because no
+# caller in this tree uses any of them. The break was confined to the public
+# surface, which is the one place a suite cannot speak for.
 #
-# So the expectation is computed rather than written down. `printf '%d' "'c"`
-# is the same answer from a different mechanism, which is the point: a table
-# checked against a copy of itself checks nothing.
-it_encodes_every_character_as_that_character() {
-    local c n want
-    for c in a b c d e f g h i j k l m n o p q r s t u v w x y z \
-             A B C D E F G H I J K L M N O P Q R S T U V W X Y Z \
-             0 1 2 3 4 5 6 7 8 9 - . + '~' _; do
-        _deps_hex "$c"
-        n="$(printf '%d' "'$c")"
-        want="$(printf '%02x' "$n")"
-        assert_eq "$_dh" "$want" "the table says $c is $_dh and it is $want"
-    done
+# So this asks each of them in a shell that has done nothing else, which is the
+# only state that distinguishes resolving from reading what somebody else
+# resolved. `stat` and `sed` are used because both carry a real variant here.
+it_answers_from_a_cold_shell_without_being_primed() {
+    local root; root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    local one
+    one() {
+        bash -c '. "$1"/init >/dev/null 2>&1; use deps; shift; eval "$*"' _ "$root" "$@" 2>&1
+    }
+
+    # A variant, through all three doors that report one.
+    assert_eq "$(one 'deps_variant stat')" "$(one 'deps_scan_first=1; _deps_scan_all; deps_variant stat')"
+    assert_ne "$(one 'deps_variant stat')" "unknown"
+    assert_ok   bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_bsd stat || deps_is_gnu stat' _ "$root"
+
+    # And a capability, which reads the other table.
+    assert_ne "$(one 'deps_cap stat_format')" "0"
+    assert_ok bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_can stat_format' _ "$root"
 }
 
 #[test]
-# The fallback still works, for a byte the table does not name.
+# The control, and it is what stops the fix above from being "scan everywhere".
 #
-# The table exists to keep the common path out of a subshell, not to replace
-# the general answer. A character outside it has to keep encoding correctly or
-# the one-to-one property the whole scheme rests on stops holding.
-it_still_encodes_a_character_the_table_does_not_name() {
-    local c
-    for c in '%' '@' '!' ':'; do
-        _deps_hex "$c"
-        assert_eq "$_dh" "$(printf '%02x' "$(printf '%d' "'$c")")"
-    done
-}
-
-#[test]
-# Keying a hyphenated name reaches no subshell.
-#
-# It reached eighteen: two nested command substitutions per character, and
-# every letter took that arm because only the digits and four punctuation marks
-# were named. `deps_has` takes this path for every tool whose name is not
-# already a variable name, which is most of the interesting ones.
-#
-# Asserted as a time rather than a fork count, because a shell cannot count its
-# own forks. The bound is loose on purpose: eighteen subshells measured about
-# 8.8ms per key and the table about 0.4ms, so anything under 3ms says the forks
-# are gone without the test failing on a slow machine.
-it_keys_a_hyphenated_name_without_forking_per_character() {
-    local t0 t1 per
-    t0="$(date +%s%N 2>/dev/null)" || { skip "no nanosecond clock"; return 0; }
-    local i=0
-    while [ "$i" -lt 100 ]; do _deps_key pkg-config; i=$((i+1)); done
-    t1="$(date +%s%N)"
-    per=$(( (t1 - t0) / 100 / 1000 ))
-    assert_eq "$_dk" "enc_706b672d636f6e666967"
-    assert_ok test "$per" -lt 3000
+# A tool that is not there still answers, and answers no, rather than hanging
+# or erroring on the resolve that now sits in front of these.
+it_still_answers_no_for_a_tool_that_is_not_there() {
+    local root; root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    assert_eq "$(bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_variant definitely_not_a_tool' _ "$root" 2>&1)" "unknown"
+    assert_fails bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_bsd definitely_not_a_tool' _ "$root"
+    assert_fails bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_gnu definitely_not_a_tool' _ "$root"
+    assert_eq "$(bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_cap no_such_capability' _ "$root" 2>&1)" "0"
 }

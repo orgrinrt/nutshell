@@ -119,12 +119,12 @@ it_rewrites_super_away() {
 # so rather than asserting it of every lowering.
 it_registers_what_it_contains_when_the_dispatch_is_left_to_run() {
     _lower_to --no-shake --no-prebind
-    assert_contains "$(cat "$_LOW_OUT")" '_NUTSHELL_LOADED['
+    assert_contains "$(cat "$_LOW_OUT")" '_nut_loaded_set LOADED'
     assert_not_contains "$(cat "$_LOW_OUT")" 'use() { return 0; }'
     # Every registration before any body, or anything reading up to the first
     # module marker sees only one of them.
     local firstreg firstmod
-    firstreg="$(grep -n '_NUTSHELL_LOADED\[' "$_LOW_OUT" | tail -1 | cut -d: -f1)"
+    firstreg="$(grep -n '_nut_loaded_set LOADED' "$_LOW_OUT" | tail -1 | cut -d: -f1)"
     firstmod="$(grep -n '^# --- ' "$_LOW_OUT" | head -1 | cut -d: -f1)"
     assert_ok test "$firstreg" -lt "$firstmod"
     _lower_done
@@ -304,7 +304,7 @@ it_produces_a_file_a_posix_shell_can_run() {
 
     # No `init`, and none of the tables that need an associative array.
     assert_fails grep -q '/init"' "$_LOW_OUT"
-    assert_fails grep -q '_NUTSHELL_LOADED\[' "$_LOW_OUT"
+    assert_fails grep -q '_nut_loaded_set LOADED' "$_LOW_OUT"
 
     assert_ok "$sh" -n "$_LOW_OUT"
 
@@ -448,14 +448,14 @@ it_never_fails_inside_its_own_preamble() {
 # A ratchet on how many closures a POSIX shell will take, so the number can
 # only move one way.
 #
-# Thirteen of twenty-eight today, eleven without the shaking. That is a fact about
+# Fourteen of twenty-nine today, twelve without the shaking. That is a fact about
 # the modules nobody has converted rather than about the lowering, and it is
 # written down here because it was previously asserted nowhere: the two tests
 # above lower `os` and `string`, which are two of the ones that already pass.
 #
 # It was six and five when this was written. `deps` took it to ten, because six
 # closures were failing inside that one file, `validate` to twelve, and
-# `attr` to thirteen.
+# `attr` to thirteen, and retiring `nut_once` to fourteen.
 #
 # Raise the floor when modules land. Never lower it.
 it_ratchets_how_many_closures_reach_the_floor() {
@@ -477,15 +477,15 @@ it_ratchets_how_many_closures_reach_the_floor() {
 
     # Spelled as comparisons rather than bare counts, so a failure names the
     # number it got and the number it owed instead of reporting that 4 is not 6.
-    local v="ok"; [ "$shaken" -lt 13 ] && v="only ${shaken} of ${total} shaken"
-    assert_eq "$v" "ok" "the shaken floor dropped below thirteen"
+    local v="ok"; [ "$shaken" -lt 14 ] && v="only ${shaken} of ${total} shaken"
+    assert_eq "$v" "ok" "the shaken floor dropped below fourteen"
 
-    v="ok"; [ "$whole" -lt 11 ] && v="only ${whole} of ${total} whole"
-    assert_eq "$v" "ok" "the unshaken floor dropped below eleven"
+    v="ok"; [ "$whole" -lt 12 ] && v="only ${whole} of ${total} whole"
+    assert_eq "$v" "ok" "the unshaken floor dropped below twelve"
 
     # Dropping what nothing calls can only help a POSIX shell, never hurt it:
     # an unconverted function nobody reaches stops being a parse error when it
-    # stops being in the file. Thirteen against eleven today, and the
+    # stops being in the file. Fourteen against twelve today, and the
     # direction is the part that has to hold.
     v="ok"; [ "$shaken" -lt "$whole" ] && v="shaken ${shaken} < whole ${whole}"
     assert_eq "$v" "ok" "shaking made fewer closures parse, which it cannot do"

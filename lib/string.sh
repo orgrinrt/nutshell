@@ -9,7 +9,12 @@
 # =============================================================================
 
 # Prevent multiple inclusion
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE`
+# and so needs bash. Under a POSIX shell it is not found, the
+# `|| return 0` beside it fires on every load, and the module reports
+# success having defined nothing.
+[ -n "${_NUTSHELL_STRING_SH:-}" ] && return 0
+_NUTSHELL_STRING_SH=1
 
 # -----------------------------------------------------------------------------
 # Public API

@@ -62,7 +62,7 @@ bash = []
 # cargo's shape, and `[bin]` is a map the way package.json's is.
 [package]
 name = "nutshell"
-version = "0.6.3"
+version = "0.7.0"
 description = "A bash library: modules with a manifest, a QA gate, and dependency resolution."
 license = "MPL-2.0"
 repository = "https://github.com/orgrinrt/nutshell"

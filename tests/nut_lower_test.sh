@@ -119,12 +119,12 @@ it_rewrites_super_away() {
 # so rather than asserting it of every lowering.
 it_registers_what_it_contains_when_the_dispatch_is_left_to_run() {
     _lower_to --no-shake --no-prebind
-    assert_contains "$(cat "$_LOW_OUT")" '_NUTSHELL_LOADED['
+    assert_contains "$(cat "$_LOW_OUT")" '_nut_loaded_set LOADED'
     assert_not_contains "$(cat "$_LOW_OUT")" 'use() { return 0; }'
     # Every registration before any body, or anything reading up to the first
     # module marker sees only one of them.
     local firstreg firstmod
-    firstreg="$(grep -n '_NUTSHELL_LOADED\[' "$_LOW_OUT" | tail -1 | cut -d: -f1)"
+    firstreg="$(grep -n '_nut_loaded_set LOADED' "$_LOW_OUT" | tail -1 | cut -d: -f1)"
     firstmod="$(grep -n '^# --- ' "$_LOW_OUT" | head -1 | cut -d: -f1)"
     assert_ok test "$firstreg" -lt "$firstmod"
     _lower_done
@@ -304,7 +304,7 @@ it_produces_a_file_a_posix_shell_can_run() {
 
     # No `init`, and none of the tables that need an associative array.
     assert_fails grep -q '/init"' "$_LOW_OUT"
-    assert_fails grep -q '_NUTSHELL_LOADED\[' "$_LOW_OUT"
+    assert_fails grep -q '_nut_loaded_set LOADED' "$_LOW_OUT"
 
     assert_ok "$sh" -n "$_LOW_OUT"
 

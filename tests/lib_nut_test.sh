@@ -561,6 +561,9 @@ OFF"
 _ln_features() {
     local d; d="$(mktemp -d)"
     cp "${BASH_SOURCE[0]%/*}/../init" "$d/init"
+    #  sources the key encoder by path, so a copy of it needs one too.
+    mkdir -p "$d/lib"
+    cp "${BASH_SOURCE[0]%/*}/../lib/key.sh" "$d/lib/key.sh"
     printf '%s' "$1" > "$d/nut.toml"
     printf '%s' "$d"
 }

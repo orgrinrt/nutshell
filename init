@@ -102,6 +102,20 @@ unset NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
 export PATH="${_NUTSHELL_ROOT}/bin:$PATH"
 
 # =============================================================================
+# The key encoder, before anything that keys on a string
+# =============================================================================
+#
+# Sourced by path rather than declared, because `use` is defined below it and
+# a module cannot be asked for by the thing that has not defined asking yet.
+# The path is fixed and the file guards itself, so a later `use key` is a
+# no-op rather than a second load.
+# shellcheck source=/dev/null
+. "${_NUTSHELL_ROOT}/lib/key.sh" || {
+    printf 'nutshell: cannot load %s/lib/key.sh\n' "$_NUTSHELL_ROOT" >&2
+    return 1 2>/dev/null || exit 1
+}
+
+# =============================================================================
 # Module tracking
 # =============================================================================
 
@@ -110,9 +124,37 @@ export PATH="${_NUTSHELL_ROOT}/bin:$PATH"
 # `super::tui::key`, a consumer calls it `shebang::tui::key`, and both are the
 # same file. Keyed by the spelling, each of those loaded it again, and a module
 # without a guard of its own ran twice.
-declare -gA _NUTSHELL_LOADED=() 2>/dev/null || declare -A _NUTSHELL_LOADED=()
+# One variable per entry, keyed by `nut_key`, plus a list of the keys.
+#
+# The list is there because `${!table[@]}` has no POSIX equivalent and two
+# readers need to walk what is loaded: `nutshell_modules` reports it and
+# `nut_reload` has to find every name that reached one file. `deps.sh` keeps
+# `_TOOL_CAN_NAMES` for exactly the same reason.
+_NUT_LOADED_KEYS=""
 # The names that reached each file, so `nutshell_loaded <name>` still answers.
-declare -gA _NUTSHELL_LOADED_AS=() 2>/dev/null || declare -A _NUTSHELL_LOADED_AS=()
+_NUT_LOADED_AS_KEYS=""
+
+# _nut_loaded_set <table> <key> <value>, and the key goes in the list once.
+_nut_loaded_set() {
+    nut_key "$2" || return 1
+    eval "_NUT_${1}_${_nk}=\$3"
+    eval "case \" \$_NUT_${1}_KEYS \" in *\" \$_nk \"*) ;; *) _NUT_${1}_KEYS=\"\${_NUT_${1}_KEYS} \$_nk\" ;; esac"
+}
+
+# _nut_loaded_get <table> <key>, into `_nl`
+_nut_loaded_get() {
+    _nl=""
+    nut_key "$2" || return 1
+    eval "_nl=\"\${_NUT_${1}_${_nk}:-}\""
+    [ -n "$_nl" ]
+}
+
+# _nut_loaded_unset <table> <key>
+_nut_loaded_unset() {
+    nut_key "$2" || return 1
+    eval "unset _NUT_${1}_${_nk}"
+    eval "_NUT_${1}_KEYS=\"\$(printf '%s' \" \${_NUT_${1}_KEYS} \" | sed \"s/ \${_nk} / /\")\""
+}
 
 # nut_once
 #
@@ -137,7 +179,7 @@ nut_once() {
     printf -v "$key" '%s' 1
     # What `use` knows and what this knows are the same fact, so record it
     # where `use` looks as well.
-    _NUTSHELL_LOADED[$src]=1
+    _nut_loaded_set LOADED "$src" 1
     return 0
 }
 
@@ -176,7 +218,7 @@ use() {
         # first unit's entry, loaded nothing, and returned 0 -- the module
         # simply was not there, and nothing said so.
         if [[ "$mod" != super::* ]]; then
-            [[ -n "${_NUTSHELL_LOADED_AS[$mod]:-}" ]] && continue
+            _nut_loaded_get LOADED_AS "$mod" && continue
         fi
         
         # Where it is. One resolver, so `use` and `nut_reload` cannot come to
@@ -196,13 +238,13 @@ use() {
             local _real
             _real="$(_nut_realpath "$mod_path")" || _real="$mod_path"
 
-            if [[ -n "${_NUTSHELL_LOADED[$_real]:-}" ]]; then
+            if _nut_loaded_get LOADED "$_real"; then
                 # Recorded under a key that carries the unit, so one unit's
                 # answer is never handed to another's question.
                 if [[ "$mod" == super::* ]]; then
-                    _NUTSHELL_LOADED_AS["${_real}::${mod}"]="$_real"
+                    _nut_loaded_set LOADED_AS "${_real}::${mod}" "$_real"
                 else
-                    _NUTSHELL_LOADED_AS[$mod]="$_real"
+                    _nut_loaded_set LOADED_AS "$mod" "$_real"
                 fi
                 continue
             fi
@@ -213,19 +255,19 @@ use() {
             # loaded, so the pair recurses until the stack gives out. Marking
             # first makes the second entry a no-op, which is what "already
             # loading" should mean.
-            _NUTSHELL_LOADED[$_real]=1
+            _nut_loaded_set LOADED "$_real" 1
             if [[ "$mod" == super::* ]]; then
-                _NUTSHELL_LOADED_AS["${_real}::${mod}"]="$_real"
+                _nut_loaded_set LOADED_AS "${_real}::${mod}" "$_real"
             else
-                _NUTSHELL_LOADED_AS[$mod]="$_real"
+                _nut_loaded_set LOADED_AS "$mod" "$_real"
             fi
             if ! source "$mod_path"; then
                 # Failed to load, so it is not loaded. Leaving the mark would
                 # make a later retry silently succeed against a module that was
                 # never sourced.
-                unset "_NUTSHELL_LOADED[$_real]"
-                unset "_NUTSHELL_LOADED_AS[$mod]"
-                unset "_NUTSHELL_LOADED_AS[${_real}::${mod}]"
+                _nut_loaded_unset LOADED "$_real"
+                _nut_loaded_unset LOADED_AS "$mod"
+                _nut_loaded_unset LOADED_AS "${_real}::${mod}"
                 return 1
             fi
         else
@@ -370,7 +412,10 @@ _lib_nut_lookup() {
 # Declared here rather than inside the function: it is an associative array,
 # and without the declaration bash reads `_NUT_GATE_ANSWER[has(bin(sh))]` as
 # an arithmetic subscript and fails on the parentheses.
-declare -gA _NUT_GATE_ANSWER=()
+# One variable per answer rather than an associative array, keyed by
+# `nut_key`. Same trick `deps.sh` has used for its tool tables since it was
+# written, and the reason the encoder moved to `lib/key.sh`: a POSIX shell has
+# no `declare -A`, and every table here is a map from a string to a string.
 
 # _nut_gate <attribute> -> 0 when it holds
 #
@@ -392,7 +437,7 @@ declare -gA _NUT_GATE_ANSWER=()
 # An unknown attribute does not hold. Read as true it would promote a variant
 # onto every machine on a typo, and nothing about the tree would look wrong.
 _nut_gate() {
-    local a="${1:-}" inner name
+    local a="${1:-}" inner name _ng_seen=""
     [[ -n "$a" ]] || return 0
 
     case "$a" in
@@ -411,14 +456,16 @@ _nut_gate() {
             # anything and this sits in front of every `use`. Not `shell` or
             # `env`: both are a `case` on a variable, which is free, and both
             # can change under a caller.
-            case "${_NUT_GATE_ANSWER[$a]:-}" in
+            nut_key "$a" || return 1
+            eval "_ng_seen=\"\${_NUT_GATE_${_nk}:-}\""
+            case "$_ng_seen" in
                 yes) return 0 ;;
                 no)  return 1 ;;
             esac
             if command -v "$inner" >/dev/null 2>&1; then
-                _NUT_GATE_ANSWER["$a"]=yes; return 0
+                eval "_NUT_GATE_${_nk}=yes"; return 0
             fi
-            _NUT_GATE_ANSWER["$a"]=no; return 1 ;;
+            eval "_NUT_GATE_${_nk}=no"; return 1 ;;
         has\(env\(*\)\))
             name="${a#has(env(}"; name="${name%))}"
             # The shape is checked before the indirection, because bash errors
@@ -427,7 +474,11 @@ _nut_gate() {
             case "$name" in
                 ""|*[!A-Za-z0-9_]*|[0-9]*) return 1 ;;
             esac
-            [[ -n "${!name:-}" ]] || return 1
+            # The name reaches `eval`, so the case above is what stands
+            # between a manifest and an arbitrary command. `${!name}` did this
+            # without one and POSIX has no equivalent.
+            eval "_ng_seen=\"\${${name}:-}\""
+            [ -n "$_ng_seen" ] || return 1
             return 0 ;;
         feature\(*\))
             name="${a#feature(}"; name="${name%)}"
@@ -668,16 +719,17 @@ nut_reload() {
         # under one name and reloaded under another would otherwise forget
         # nothing, `use` would answer "already loaded", and the stub that asked
         # for the reload would still be the stub.
-        local file="${_NUTSHELL_LOADED_AS[$mod]:-}"
+        local file=""; _nut_loaded_get LOADED_AS "$mod" && file="$_nl"
         if [[ -z "$file" ]]; then
             local _p; _p="$(_use_resolve "$mod" "${BASH_SOURCE[1]:-}")" || _p=""
             [[ -n "$_p" ]] && file="$(_nut_realpath "$_p" 2>/dev/null || printf '%s' "$_p")"
         fi
         if [[ -n "$file" ]]; then
-            unset "_NUTSHELL_LOADED[$file]"
+            _nut_loaded_unset LOADED "$file"
             local k
-            for k in "${!_NUTSHELL_LOADED_AS[@]}"; do
-                [[ "${_NUTSHELL_LOADED_AS[$k]}" == "$file" ]] && unset "_NUTSHELL_LOADED_AS[$k]"
+            for k in $_NUT_LOADED_AS_KEYS; do
+                eval "_nl=\"\${_NUT_LOADED_AS_${k}:-}\""
+                [ "$_nl" = "$file" ] && { eval "unset _NUT_LOADED_AS_${k}"; }
             done
             # nut_once has its own record of the same fact.
             local once="_NUT_ONCE_${file//[^A-Za-z0-9]/_}"
@@ -894,8 +946,8 @@ nutshell_loaded() {
     # By name, because that is what a caller has. The name is looked up to a
     # file first, so a module loaded as `super::x` answers yes when asked about
     # `dep::x` too, which is the same module.
-    [[ -n "${_NUTSHELL_LOADED_AS[$1]:-}" ]] && return 0
-    [[ -n "${_NUTSHELL_LOADED[$1]:-}" ]]
+    _nut_loaded_get LOADED_AS "$1" && return 0
+    _nut_loaded_get LOADED "$1"
 }
 export -f nutshell_loaded
 
@@ -903,7 +955,7 @@ export -f nutshell_loaded
 # Usage: nutshell_modules
 nutshell_modules() {
     local mod
-    for mod in "${!_NUTSHELL_LOADED[@]}"; do
+    for mod in $_NUT_LOADED_KEYS; do
         echo "$mod"
     done | sort
 }

@@ -200,6 +200,33 @@ assert_exits() {
 #
 # EPOCHREALTIME spells its decimal separator per locale, so feeding it to awk
 # under a comma locale truncated at the comma and every tenth printed as zero.
+# Whether a test's output holds the shell complaining about a missing
+# assertion, which is what a misspelled assertion name leaves behind.
+#
+# Line by line, and this is the whole reason it is a function. Matched against
+# the output as one blob, the two halves come from different lines: a test that
+# prints the text `assert_eq` and separately runs some command that is not
+# installed satisfies `*assert_*command not found*` between them and fails with
+# a verdict that is a lie about it. This file's own tests build sources
+# containing `assert_eq` and capture the runner's output, four times over, so
+# that is not a hypothetical shape here.
+#
+# The `: ` before the name is the rest of it. The shell says
+# `file: line 5: assert_fail: command not found`, so the name is preceded by a
+# colon and a space, and requiring those stops a line merely *mentioning*
+# `assert_` before an unrelated complaint from matching.
+_test_has_missing_assertion() {
+    # The answer comes back as output rather than as a status. The loop runs in
+    # the pipeline's subshell, so a `return` inside it returns from nothing and
+    # the pipeline reports success whether the line was found or not.
+    _tha_found="$(printf '%s\n' "${1:-}" | while IFS= read -r _tha_line; do
+        case "$_tha_line" in
+            *": assert_"*": command not found"*) printf 'y'; break ;;
+        esac
+    done)"
+    [ "$_tha_found" = "y" ]
+}
+
 # The digits alone are seconds followed by exactly six digits of microseconds,
 # so stripping the separator leaves an integer that subtracts cleanly. Empty
 # under bash older than 5.0, and the caller then prints no timing rather than
@@ -328,6 +355,20 @@ EOF
             # Worse than a weak test: it occupies the place a real one would be
             # noticed missing from, and it counts toward a number people quote.
             rc=1; why="the test asserted nothing"
+        elif _test_has_missing_assertion "$output"; then
+            # A misspelled assertion name. The shell says so on stderr and
+            # carries on, the tally never hears about it, and the test passes
+            # on whatever other assertions it happened to have. Only a test
+            # where every assertion was misspelled was caught, by the guard
+            # above, which is the worst way round: the more a test asserts, the
+            # better it hides one that does nothing.
+            #
+            # It reads stderr, so it is a good check rather than a complete
+            # one: `{ assert_fail true; } 2>/dev/null` is invisible to it. The
+            # deterministic answer is `command_not_found_handle`, which fires
+            # inside the test and cannot be redirected away, and which this
+            # file cannot use while it runs on the POSIX floor.
+            rc=1; why="an assertion name was not found, so it asserted nothing"
         fi
         [ -n "$why" ] && output="${output}${output:+$_TEST_NL}${why}"
 

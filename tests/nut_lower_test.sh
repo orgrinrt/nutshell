@@ -527,3 +527,108 @@ it_does_not_mark_the_lowered_file_executable() {
     assert_fails test -x "$d/lowered.sh"
     rm -rf "$d"
 }
+
+# Load `nut-lower`'s own functions, with its trailing `main "$@"` neutered.
+#
+# The three cases below are about one function, `_nl_shake`, and driving them
+# through the command line would need a module tree and a `lib.nut` to lower,
+# which is a lot of scaffolding between the test and the thing it checks.
+#
+# The substitution is asserted rather than assumed: if that last line is ever
+# spelled differently the sed quietly does nothing, `main` runs with no
+# arguments, and the tests would fail somewhere confusing instead of here.
+_nl_load() {
+    local src="${NUTSHELL_ROOT}/bin/nut-lower"
+    # A root of its own, linked back at the real one. `nut-lower` finds its
+    # library at `${BASH_SOURCE[0]%/*}/..`, so a copy sourced from anywhere
+    # else points that at a directory holding no `init` and refuses to load.
+    _NL_FAKE_ROOT="$(mktemp -d)"
+    mkdir -p "${_NL_FAKE_ROOT}/bin"
+    ln -s "${NUTSHELL_ROOT}/init"    "${_NL_FAKE_ROOT}/init"
+    ln -s "${NUTSHELL_ROOT}/lib"     "${_NL_FAKE_ROOT}/lib"
+    ln -s "${NUTSHELL_ROOT}/lib.nut" "${_NL_FAKE_ROOT}/lib.nut"
+    local tmp="${_NL_FAKE_ROOT}/bin/nut-lower"
+    sed 's/^main "$@"$/: "neutered by nut_lower_test"/' "$src" > "$tmp"
+    grep -q 'neutered by nut_lower_test' "$tmp" || return 1
+    # shellcheck disable=SC1090
+    . "$tmp"
+}
+
+_nl_unload() { rm -rf "${_NL_FAKE_ROOT:-}"; unset _NL_FAKE_ROOT; }
+
+#[test]
+it_does_not_count_a_brace_inside_a_comment_or_a_string() {
+    # The brace count used to run over the raw line, so a lone brace in a
+    # comment inside a function body was a nesting level that never closed.
+    # Everything after it read as still inside that function, and when the
+    # function was one the shaker dropped, everything after it was dropped
+    # too: silently, and out of files with nothing to do with the edit.
+    #
+    # It cost a long session to find, because the module that broke was not
+    # the module that was edited. A comment in `toml.sh` took out the whole of
+    # `fs/impl/stat_bsd.sh` further down the lowered file, so `fs_size` fell
+    # through to the GNU implementation and returned nothing on a mac.
+    assert_ok _nl_load
+    local d; d="$(mktemp -d)"
+    cat > "$d/mod.sh" <<'INNER'
+#!/usr/bin/env bash
+_probe_unused() {
+    # a comment with a lone { brace and no partner
+    :
+}
+probe_kept() { printf 'kept\n'; }
+probe_after() { printf 'after\n'; }
+INNER
+    # Shaken by hand rather than through a lowering, so the case is about the
+    # brace counting and not about module resolution.
+    printf 'probe_kept\nprobe_after\n' > "$d/keep"
+    local out; out="$(_nl_shake "$d/mod.sh" "$d/keep")"
+    assert_contains "$out" "probe_kept()"
+    assert_contains "$out" "probe_after()"
+    assert_not_contains "$out" "_probe_unused()"
+    rm -rf "$d"
+    _nl_unload
+}
+
+#[test]
+it_still_drops_a_function_nothing_retained() {
+    # The control. Ignoring braces in comments must not stop it shaking.
+    assert_ok _nl_load
+    local d; d="$(mktemp -d)"
+    cat > "$d/mod.sh" <<'INNER'
+#!/usr/bin/env bash
+probe_gone() {
+    printf 'gone\n'
+}
+probe_kept() { printf 'kept\n'; }
+INNER
+    printf 'probe_kept\n' > "$d/keep"
+    local out; out="$(_nl_shake "$d/mod.sh" "$d/keep")"
+    assert_not_contains "$out" "probe_gone()"
+    assert_contains "$out" "probe_kept()"
+    rm -rf "$d"
+    _nl_unload
+}
+
+#[test]
+it_keeps_a_parameter_expansion_that_uses_a_hash() {
+    # `${x#y}` has its `#` in the middle of a word, so it is not a comment and
+    # the closing brace must still count. Reading it as one would drop the
+    # `}` and unbalance the function the other way.
+    assert_ok _nl_load
+    local d; d="$(mktemp -d)"
+    cat > "$d/mod.sh" <<'INNER'
+#!/usr/bin/env bash
+probe_gone() {
+    local v=abc
+    printf '%s\n' ${v#a}
+}
+probe_after() { printf 'after\n'; }
+INNER
+    printf 'probe_after\n' > "$d/keep"
+    local out; out="$(_nl_shake "$d/mod.sh" "$d/keep")"
+    assert_not_contains "$out" "probe_gone()"
+    assert_contains "$out" "probe_after()"
+    rm -rf "$d"
+    _nl_unload
+}

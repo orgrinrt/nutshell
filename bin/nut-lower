@@ -411,7 +411,38 @@ _nl_shake() {
     local lowered="$1" keepfile="$2"
     # Through a file, not `-v`: an awk variable cannot hold a newline and the
     # retained set is one name per line.
+    # The brace count runs over the code on a line and not over the whole line.
+    #
+    # Counted raw, a brace inside a comment or a string is a nesting level, so
+    # a function whose body mentions one without its partner never appears to
+    # end. Everything after it is then read as still inside that function, and
+    # if the function was dropped, everything after it is dropped too, silently
+    # and out of files that had nothing to do with it.
+    #
+    # That is not hypothetical and it is nasty to find: `toml.sh` gained a
+    # comment holding a lone `{`, and what went missing was the whole of
+    # `fs/impl/stat_bsd.sh` further down the lowered file, so `fs_size` fell
+    # back to the GNU implementation and returned nothing on a mac. Nothing
+    # failed, nothing warned, and the module that broke was not the module that
+    # was edited.
+    #
+    # `_nl_codeonly` is approximate, as anything short of a shell parser is. It
+    # drops quoted spans whole, which is safe for counting because a brace
+    # inside quotes is never a block, and it treats `#` as a comment only at
+    # the start of a word, so `${x#y}` keeps its closing brace.
     awk -v keepfile="$keepfile" '
+        function codeonly(s,   out, i, c, q, prev) {
+            out = ""; q = ""; prev = " "
+            for (i = 1; i <= length(s); i++) {
+                c = substr(s, i, 1)
+                if (q != "") { if (c == q) q = ""; prev = c; continue }
+                if (c == "\"" || c == "'"'"'") { q = c; prev = c; continue }
+                if (c == "#" && (prev == " " || prev == "\t" || i == 1)) break
+                out = out c
+                prev = c
+            }
+            return out
+        }
         BEGIN { while ((getline line < keepfile) > 0) if (line != "") K[line] = 1 }
         depth == 0 && match($0, /^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_-]*[[:space:]]*\(\)[[:space:]]*\{?[[:space:]]*$/) {
             name = $0
@@ -421,8 +452,9 @@ _nl_shake() {
         }
         {
             if (infn) {
-                depth += gsub(/\{/, "{")
-                depth -= gsub(/\}/, "}")
+                code = codeonly($0)
+                depth += gsub(/\{/, "{", code)
+                depth -= gsub(/\}/, "}", code)
                 if (!drop) print
                 if (depth <= 0) { infn = 0; drop = 0 }
                 next

@@ -41,7 +41,7 @@ _NUTSHELL_DEPS_SH=1
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
-use os
+use os key
 
 # -----------------------------------------------------------------------------
 # Configuration file location
@@ -156,86 +156,11 @@ _TOOLS_AVAILABLE=""
 # set, and there is no `${!table[@]}` to ask any more.
 _TOOL_CAN_NAMES=""
 
-# A tool or capability name, as the tail of a variable name. One-to-one.
-#
-# A name that is already `[A-Za-z0-9_]` and does not begin `enc_` is used as
-# itself, so `${_TOOL_PATH_jq}` and `${_TOOL_PATH_grep_pcre}` stay plain
-# expansions and the sixteen modules reading them literally pay nothing.
-#
-# Anything else is hex-encoded whole, behind `enc_`. A name that is safe but
-# begins `enc_` takes the encoded path too, which is what makes the mapping
-# one-to-one: without that, a tool genuinely called `enc_706b67` would collide
-# with `pkg` and one of them would read the other's path.
-#
-# Refusing instead was tried and was wrong. `deps_has` is documented to look up
-# anything not in the eager list, and half the binaries worth asking about have
-# a hyphen or a digit in them: `pkg-config`, `git-lfs`, `7z`. Refusing made
-# `deps_has pkg-config` answer yes with an empty path, which is the one outcome
-# that is worse than either alternative.
-_deps_key() {
-    case "${1:-}" in
-        "" ) _dk=""; return 1 ;;
-        enc_* ) : ;;
-        [0-9]* ) : ;;
-        *[!A-Za-z0-9_]* ) : ;;
-        * ) _dk="$1"; return 0 ;;
-    esac
-    # Bytes, not characters, and that is what `LC_ALL=C` is for.
-    #
-    # `printf '%d' "'c"` gives a codepoint and `%02x` is a minimum width rather
-    # than a fixed one, so a character above U+00FF produces four hex digits
-    # and the concatenation stops being prefix-free. `€` is `20ac`; so is a
-    # space followed by `¬`. Two names, one variable, and the second reads the
-    # first's path. Under `LC_ALL=C` both the character walk and the numeric
-    # conversion go byte-wise, every byte is exactly two digits, and the
-    # property holds.
-    _dk_loc="${LC_ALL:-}"
-    LC_ALL=C
-    _dk="enc_"
-    _dk_in="$1"
-    while [ -n "$_dk_in" ]; do
-        _dk_c="${_dk_in%"${_dk_in#?}"}"
-        _dk_in="${_dk_in#?}"
-        _deps_hex "$_dk_c"
-        _dk="${_dk}${_dh}"
-    done
-    LC_ALL="$_dk_loc"
-    [ -n "$_dk_loc" ] || unset LC_ALL
-    return 0
-}
-
-# One byte as two hex digits, without a fork.
-#
-# It ran two command substitutions per byte, which is the pattern taken out of
-# `lib/map.sh` in the same branch. The table covers what a tool name actually
-# holds; anything else falls back to the fork and is rare enough not to matter.
-_deps_hex() {
-    case "$1" in
-        -) _dh=2d ;;  .) _dh=2e ;;  +) _dh=2b ;;  '~') _dh=7e ;;
-        0) _dh=30 ;;  1) _dh=31 ;;  2) _dh=32 ;;  3) _dh=33 ;;  4) _dh=34 ;;
-        5) _dh=35 ;;  6) _dh=36 ;;  7) _dh=37 ;;  8) _dh=38 ;;  9) _dh=39 ;;
-        a) _dh=61 ;;  b) _dh=62 ;;  c) _dh=63 ;;  d) _dh=64 ;;  e) _dh=65 ;;  f) _dh=66 ;;
-        g) _dh=67 ;;  h) _dh=68 ;;  i) _dh=69 ;;  j) _dh=6a ;;  k) _dh=6b ;;  l) _dh=6c ;;
-        m) _dh=6d ;;  n) _dh=6e ;;  o) _dh=6f ;;  p) _dh=70 ;;  q) _dh=71 ;;  r) _dh=72 ;;
-        s) _dh=73 ;;  t) _dh=74 ;;  u) _dh=75 ;;  v) _dh=76 ;;  w) _dh=77 ;;  x) _dh=78 ;;
-        y) _dh=79 ;;  z) _dh=7a ;;
-        A) _dh=41 ;;  B) _dh=42 ;;  C) _dh=43 ;;  D) _dh=44 ;;  E) _dh=45 ;;  F) _dh=46 ;;
-        G) _dh=47 ;;  H) _dh=48 ;;  I) _dh=49 ;;  J) _dh=4a ;;  K) _dh=4b ;;  L) _dh=4c ;;
-        M) _dh=4d ;;  N) _dh=4e ;;  O) _dh=4f ;;  P) _dh=50 ;;  Q) _dh=51 ;;  R) _dh=52 ;;
-        S) _dh=53 ;;  T) _dh=54 ;;  U) _dh=55 ;;  V) _dh=56 ;;  W) _dh=57 ;;  X) _dh=58 ;;
-        Y) _dh=59 ;;  Z) _dh=5a ;;
-        _) _dh=5f ;;
-        # Anything left: a byte this table does not name. Two nested command
-        # substitutions, which is two subshells per character, and the reason
-        # everything above is written out.
-        #
-        # It used to be the only arm for a letter, so `pkg-config` cost
-        # eighteen subshells to key once, on a path `deps_has` takes for every
-        # tool whose name is not already a variable name. `printf` is a builtin
-        # and costs nothing; the substitution around it is the fork.
-        *) _dh="$(printf '%02x' "$(printf '%d' "'$1")")" ;;
-    esac
-}
+# The key encoder lives in `key.sh` now, because it was never about tools: it
+# turns any string into the tail of a variable name, and `use` needs the same
+# thing for its loaded table. `_deps_key` here is the old spelling, kept as one
+# line so the sixteen call sites below do not all have to change at once.
+_deps_key() { nut_key "$1" || return 1; _dk="$_nk"; return 0; }
 
 # _deps_get <destvar> <table> <name>
 #

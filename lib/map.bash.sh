@@ -26,7 +26,12 @@
 #   map_get counts "lib/x.sh:1"      -> hello
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE`
+# and so needs bash. Under a POSIX shell it is not found, the
+# `|| return 0` beside it fires on every load, and the module reports
+# success having defined nothing.
+[ -n "${_NUTSHELL_MAP_BASH_SH:-}" ] && return 0
+_NUTSHELL_MAP_BASH_SH=1
 
 # One table for every map, keyed by `<name>\037<key>`, rather than one
 # `declare -A` per map created at run time.

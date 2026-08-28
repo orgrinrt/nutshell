@@ -20,7 +20,12 @@
 # side by side establishes nothing.
 # =============================================================================
 
-nut_once || return 0
+# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE`
+# and so needs bash. Under a POSIX shell it is not found, the
+# `|| return 0` beside it fires on every load, and the module reports
+# success having defined nothing.
+[ -n "${_NUTSHELL_LIST_BASH_SH:-}" ] && return 0
+_NUTSHELL_LIST_BASH_SH=1
 
 # The same separator the floor uses, so a caller reaching for `list_str` gets
 # the same string from either half and does not have to ask which is loaded.

@@ -166,8 +166,22 @@ _nut_ref_ok() {
 _nut_age() {
     local dir="$1" head="$1/.git/FETCH_HEAD" t now
     [[ -f "$head" ]] || { printf '%s' "$_NUT_PIN_TTL"; return 0; }
-    t="$(stat -f %m "$head" 2>/dev/null || stat -c %Y "$head" 2>/dev/null)" || {
-        printf '%s' "$_NUT_PIN_TTL"; return 0; }
+    # GNU first, then BSD, and the result is checked for being a number.
+    #
+    # The other order does not work and fails in the worst way. Under GNU
+    # coreutils `-f` means filesystem status, so `stat -f %m FILE` reads `%m` as
+    # a filename of its own and prints the default block for FILE, whose first
+    # word is `File:`. That is not an error the `||` can see, so the BSD probe
+    # "succeeds" and `t` ends up holding prose. The next line is arithmetic, and
+    # `(( t > now ))` then evaluates `File` as a variable name: under `set -u`
+    # every nutshell invocation on Linux died with `File: unbound variable`.
+    #
+    # Which is why the digit check is here rather than being defensive noise. A
+    # timestamp is digits; anything else means neither probe understood, and the
+    # honest answer is the same as having no FETCH_HEAD at all.
+    t="$(stat -c %Y "$head" 2>/dev/null)" || t=""
+    [[ -n "$t" ]] || t="$(stat -f %m "$head" 2>/dev/null)" || t=""
+    [[ "$t" =~ ^[0-9]+$ ]] || { printf '%s' "$_NUT_PIN_TTL"; return 0; }
     now="$(date +%s)"
     # A clock that moved backwards gives a negative age, which would park the
     # mirror until wall-clock caught up. Treat it as due.

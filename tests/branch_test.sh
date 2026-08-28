@@ -313,3 +313,31 @@ it_still_drops_a_revision_nothing_has_used() {
     assert_fails test -d "$(_br_base)/$old"
     _br_end
 }
+
+#[test]
+it_reads_a_mirror_age_as_a_number_on_either_stat() {
+    # `_nut_age` feeds arithmetic, so anything that is not digits is a crash
+    # rather than a wrong answer. GNU `stat -f %m FILE` reads `%m` as a filename
+    # of its own and prints FILE's default block, whose first word is `File:`,
+    # and `(( t > now ))` then evaluates `File` as a variable name. Under
+    # `set -u` that killed every nutshell invocation on Linux, at a line that
+    # mentions neither stat nor portability.
+    local d; d="$(mktemp -d)"
+    mkdir -p "$d/.git" && : > "$d/.git/FETCH_HEAD"
+    local age
+    age="$( . "${BASH_SOURCE[0]%/*}/../bin/nutshell" >/dev/null 2>&1; _nut_age "$d" )"
+    assert_ok grep -qE '^[0-9]+$' <<<"$age"
+    rm -rf "$d"
+}
+
+#[test]
+it_falls_back_to_the_ttl_when_neither_stat_understands() {
+    # The control, and the branch that was missing. When no probe yields digits
+    # the honest answer is the same as having no FETCH_HEAD at all, which is the
+    # TTL, so the mirror is treated as due rather than the process dying.
+    local d; d="$(mktemp -d)"
+    local age
+    age="$( . "${BASH_SOURCE[0]%/*}/../bin/nutshell" >/dev/null 2>&1; _nut_age "$d" )"
+    assert_ok grep -qE '^[0-9]+$' <<<"$age"
+    rm -rf "$d"
+}

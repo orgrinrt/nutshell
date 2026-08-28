@@ -1,0 +1,4 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash regex  shipped loop,3364,5842,within the noise,yes
+bash regex  new loop,1738,1921,51%,yes
+posix case  new loop,1920,2128,57%,yes

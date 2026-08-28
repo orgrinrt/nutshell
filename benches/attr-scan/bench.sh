@@ -12,11 +12,13 @@
 # module on the POSIX floor means the same questions answered with `case` and
 # parameter expansion, and the question this asks is what that costs.
 #
-# It is not obvious in either direction. A regex engine is real work per line;
-# `case` is a glob match with no engine behind it, and the parameter expansions
-# that replace the capture groups are string operations the shell does inline.
-# So the conversion could be slower, faster, or neither, and the only honest
-# way to find out is to run both over the same files.
+# Three arms, not two, and the third is the one that answers it. Shipped
+# against converted moves the predicate and the loop shape at once, and a
+# comparison with two variables in it cannot say which one did the work. The
+# middle arm holds the loop and swaps only the predicate.
+#
+# That is the missing-competitor case: the first version of this bench had two
+# arms and concluded that `case` beats a regex, which the third arm refutes.
 #
 # Both arms load exactly one implementation and then answer the same questions
 # over the same file list. The old one comes out of git rather than being
@@ -36,6 +38,7 @@ trap 'rm -rf "$_TMP"' EXIT
 # The shipped implementation, from the trunk this branch came off. Taken from
 # git so the baseline is what was really there, not a reconstruction of it.
 OLD="${_TMP}/attr.old.sh"
+HYB="${NUTSHELL_ROOT}/benches/attr-scan/hybrid.sh"
 NEW="${NUTSHELL_ROOT}/lib/attr.sh"
 if ! git -C "$NUTSHELL_ROOT" show "dev:lib/attr.sh" > "$OLD" 2>/dev/null; then
     printf 'bench: cannot read the old attr.sh out of git, so there is nothing to compare against\n' >&2
@@ -73,17 +76,25 @@ _workload() {
 # for both arms and the bench would report a tie it invented.
 arm_old() { ( . "$OLD" >/dev/null 2>&1; _workload ); }
 arm_new() { ( . "$NEW" >/dev/null 2>&1; _workload ); }
+arm_hyb() { ( . "$HYB" >/dev/null 2>&1; _workload ); }
 
 # The control the harness refuses a run without. Both arms have to name the
 # same functions in the same order, or one of them is faster because it is
 # finding less.
 answer_of() {
-    "$1" 2>/dev/null | sort | cksum
+    local out; out="$("$1" 2>/dev/null)"
+    # A silent arm is not an answer. Two arms that both find nothing agree
+    # perfectly and the control passes, which would report a comparison of
+    # nothing as a comparison. It is not vacuous today, both arms name 417
+    # functions, and nothing here established that until this line.
+    [ -n "$out" ] || { printf 'EMPTY'; return 0; }
+    printf '%s' "$out" | sort | cksum
 }
 
 bench_case "reading attributes over ${LINES} lines of the library, ${PASSES} passes"
 bench_size "$LINES"
 bench_verify answer_of
-bench_arm "bash regex, as shipped"   arm_old
-bench_arm "posix case and expansion" arm_new
+bench_arm "bash regex, shipped loop"  arm_old
+bench_arm "bash regex, new loop"      arm_hyb
+bench_arm "posix case, new loop"      arm_new
 bench_run || exit 1

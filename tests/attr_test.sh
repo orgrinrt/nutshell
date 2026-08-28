@@ -293,3 +293,123 @@ it_answers_correctly_under_a_posix_shell() {
     assert_not_contains "$got" "<find=0>"
     assert_not_contains "$got" "<tests=0>"
 }
+
+#[test]
+# A `#[` that is not a well formed attribute is a comment, and a comment does
+# not break a run of attributes.
+#
+# The loop restructuring got this wrong. `#[` used to fall through to the
+# `^[[:space:]]*#` arm and continue, because it is a comment whatever else it
+# is; restructured, it fell past the comment arm, failed the attribute test and
+# the definition test, and reached the line that clears `pending`. So a stray
+# `#[a]b]` between an attribute and its function silently detached them, and
+# the checker then reported a marked function as unmarked.
+#
+# Both entry points, because they are separate loops with the same shape, and
+# a fix applied to one of them leaves two public functions disagreeing about
+# whether a function is marked, which is worse than either answer alone.
+it_does_not_let_a_malformed_attribute_break_a_run() {
+    local d; d="$(mktemp -d)"
+    local mid
+    for mid in '#[a]b]' '#[123]' '#[]' '#[' '#[9a]' '#[ pub ]' '##[pub]' '# [pub]'; do
+        printf '#[pub]\n%s\ntarget() {\n  :\n}\n' "$mid" > "$d/f.sh"
+        assert_eq "$(attr_find "$d/f.sh" pub)" "target" "attr_find lost the run over [$mid]"
+        assert_eq "$(attr_on "$d/f.sh" target)" "pub"    "attr_on lost the run over [$mid]"
+    done
+    rm -rf "$d"
+}
+
+#[test]
+# The control, and it is what stops the fix above from being "never break a
+# run". A line that is neither blank, comment nor attribute still breaks it.
+it_still_breaks_a_run_on_a_line_that_is_none_of_those() {
+    local d; d="$(mktemp -d)"
+    local mid
+    for mid in 'x=1' 'echo hi' 'if [ -n "$x" ]; then'; do
+        printf '#[pub]\n%s\ntarget() {\n  :\n}\n' "$mid" > "$d/f.sh"
+        assert_eq "$(attr_find "$d/f.sh" pub)" "" "attr_find kept the run over [$mid]"
+        assert_fails attr_has "$d/f.sh" target pub
+    done
+    rm -rf "$d"
+}
+
+#[test]
+# The regex and the POSIX reader answer the same thing about every line in the
+# library.
+#
+# `ATTR_DEFINES_PATTERN` was introduced so there would be one answer to "what
+# is a definition", after `attr` and `srcfile` had drifted apart on it. There
+# are two answers again: the constant, still used as a live `=~` by
+# `srcfile.sh` and `check_public_api_docs.sh`, and `_attr_defines_set_t`, which
+# is what `attr_on` and `attr_find` use now.
+#
+# They agree. Nothing held them together until this, which is exactly the drift
+# the shared constant was introduced to end, so the loop that proves it is the
+# replacement for the constant being shared.
+#
+# Driven over the real tree rather than a fixture: the interesting lines are
+# the ones somebody actually wrote, and there are seventeen thousand of them.
+it_agrees_with_the_regex_about_every_line_in_the_library() {
+    local root; root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    local f line via_regex via_posix checked=0 defs=0 bad=""
+
+    for f in "$root"/lib/*.sh "$root"/lib/*/*.sh "$root"/bin/* "$root"/init; do
+        [ -f "$f" ] || continue
+        while IFS= read -r line || [ -n "$line" ]; do
+            checked=$(( checked + 1 ))
+            via_regex=""
+            [[ "$line" =~ $ATTR_DEFINES_PATTERN ]] \
+                && via_regex="${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}"
+            _attr_defines_set_t "${line#"${line%%[![:space:]]*}"}"
+            via_posix="$_ATTR_DEF"
+            [ -n "$via_regex" ] && defs=$(( defs + 1 ))
+            if [ "$via_regex" != "$via_posix" ]; then
+                bad="${bad} [${f##*/}: regex=${via_regex:-none} posix=${via_posix:-none}]"
+            fi
+        done < "$f"
+    done
+
+    # Named rather than counted, so a failure says which line and both answers.
+    assert_eq "$bad" "" "the two readers disagree"
+    # And the controls: it read a real amount, and found real definitions. A
+    # loop over nothing agrees with everything.
+    assert_ok test "$checked" -gt 10000
+    assert_ok test "$defs" -gt 200
+
+    # Then the lines the library does not happen to contain.
+    #
+    # The corpus above only covers what somebody wrote, which is not the same
+    # as what the two readers could disagree about. Removing the hyphen from
+    # the POSIX reader's charset is a real divergence and this tree caught none
+    # of it, because nothing here defines a function with a hyphen in its name.
+    # Everything below is a case one reader could take differently.
+    local probe
+    for probe in \
+        'foo-bar() {' \
+        'function foo-bar {' \
+        'function foo-bar() {' \
+        '_foo() {' \
+        '9foo() {' \
+        '-foo() {' \
+        'foo() {' \
+        'foo ()  {' \
+        'foo(){' \
+        '  indented() {' \
+        'function foo {' \
+        'function  foo  {' \
+        'foo bar() {' \
+        'if foo() {' \
+        'x=1' \
+        '# foo() {' \
+        'foo (x) {' \
+        'foo)' \
+        'function' \
+        'function {' \
+        ''; do
+        via_regex=""
+        [[ "$probe" =~ $ATTR_DEFINES_PATTERN ]] \
+            && via_regex="${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}"
+        _attr_defines_set_t "${probe#"${probe%%[![:space:]]*}"}"
+        assert_eq "$_ATTR_DEF" "$via_regex" "disagreed about [$probe]"
+    done
+}

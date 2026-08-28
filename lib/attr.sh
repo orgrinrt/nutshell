@@ -232,17 +232,21 @@ attr_on() {
         # worked on undocumented code, which is exactly backwards.
         case "$t" in
             '') continue ;;
-            '#['*) ;;
+            '#['*)
+                if _attr_is_attr_t "$t"; then
+                    # An array held these. One string with a newline between
+                    # entries holds them as well, because an attribute line
+                    # cannot contain a newline: `read -r` split on one.
+                    pending="${pending}${t}${_ATTR_NL}"
+                fi
+                # A `#[` that is not a well formed attribute is still a
+                # comment, and a comment does not break the run. The first cut
+                # of this let it fall through to the end and clear `pending`,
+                # so `#[a]b]` between an attribute and its function silently
+                # detached them: `#[123]`, `#[]` and a bare `#[` did the same.
+                continue ;;
             '#'*) continue ;;
         esac
-
-        if _attr_is_attr_t "$t"; then
-            # An array held these. One string with a newline between entries
-            # holds them as well, because an attribute line cannot contain a
-            # newline: `read -r` split on one to produce it.
-            pending="${pending}${t}${_ATTR_NL}"
-            continue
-        fi
 
         # Set rather than substituted, because a command substitution is a
         # subshell and this runs on every line of the file.
@@ -336,15 +340,15 @@ attr_find() {
 
         case "$t" in
             '') continue ;;
-            '#['*) ;;
+            '#['*)
+                if _attr_is_attr_t "$t"; then
+                    _attr_name_set_t "$t"
+                    [ "$_ATTR_NAME" = "$want" ] && pending=1
+                fi
+                # Malformed is a comment, as above.
+                continue ;;
             '#'*) continue ;;
         esac
-
-        if _attr_is_attr_t "$t"; then
-            _attr_name_set_t "$t"
-            [ "$_ATTR_NAME" = "$want" ] && pending=1
-            continue
-        fi
 
         _attr_defines_set_t "$t"
         if [ -n "$_ATTR_DEF" ]; then

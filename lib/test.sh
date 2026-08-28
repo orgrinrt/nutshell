@@ -328,6 +328,18 @@ EOF
             # Worse than a weak test: it occupies the place a real one would be
             # noticed missing from, and it counts toward a number people quote.
             rc=1; why="the test asserted nothing"
+        elif case "$output" in *"assert_"*": command not found"*) true ;; *) false ;; esac; then
+            # A misspelled assertion name. The shell says so on stderr and
+            # carries on, the tally never hears about it, and the test passes
+            # on whatever other assertions it happened to have. Only a test
+            # where every assertion was misspelled was caught, by the guard
+            # above, which is the worst way round: the more a test asserts, the
+            # better it hides one that does nothing.
+            #
+            # Matched on the `assert_` stem rather than on `command not found`
+            # generally, because a test may legitimately run a command that is
+            # not installed and check what happens.
+            rc=1; why="an assertion name was not found, so it asserted nothing"
         fi
         [ -n "$why" ] && output="${output}${output:+$_TEST_NL}${why}"
 

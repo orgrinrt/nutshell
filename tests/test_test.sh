@@ -146,3 +146,50 @@ it_counts_passes_as_a_number() {
     assert_contains "$out" "3 passed"
     assert_not_contains "$out" "0111"
 }
+
+#[test]
+it_fails_a_test_whose_assertion_name_was_misspelled() {
+    # `assert_fail` for `assert_fails` printed `command not found` to stderr,
+    # added nothing to the tally, and the test passed on its other assertions.
+    # Nobody reads the stderr of a passing test, so the assertion that did
+    # nothing was invisible in exactly the tests that had the most of them,
+    # and only a test where every assertion was misspelled got caught.
+    local d; d="$(mktemp -d)"
+    # Attribute assembled rather than written, per the note above: discovery
+    # greps the source and does not know a heredoc from code.
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_has_one_good_and_one_misspelled() {\n'
+        printf '    assert_eq "a" "a"\n'
+        printf '    assert_fail true\n'
+        printf '}\n'
+    } > "$d/zz_typo_test.sh"
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_typo_test.sh" 2>&1)" || true
+    rm -rf "$d"
+    assert_contains "$out" "assertion name was not found"
+}
+
+#[test]
+it_does_not_fail_a_test_for_a_missing_command_that_is_not_an_assertion() {
+    # The control. A test may legitimately run something that is not
+    # installed and check what happens, so the guard matches the `assert_`
+    # stem rather than `command not found` on its own.
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_runs_a_command_that_is_absent() {\n'
+        printf '    definitely_not_a_real_command_here 2>/dev/null || true\n'
+        printf '    assert_eq "a" "a"\n'
+        printf '}\n'
+    } > "$d/zz_absent_test.sh"
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_absent_test.sh" 2>&1)" || true
+    rm -rf "$d"
+    assert_contains "$out" "1 passed"
+    assert_not_contains "$out" "assertion name was not found"
+}

@@ -187,3 +187,261 @@ it_judges_an_address_by_its_domain() {
     assert_fails is_email "a b@c.d"
     assert_fails is_email "a@-b.c"
 }
+
+# --- the POSIX floor ---------------------------------------------------------
+
+_vt_posix_sh() {
+    local cand probe; probe="$(mktemp)"
+    for cand in dash ash yash posh sh; do
+        command -v "$cand" >/dev/null 2>&1 || continue
+        printf 'a=(1 2)\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && continue
+        printf 'x=1\necho "${x:-}"\n' > "$probe"
+        "$cand" -n "$probe" >/dev/null 2>&1 && { rm -f "$probe"; printf '%s' "$cand"; return 0; }
+    done
+    rm -f "$probe"; return 1
+}
+
+# Every case below run under one shell, as a string of ones and zeroes.
+#
+# One process for the lot rather than one per case, because the interesting
+# comparison is between two shells over the same corpus and forking twice per
+# case to get it would take longer than the rest of this file put together.
+_vt_verdicts() {
+    "$1" -c '
+        . "$1/lib/validate.sh" >/dev/null 2>&1
+        r=""
+        while IFS= read -r fn && IFS= read -r arg; do
+            if "$fn" "$arg" >/dev/null 2>&1; then r="${r}1"; else r="${r}0"; fi
+        done
+        printf "%s" "$r"
+    ' _ "$NUTSHELL_ROOT" <<'CASES'
+is_integer
+-42
+is_integer
+42
+is_integer
+4x
+is_integer
+
+is_integer
+-
+is_positive_integer
+0
+is_positive_integer
+1
+is_non_negative_integer
+0
+is_port
+8080
+is_port
+0
+is_port
+65535
+is_port
+65536
+is_ipv4
+192.168.1.1
+is_ipv4
+1.2.3
+is_ipv4
+1.2.3.4.5
+is_ipv4
+01.2.3.4
+is_ipv4
+0.0.0.0
+is_ipv4
+256.1.1.1
+is_ipv4
+1.2..3
+is_ipv6
+::1
+is_ipv6
+::ffff:192.168.1.1
+is_ipv6
+1::2::3
+is_ipv6
+1:2:3:4:5:6:7:
+is_email
+a@b.c
+is_email
+a@@b.c
+is_email
+@b.c
+is_email
+a@b..c
+is_hostname
+example.com
+is_hostname
+-bad.com
+is_hostname
+bad-.com
+is_hostname
+a.b.c.d
+is_url
+https://x.io
+is_url
+ftp://x.io
+is_url
+https://
+CASES
+}
+
+#[test]
+# It parses there, which everything below depends on.
+it_reads_under_a_posix_shell() {
+    local sh; sh="$(_vt_posix_sh)"
+    assert_ne "$sh" ""
+    assert_ok "$sh" -n "${NUTSHELL_ROOT}/lib/validate.sh"
+}
+
+#[test]
+# Every validator answers the same under both shells, over the whole corpus.
+#
+# Driven under a real POSIX shell rather than under bash, because running the
+# converted file under bash tests nothing bash was not already covering, and
+# the interesting failures are the ones bash forgives. Two of them were found
+# exactly this way: the module loaded and defined nothing, because `nut_once`
+# does not exist outside bash and the `|| return 0` after it fired; and ten
+# glob comparisons had been flattened into string equality, which bash and a
+# POSIX shell agree about and which is wrong in both.
+it_answers_the_same_under_both_shells() {
+    local sh; sh="$(_vt_posix_sh)"
+    local p b
+    b="$(_vt_verdicts bash)"
+    p="$(_vt_verdicts "$sh")"
+    assert_ne "$b" ""
+    assert_eq "$p" "$b"
+}
+
+#[test]
+# And the answers are the right ones, not merely agreed on.
+#
+# The control for the test above, and the one that carries it: two shells
+# agreeing on a module that loaded nothing agree perfectly, and a string of
+# zeroes reads exactly like a string of correct answers.
+it_answers_correctly_under_a_posix_shell() {
+    local sh; sh="$(_vt_posix_sh)"
+    # Each digit checked against what that validator owes, in the order the
+    # cases are written above, rather than pasted from a run:
+    #
+    #   integer      -42 y, 42 y, 4x n, empty n, bare hyphen n
+    #   positive     0 n, 1 y            non-negative  0 y
+    #   port         8080 y, 0 n, 65535 y, 65536 n
+    #   ipv4         dotted quad y, three parts n, five n, leading zero n,
+    #                all zeroes y, 256 n, empty octet n
+    #   ipv6         ::1 y, mapped y, double compression n, trailing colon n
+    #   email        a@b.c y, two at signs n, empty local n, empty label n
+    #   hostname     example.com y, leading hyphen n, trailing hyphen n,
+    #                four labels y
+    #   url          https y, ftp n, no host n
+    assert_eq "$(_vt_verdicts "$sh")" \
+        "1100001110101000100110010001001100"
+}
+
+#[test]
+# Every function in the file, called under a POSIX shell, compared against bash.
+#
+# The parse check above is not this and cannot be. Three `${val,,}` sat in
+# `is_boolean`, `is_truthy` and `is_falsy` through a commit whose subject was
+# putting this file on the floor: `dash -n` passed, because a bad substitution
+# is fatal when it runs and invisible when it parses. The thirty-four verdict
+# cases did run under dash, and covered nine validators, which was the whole
+# matrix except the three that were broken.
+#
+# So the function list is read out of the file rather than written here. A hand
+# list is exactly what was already wrong: it named what somebody thought to
+# name, and the three it missed were the three that mattered.
+#
+# `os.sh` has this test already, with a comment saying its first version called
+# one function and a `[[` put back into another left it passing. Same shape,
+# same lesson, and it took shipping the defect to apply it here.
+it_runs_every_function_under_a_posix_shell() {
+    local sh; sh="$(_vt_posix_sh)"
+    local fns
+    fns="$(grep -oE '^[a-z_][a-zA-Z0-9_]*\(\)' "${NUTSHELL_ROOT}/lib/validate.sh" \
+           | sed 's/()$//' | sort -u | tr '\n' ' ')"
+    assert_ok test "$(printf '%s' "$fns" | wc -w)" -ge 12
+
+    # One benign argument, and the answer is not the point: what is being
+    # checked is that the shell got through the body at all. A validator that
+    # says no is fine; one that says `Bad substitution` is not.
+    # `use` stubbed, exactly as the lowered preamble stubs it. The module says
+    # `use log` at file scope and a bare POSIX shell has no resolver, so
+    # without this the probe reports `use: not found` and says nothing about
+    # the thing it was built to check. A floor consumer is a lowered artifact,
+    # where `use` is a stub because everything it would load is already there.
+    local probe='
+        use() { return 0; }
+        . "$1"/lib/validate.sh || exit 1
+        for f in $2; do
+            printf "%s=" "$f"
+            "$f" "x" >/dev/null 2>&1 && printf "1;" || printf "0;"
+        done
+    '
+    local got want
+    got="$("$sh" -c "$probe" _ "$NUTSHELL_ROOT" "$fns" 2>&1)"
+    assert_not_contains "$got" "Bad substitution"
+    assert_not_contains "$got" "not found"
+    assert_not_contains "$got" "Illegal"
+    assert_ne "$got" ""
+
+    # And it answers the same as bash does. A floor implementation that runs
+    # and answers differently is worse than one that does not run.
+    want="$(bash -c "$probe" _ "$NUTSHELL_ROOT" "$fns" 2>/dev/null)"
+    assert_eq "$got" "$want"
+}
+
+#[test]
+# The trailing dot, which the conversion changed and nothing held.
+#
+# The old pattern was anchored at both ends, so a trailing dot failed it. The
+# rewrite checks per label and the split yields no final field, so it passes.
+# The new answer is the better one, a trailing dot being the fully-qualified
+# form, but it is a decision and this is what makes it one.
+it_accepts_a_fully_qualified_name_with_its_trailing_dot() {
+    assert_ok is_hostname "example.com."
+    assert_ok is_hostname "a."
+    assert_ok is_email    "user@example.com."
+    # And the rest of the dot handling is unchanged, which is the half that
+    # says this was a change to one case rather than to the parsing.
+    assert_fails is_hostname ".example.com"
+    assert_fails is_hostname "a..b"
+    assert_fails is_hostname ".."
+    assert_fails is_hostname "."
+}
+
+#[test]
+# A number too large for shell arithmetic is answered, not reported.
+#
+# `[ "$val" -gt 0 ]` on twenty digits writes `integer expected` to stderr and
+# returns 2. A validator's whole job is a quiet yes or no about an input the
+# caller could not judge itself, so printing on exactly that input is the one
+# thing it must not do. Neither of these reaches arithmetic now.
+it_stays_quiet_on_a_number_too_large_to_evaluate() {
+    local big="99999999999999999999999999"
+    local out rc
+
+    out="$(is_positive_integer "$big" 2>&1)"; rc=$?
+    assert_eq "$out" ""
+    assert_eq "$rc" "0"
+
+    out="$(is_port "$big" 2>&1)"; rc=$?
+    assert_eq "$out" ""
+    assert_ne "$rc" "0"
+}
+
+#[test]
+# A leading zero is not a port, which is a deliberate change.
+#
+# The old code read it as octal, so `007` was seven and passed while `08080`
+# had no valid octal reading and failed with a diagnostic. Neither answer was
+# anybody's intent. One rule now, and it is the one `is_ipv4` already applies
+# to an octet.
+it_refuses_a_port_written_with_a_leading_zero() {
+    assert_fails is_port "007"
+    assert_fails is_port "08080"
+    assert_fails is_port "0"
+    assert_ok    is_port "7"
+    assert_ok    is_port "8080"
+}

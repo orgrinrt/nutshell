@@ -373,3 +373,41 @@ GOOD
     rm -f "$f"
     assert_eq "$hits" ""
 }
+
+#[test]
+# A positional parameter is a variable too, and the scan could not see one.
+#
+# Four rules were spelled `\$\{[A-Za-z_][A-Za-z0-9_]*`, which is the grammar of
+# a *name* and excludes `$1` by construction. `${1//[^:]/}` sat in a shipped
+# module that the same scan reported clean, and it is fatal under dash rather
+# than ignored: `Bad substitution`, at the point of use, so `dash -n` passes.
+it_reports_a_bashism_on_a_positional_parameter() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'BAD'
+a="${1//[^:]/}"
+b="${1,,}"
+c="${2:0:3}"
+BAD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_contains "$hits" '1:'
+    assert_contains "$hits" '2:'
+    assert_contains "$hits" '3:'
+}
+
+#[test]
+# The control: widening the name grammar must not start flagging an ordinary
+# expansion. A rule that fires on `${x}` fires on every line in the library.
+it_still_reads_an_ordinary_expansion_as_fine() {
+    local f; f="$(_pf_tmp)"
+    cat > "$f" <<'GOOD'
+a="${1}"
+b="${1:-default}"
+c="${2%%.*}"
+d="${name}/${1}"
+e="$(printf '%s' "${1}")"
+GOOD
+    local hits; hits="$(_posix_bashisms "$f")"
+    rm -f "$f"
+    assert_eq "$hits" ""
+}

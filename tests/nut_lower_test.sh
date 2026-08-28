@@ -448,13 +448,14 @@ it_never_fails_inside_its_own_preamble() {
 # A ratchet on how many closures a POSIX shell will take, so the number can
 # only move one way.
 #
-# Twelve of twenty-eight today, ten without the shaking. That is a fact about
+# Thirteen of twenty-eight today, eleven without the shaking. That is a fact about
 # the modules nobody has converted rather than about the lowering, and it is
 # written down here because it was previously asserted nowhere: the two tests
 # above lower `os` and `string`, which are two of the ones that already pass.
 #
 # It was six and five when this was written. `deps` took it to ten, because six
-# closures were failing inside that one file, and `validate` to twelve.
+# closures were failing inside that one file, `validate` to twelve, and
+# `attr` to thirteen.
 #
 # Raise the floor when modules land. Never lower it.
 it_ratchets_how_many_closures_reach_the_floor() {
@@ -476,16 +477,16 @@ it_ratchets_how_many_closures_reach_the_floor() {
 
     # Spelled as comparisons rather than bare counts, so a failure names the
     # number it got and the number it owed instead of reporting that 4 is not 6.
-    local v="ok"; [ "$shaken" -lt 12 ] && v="only ${shaken} of ${total} shaken"
-    assert_eq "$v" "ok" "the shaken floor dropped below twelve"
+    local v="ok"; [ "$shaken" -lt 13 ] && v="only ${shaken} of ${total} shaken"
+    assert_eq "$v" "ok" "the shaken floor dropped below thirteen"
 
-    v="ok"; [ "$whole" -lt 10 ] && v="only ${whole} of ${total} whole"
-    assert_eq "$v" "ok" "the unshaken floor dropped below ten"
+    v="ok"; [ "$whole" -lt 11 ] && v="only ${whole} of ${total} whole"
+    assert_eq "$v" "ok" "the unshaken floor dropped below eleven"
 
     # Dropping what nothing calls can only help a POSIX shell, never hurt it:
     # an unconverted function nobody reaches stops being a parse error when it
-    # stops being in the file. Twelve against ten today, and the direction is
-    # the part that has to hold.
+    # stops being in the file. Thirteen against eleven today, and the
+    # direction is the part that has to hold.
     v="ok"; [ "$shaken" -lt "$whole" ] && v="shaken ${shaken} < whole ${whole}"
     assert_eq "$v" "ok" "shaking made fewer closures parse, which it cannot do"
 }

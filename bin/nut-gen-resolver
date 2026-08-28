@@ -23,6 +23,12 @@
 # entry point somebody sources while developing, where the machine running it
 # is the machine being asked about.
 #
+# NOT WIRED YET, deliberately. `use` still calls `_lib_nut_lookup`, so this is
+# generated, diff-checked against the manifest and tested, and nothing loads
+# it. It is staged for the `init` dissolution, where the resolver stops being a
+# thing `init` computes and becomes a thing `lib.nut` produces. Saying so here
+# because 145 generated lines that nobody sources read as a live resolver.
+#
 # Usage:
 #   nut-gen-resolver [root] > resolver
 # =============================================================================

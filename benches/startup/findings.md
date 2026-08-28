@@ -22,21 +22,35 @@ the conclusion inverts.
 | lowered, `use` resolved already | 216 | **60** |
 | lowered and shaken | 217 | **61** |
 
-The eager scan was 209ms that every arm paid equally, so it hid the difference
-between them. With it gone, **the lowering is a 4x** and what it removes is the
-resolution, which this file called noise because it was measuring underneath a
-much larger constant.
+**The 4x is prebinding, not resolution, and not the scan.** The first draft of
+this section said it was the resolution, and the table directly above it says
+otherwise: `resolved` and `lowered, dispatch left to run` are both 249, so
+lowering without prebinding buys nothing measurable and manifest resolution
+therefore costs nothing measurable either. The whole gap lives between the two
+*lowered* arms, 249 against 60, and the only thing that differs there is
+whether the dispatch was decided at lower time.
+
+**And the scan removal did not move the resolved arm at all**: 248 before, 249
+after, which is the same number. So it never paid a 209ms scan that went away.
+What the scan removal moves is the load, and the load is not what this workload
+spends its time on, because it goes on to call the tools.
+
+Measured end to end, loading `fs` and `text` and then making two dispatched
+calls: 222ms before, 218ms after. Lazy detection moves cost out of the load and
+into the first call that needs a tool, so a program using few tools wins and
+one using many pays the same total. `use deps` alone going 245ms to 79ms is a
+true statement about loading and not about running.
 
 Shaking is still noise: 61 against 60, the spreads touching, exactly as before.
 That part of the old answer stands and is the one the tree-shaking question
 asked.
 
-Per module, now that nothing dominates: `os` 27ms, `string` 26, `validate` 46,
-`deps` 67, `toml` 91, `fs` 99, `text` 102. Before, every one of those was two
-hundred and something and the number was `deps`.
+Per module at load, now that nothing dominates: `os` 27ms, `string` 26,
+`validate` 46, `deps` 67, `toml` 91, `fs` 99, `text` 102. Before, every one of
+those was two hundred and something and the number was `deps`.
 
-**holds for:** bash 5.3, `Darwin arm64`, this workload's 6 modules, `deps`
-resolving on demand. The section below is kept because it is the reasoning that
+**holds for:** bash 5.3, `Darwin arm64`, this workload's 6 modules and its one
+dispatched call, `deps` resolving on demand. The section below is kept because it is the reasoning that
 found the scan, and because a superseded measurement with its successor beside
 it is worth more than a deleted one.
 

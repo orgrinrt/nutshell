@@ -15,6 +15,11 @@
 # compares. It reads no state and makes no judgement: either the generator
 # produces what is committed, or it does not.
 #
+# Nothing loads `resolver` yet. That is deliberate and it is why this check
+# exists now rather than later: a generated file with no consumer is exactly
+# the one that rots, and it has to already be correct on the day `use` starts
+# reading it.
+#
 # Usage: ./examples/checks/check_resolver_current.sh
 # =============================================================================
 

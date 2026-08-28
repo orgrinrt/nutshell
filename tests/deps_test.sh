@@ -334,3 +334,46 @@ it_resolves_the_same_paths_under_both_shells() {
 }
 
 
+
+#[test]
+# Every public function answers from a cold shell, with nothing asked first.
+#
+# Detection is lazy, so a function reading the VARIANT or CAN table answers
+# from an empty table unless it resolves first. Four did not: `deps_variant`,
+# `deps_is_gnu`, `deps_is_bsd` and `deps_cap`. They returned `unknown`, false,
+# false and `0`, with no error, and the suite stayed green at 785 because no
+# caller in this tree uses any of them. The break was confined to the public
+# surface, which is the one place a suite cannot speak for.
+#
+# So this asks each of them in a shell that has done nothing else, which is the
+# only state that distinguishes resolving from reading what somebody else
+# resolved. `stat` and `sed` are used because both carry a real variant here.
+it_answers_from_a_cold_shell_without_being_primed() {
+    local root; root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    local one
+    one() {
+        bash -c '. "$1"/init >/dev/null 2>&1; use deps; shift; eval "$*"' _ "$root" "$@" 2>&1
+    }
+
+    # A variant, through all three doors that report one.
+    assert_eq "$(one 'deps_variant stat')" "$(one 'deps_scan_first=1; _deps_scan_all; deps_variant stat')"
+    assert_ne "$(one 'deps_variant stat')" "unknown"
+    assert_ok   bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_bsd stat || deps_is_gnu stat' _ "$root"
+
+    # And a capability, which reads the other table.
+    assert_ne "$(one 'deps_cap stat_format')" "0"
+    assert_ok bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_can stat_format' _ "$root"
+}
+
+#[test]
+# The control, and it is what stops the fix above from being "scan everywhere".
+#
+# A tool that is not there still answers, and answers no, rather than hanging
+# or erroring on the resolve that now sits in front of these.
+it_still_answers_no_for_a_tool_that_is_not_there() {
+    local root; root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    assert_eq "$(bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_variant definitely_not_a_tool' _ "$root" 2>&1)" "unknown"
+    assert_fails bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_bsd definitely_not_a_tool' _ "$root"
+    assert_fails bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_is_gnu definitely_not_a_tool' _ "$root"
+    assert_eq "$(bash -c '. "$1"/init >/dev/null 2>&1; use deps; deps_cap no_such_capability' _ "$root" 2>&1)" "0"
+}

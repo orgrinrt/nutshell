@@ -658,6 +658,10 @@ deps_path() {
 # Usage: deps_variant "sed" -> "gnu" or "bsd"
 deps_variant() {
     local tool="${1:-}"
+    # Resolve first. The variant is set when a tool is found, and finding is
+    # lazy now, so asking about a tool nobody has asked for reads an empty
+    # table and answers `unknown` rather than the truth.
+    deps_has "$tool" >/dev/null 2>&1 || true
     local _v; _deps_get _v VARIANT "$tool"
     echo "${_v:-unknown}"
 }
@@ -667,6 +671,7 @@ deps_variant() {
 # Usage: deps_is_gnu "sed" -> returns 0 or 1
 deps_is_gnu() {
     local tool="${1:-}"
+    deps_has "$tool" >/dev/null 2>&1 || true
     local variant; _deps_get variant VARIANT "$tool"
     [ "$variant" = "gnu" ] || [ "$variant" = "gawk" ]
 }
@@ -676,6 +681,7 @@ deps_is_gnu() {
 # Usage: deps_is_bsd "sed" -> returns 0 or 1
 deps_is_bsd() {
     local tool="${1:-}"
+    deps_has "$tool" >/dev/null 2>&1 || true
     local variant; _deps_get variant VARIANT "$tool"
     [ "$variant" = "bsd" ]
 }
@@ -700,6 +706,11 @@ deps_can() {
 # Get capability value (1 or 0)
 # Usage: deps_cap "grep_pcre" -> "1" or "0"
 deps_cap() {
+    # The scan, for the same reason `deps_can` needs it: capabilities are
+    # probed against the tools that were found. One letter apart from
+    # `deps_can` and it was the one that did not, which is exactly where this
+    # went wrong.
+    _deps_scan_all
     local cap="${1:-}"
     local _c; _deps_get _c CAN "$cap"
     echo "${_c:-0}"

@@ -608,3 +608,99 @@ it_writes_the_codepoint_through_a_callers_own_name() {
     assert_fails _toml_utf8 65 '1bad'
     assert_fails _toml_utf8 65 'v; echo X'
 }
+
+#[test]
+it_does_not_split_an_inline_table_on_its_own_commas() {
+    # An inline table carries commas between its own pairs, and the splitter
+    # counted only quotes. Every `[{ src = "a", dest = "b" }]` came back as two
+    # fragments, `{ src = "a"` and `dest = "b" }`, each half a value.
+    local d; d="$(mktemp -d)"
+    printf '[app]\nconfigs = [\n  { src = "a", dest = "b" },\n  { src = "c", dest = "d", type = "directory" },\n]\n' > "$d/t.toml"
+    local -a arr=(); toml_array "$d/t.toml" app.configs arr
+    assert_eq "${#arr[@]}" "2"
+    assert_eq "${arr[0]}" '{ src = "a", dest = "b" }'
+    assert_eq "${arr[1]}" '{ src = "c", dest = "d", type = "directory" }'
+    rm -rf "$d"
+}
+
+#[test]
+it_does_not_split_a_nested_array_on_its_own_commas() {
+    # Same defect, other bracket. Nothing tracked depth at all, so a nested
+    # array was cut at every comma inside it.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = [["x", "y"], ["z"]]\n' > "$d/t.toml"
+    local -a arr=(); toml_array "$d/t.toml" a.v arr
+    assert_eq "${#arr[@]}" "2"
+    assert_eq "${arr[0]}" '["x", "y"]'
+    assert_eq "${arr[1]}" '["z"]'
+    rm -rf "$d"
+}
+
+#[test]
+it_still_splits_a_plain_array_on_its_commas() {
+    # The control. Depth tracking must not stop the ordinary case splitting.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = ["x", "y", "z"]\n' > "$d/t.toml"
+    local -a arr=(); toml_array "$d/t.toml" a.v arr
+    assert_eq "${#arr[@]}" "3"
+    assert_eq "${arr[1]}" "y"
+    rm -rf "$d"
+}
+
+#[test]
+it_keeps_a_comma_that_is_inside_a_quoted_element() {
+    # Quote awareness was already there and is what depth tracking sits beside,
+    # so it gets a case of its own rather than being assumed.
+    local d; d="$(mktemp -d)"
+    printf '[a]\nv = ["x,y", "z"]\n' > "$d/t.toml"
+    local -a arr=(); toml_array "$d/t.toml" a.v arr
+    assert_eq "${#arr[@]}" "2"
+    assert_eq "${arr[0]}" "x,y"
+    rm -rf "$d"
+}
+
+#[test]
+it_reads_a_key_out_of_an_inline_table() {
+    assert_eq "$(toml_inline_get '{ src = "a", dest = "b" }' dest)" "b"
+    assert_eq "$(toml_inline_get '{ src = "a", dest = "b" }' src)" "a"
+}
+
+#[test]
+it_reports_an_absent_inline_key_as_absent() {
+    # The distinction the caller needs: `type` is missing on most config rows
+    # and means the default, so "not there" must not read as an empty value
+    # that succeeded.
+    assert_fails toml_inline_get '{ src = "a" }' type
+    assert_fails toml_inline_has '{ src = "a" }' type
+    assert_ok toml_inline_has '{ src = "a" }' src
+}
+
+#[test]
+it_reads_an_inline_value_that_holds_a_comma_or_an_equals() {
+    assert_eq "$(toml_inline_get '{ a = "x,y", b = "2" }' a)" "x,y"
+    assert_eq "$(toml_inline_get '{ a = "k=v", b = "2" }' a)" "k=v"
+    assert_eq "$(toml_inline_get '{ a = "k=v", b = "2" }' b)" "2"
+}
+
+#[test]
+it_reads_an_unquoted_inline_value() {
+    assert_eq "$(toml_inline_get '{ n = 30, ok = true }' n)" "30"
+    assert_eq "$(toml_inline_get '{ n = 30, ok = true }' ok)" "true"
+}
+
+#[test]
+it_refuses_something_that_is_not_an_inline_table() {
+    assert_fails toml_inline_get 'src = "a"' src
+    assert_fails toml_inline_get '' src
+    assert_fails toml_inline_get '{ src = "a" }' ''
+}
+
+#[test]
+it_reads_a_nested_inline_table_whole() {
+    # The nested value is handed back as it was written. Reading into it is
+    # another call on the result, which is the same shape as reading into an
+    # element of an array.
+    local inner; inner="$(toml_inline_get '{ a = 1, env = { P = "x", H = "y" } }' env)"
+    assert_eq "$inner" '{ P = "x", H = "y" }'
+    assert_eq "$(toml_inline_get "$inner" H)" "y"
+}

@@ -649,8 +649,14 @@ toml_array() {
         value="${value%]}"
         value="$(str_trim "$value")"
         
-        # Split by comma, handling quoted strings
+        # Split on the commas that separate elements, which are the ones
+        # outside every quote and at nesting depth zero. An inline table and a
+        # nested array both carry their own commas, and splitting on those cuts
+        # one element into several fragments that are each half a value. That
+        # is what happened to every `[{ src = "a", dest = "b" }]`: it came back
+        # as `{ src = "a"` and `dest = "b" }`.
         local in_quotes=0
+        local depth=0
         local current=""
         local char
         local i
@@ -660,11 +666,17 @@ toml_array() {
             
             if [[ "$char" == '"' ]]; then
                 ((in_quotes = 1 - in_quotes))
-            elif [[ "$char" == ',' && $in_quotes -eq 0 ]]; then
-                current="$(str_trim "$current")"
-                [[ -n "$current" ]] && _arr+=("$(_toml_extract_value "$current")")
-                current=""
-                continue
+            elif [[ $in_quotes -eq 0 ]]; then
+                case "$char" in
+                    '{'|'[') (( depth++ )) ;;
+                    '}'|']') (( depth > 0 )) && (( depth-- )) ;;
+                    ',') if (( depth == 0 )); then
+                             current="$(str_trim "$current")"
+                             [[ -n "$current" ]] && _arr+=("$(_toml_extract_value "$current")")
+                             current=""
+                             continue
+                         fi ;;
+                esac
             fi
             
             current+="$char"
@@ -686,6 +698,75 @@ toml_array() {
     return 0
 }
 
+
+#[pub]
+# Read one key out of an inline table, as `toml_array` hands them back.
+#
+# An inline table is a value rather than a section, so it has no header for
+# `toml_get` to address and comes out of `toml_array` whole. This takes the
+# text and a key and gives back the value, unquoted the same way any other
+# value is.
+#
+# Returns 1 when the key is absent, which is how an optional field is read:
+# `type` is missing on most of a dotfiles registry's config rows and means
+# file, and asking for it should say "not there" rather than print nothing and
+# claim success.
+# Usage: toml_inline_get '{ a = "1", b = "2" }' b -> prints 2
+toml_inline_get() {
+    local table="${1:-}"
+    local want="${2:-}"
+
+    [[ -n "$want" ]] || return 1
+
+    table="$(str_trim "$table")"
+    [[ "$table" == '{'*'}' ]] || return 1
+    table="${table#\{}"
+    table="${table%\}}"
+
+    # Same scan as the array splitter, and for the same reason: a value may
+    # hold a comma inside its quotes, and a nested table or array holds its own
+    # separators. Depth zero and outside the quotes is the only place a comma
+    # ends a pair.
+    local in_quotes=0 depth=0 current="" char i key val
+    local -a pairs=()
+    for ((i=0; i<${#table}; i++)); do
+        char="${table:$i:1}"
+        if [[ "$char" == '"' ]]; then
+            ((in_quotes = 1 - in_quotes))
+        elif [[ $in_quotes -eq 0 ]]; then
+            case "$char" in
+                '{'|'[') (( depth++ )) ;;
+                '}'|']') (( depth > 0 )) && (( depth-- )) ;;
+                ',') if (( depth == 0 )); then
+                         pairs+=("$current"); current=""; continue
+                     fi ;;
+            esac
+        fi
+        current+="$char"
+    done
+    pairs+=("$current")
+
+    for current in "${pairs[@]}"; do
+        current="$(str_trim "$current")"
+        [[ -n "$current" ]] || continue
+        # The first `=` outside the quotes separates them. A key is bare or
+        # quoted and neither may contain one, so the first is always right.
+        key="${current%%=*}"
+        val="${current#*=}"
+        [[ "$current" == *=* ]] || continue
+        key="$(str_trim "$key")"
+        key="${key%\"}"; key="${key#\"}"
+        [[ "$key" == "$want" ]] || continue
+        _toml_extract_value "$(str_trim "$val")"
+        return 0
+    done
+    return 1
+}
+
+#[pub]
+# Whether an inline table carries a key at all.
+# Usage: toml_inline_has '{ a = "1" }' a -> returns 0 (true) or 1 (false)
+toml_inline_has() { toml_inline_get "${1:-}" "${2:-}" >/dev/null 2>&1; }
 #[pub]
 # Check if a TOML value is true (handles various boolean representations)
 # Usage: toml_is_true "file.toml" "key" -> returns 0 (true) or 1 (false)

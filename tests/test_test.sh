@@ -218,3 +218,89 @@ it_does_not_fail_a_test_that_prints_assert_and_separately_runs_a_missing_command
     assert_contains "$out" "1 passed"
     assert_not_contains "$out" "assertion name was not found"
 }
+
+#[test]
+# A file that will not source used to look like every test in it dying at once,
+# with no hint of why.
+#
+# The runner sources the file again per test, in the subshell where the function
+# has to end up, and that source's output went to /dev/null. When it failed the
+# function was never defined, calling it did nothing, the closing mark never
+# ran, and every test in the file came back "marker empty" at 0.0s. A whole
+# file of ninety failed that way one night and the same file passed ninety for
+# ninety twenty minutes later, and there was no way to tell what had been
+# different.
+it_says_what_the_file_wrote_when_it_would_not_source() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_never_gets_to_run() {\n'
+        printf '    assert_eq 1 1\n'
+        printf '}\n'
+        # After the function, so discovery still finds it and the source still
+        # dies. A file that failed before the definition would be a different
+        # and much more obvious fault.
+        printf 'printf "the reason it broke\\n" >&2\n'
+        printf 'return 7\n'
+    } > "$d/zz_badsrc_test.sh"
+
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_badsrc_test.sh" 2>&1)"
+    rm -rf "$d"
+
+    assert_contains "$out" "did not finish"
+    # The whole point: what the file said on its way down.
+    assert_contains "$out" "the reason it broke"
+    # And not the old message, which was the symptom of every cause at once.
+    assert_not_contains "$out" "marker empty"
+}
+
+#[test]
+# The other half: the file sources cleanly but defines nothing by that name.
+#
+# Discovery greps for the attribute, so a function renamed under its own marker
+# is registered and then not there. That reads identically to a test that died,
+# and it is a different fault with a different fix.
+it_says_so_when_the_file_defines_no_such_test() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_was_renamed_and_the_marker_left_behind() {\n'
+        printf '    assert_eq 1 1\n'
+        printf '}\n'
+        # Removed again, which is what a rename leaves behind.
+        printf 'unset -f it_was_renamed_and_the_marker_left_behind\n'
+    } > "$d/zz_gone_test.sh"
+
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_gone_test.sh" 2>&1)"
+    rm -rf "$d"
+
+    assert_contains "$out" "defines no it_was_renamed_and_the_marker_left_behind"
+}
+
+#[test]
+# The control for both of the above. A file that sources fine and defines what
+# it says still passes, so the new branches cannot be swallowing good runs.
+it_still_runs_a_file_that_sources_cleanly() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_is_perfectly_fine() {\n'
+        printf '    assert_eq 1 1\n'
+        printf '}\n'
+    } > "$d/zz_fine_test.sh"
+
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_fine_test.sh" 2>&1)"
+    rm -rf "$d"
+
+    assert_contains     "$out" "1 passed"
+    assert_not_contains "$out" "did not finish"
+}

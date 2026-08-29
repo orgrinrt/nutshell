@@ -320,9 +320,33 @@ EOF
         # from one that died part way through. It runs whatever the function's
         # status, because a test is allowed to end on a command that returns
         # non-zero and half this library returns non-zero on purpose.
+        # The source's own failure, kept rather than thrown away. It used to be
+        # `. "$file" >/dev/null 2>&1`, and when that source failed the function
+        # was never defined, calling it did nothing, `_test_mark z` never ran,
+        # and every test in the file came back "marker empty" at 0.0s with no
+        # hint of why. A whole file of 90 failed that way one night and the
+        # same file passed 90 for 90 twenty minutes later, and the run in
+        # between was diagnosable only by guessing.
+        #
+        # Sourcing has to happen in this subshell, since that is where the
+        # function has to end up, so its stderr goes to a file beside the
+        # marker rather than into a nested command substitution that would
+        # throw the definitions away with it.
         local start_us end_us took=""
         start_us="$(_test_now_us)"
-        output="$( set +e; . "$file" >/dev/null 2>&1; "$name" 2>&1; _test_mark z )"
+        output="$( set +e
+            . "$file" >/dev/null 2>"${_TEST_MARK}.src"
+            _src_rc=$?
+            if [ "$_src_rc" -ne 0 ]; then
+                printf '%s\n' "the test file would not source (status ${_src_rc}), so nothing in it ran:"
+                head -5 "${_TEST_MARK}.src" 2>/dev/null
+            elif ! command -v "$name" >/dev/null 2>&1; then
+                printf '%s\n' "the file sourced but defines no ${name}:"
+                head -5 "${_TEST_MARK}.src" 2>/dev/null
+            else
+                "$name" 2>&1
+                _test_mark z
+            fi )"
         end_us="$(_test_now_us)"
         [ -n "$start_us" ] && [ -n "$end_us" ] &&
             took=" ($(( (end_us - start_us) / 1000000 )).$(( (end_us - start_us) / 100000 % 10 ))s)"
@@ -345,7 +369,14 @@ EOF
             if [ ! -e "$_TEST_MARK" ]; then
                 why="the test did not finish (its marker file is gone: ${_TEST_MARK})"
             elif [ -z "$tally" ]; then
-                why="the test did not finish (marker empty, so it stopped before the first assertion)"
+                # The source diagnosis, when there is one. Without it this said
+                # only that the marker was empty, which is the symptom of every
+                # cause at once.
+                if [ -s "${_TEST_MARK}.src" ]; then
+                    why="the test did not finish, and the file wrote this while sourcing: $(head -3 "${_TEST_MARK}.src" 2>/dev/null | tr '\n' ' ')"
+                else
+                    why="the test did not finish (marker empty, so it stopped before the first assertion)"
+                fi
             else
                 why="the test did not finish (marker held '${tally}', so it stopped part way)"
             fi

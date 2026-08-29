@@ -216,6 +216,132 @@ it_refuses_a_call_with_nothing_to_run() {
     assert_eq "$rc" "2"
 }
 
+# --- saying what root is about to do -------------------------------------------
+#
+# The sentence naming the task is not enough on its own. Somebody who reads
+# "asking for your password" and nothing else has to take the tool's word for
+# what is being elevated, and a tool that types the password prompt is a tool
+# that has to show its working.
+
+# Everything the notice needs stubbed, so each test below says only what it is
+# about. Elevating, a password wanted, a terminal to type on, and a sudo that
+# does nothing.
+_priv_stub_asking() {
+    priv_is_root() { return 1; }
+    priv_how() { printf 'sudo'; }
+    priv_needs_password() { return 0; }
+    _priv_can_prompt() { return 0; }
+    sudo() { return 0; }
+}
+_priv_unstub_asking() {
+    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo
+}
+
+#[test]
+it_shows_the_exact_command_before_the_prompt() {
+    _priv_stub_asking
+    local out; out="$(priv_run "write the hook" \
+        install -o root -m 0644 /tmp/src /etc/dst 2>&1)"
+    _priv_unstub_asking
+    assert_contains "$out" "install"
+    assert_contains "$out" "/etc/dst"
+    assert_contains "$out" "0644"
+}
+
+#[test]
+it_quotes_an_argument_that_holds_a_space() {
+    # Unquoted, `install /tmp/a b /etc/d` is ambiguous about how many files are
+    # being written, and how many files root writes is exactly the thing being
+    # approved.
+    _priv_stub_asking
+    local out; out="$(priv_run "a thing" install "/tmp/a b" /etc/d 2>&1)"
+    _priv_unstub_asking
+    assert_contains "$out" "'/tmp/a b'"
+}
+
+#[test]
+it_quotes_an_argument_that_holds_a_quote() {
+    # `_priv_sq`'s own case, reached through the notice. A path with a single
+    # quote in it must not close the quoting and leave the rest bare.
+    _priv_stub_asking
+    local out; out="$(priv_run "a thing" install "/tmp/it's" /etc/d 2>&1)"
+    _priv_unstub_asking
+    assert_contains "$out" "'/tmp/it'\\''s'"
+}
+
+#[test]
+it_says_nothing_on_stdout_so_a_captured_result_stays_clean() {
+    # The reason this is not `log_info`, which writes to stdout. A caller doing
+    # `x="$(priv_run ... some-command)"` would otherwise find the notice inside
+    # `x`, and the failure is a wrong value rather than an error.
+    _priv_stub_asking
+    sudo() { printf 'the answer'; }
+    local out; out="$(priv_run "a thing" true 2>/dev/null)"
+    _priv_unstub_asking
+    assert_eq "$out" "the answer"
+}
+
+#[test]
+it_shows_the_command_even_when_no_password_is_needed() {
+    # Passwordless sudo borrows the same authority and announces nothing, which
+    # is where a silent elevation is easiest to miss.
+    _priv_stub_asking
+    priv_needs_password() { return 1; }
+    local out; out="$(priv_run "a thing" install /tmp/src /etc/dst 2>&1)"
+    _priv_unstub_asking
+    assert_contains "$out" "/etc/dst"
+}
+
+#[test]
+it_shows_the_command_even_when_logging_is_quiet() {
+    # The other reason this is not a `log_*` call: those are dropped above the
+    # info level, so the one machine running quiet would be the one asking for
+    # a password with nothing beside it.
+    _priv_stub_asking
+    local saved="${LOG_LEVEL:-}"
+    LOG_LEVEL=error
+    local out; out="$(priv_run "a thing" install /tmp/src /etc/dst 2>&1)"
+    LOG_LEVEL="$saved"
+    _priv_unstub_asking
+    assert_contains "$out" "/etc/dst"
+    assert_contains "$out" "a thing"
+}
+
+#[test]
+it_says_nothing_when_it_is_already_root() {
+    # Nothing is being borrowed, so there is nothing to approve. A notice on
+    # every call from inside something already elevated is noise, and noise is
+    # what makes the real one unreadable.
+    priv_is_root() { return 0; }
+    local out; out="$(priv_run "a thing" true 2>&1)"
+    unset -f priv_is_root
+    assert_eq "$out" ""
+}
+
+#[test]
+it_says_nothing_when_it_refuses_to_elevate_at_all() {
+    # A refusal is not an elevation. Printing the command there would read as
+    # though it had run.
+    priv_is_root() { return 1; }
+    priv_how() { return 1; }
+    local out; out="$(priv_run "a thing" install /tmp/src /etc/dst 2>&1)" || true
+    unset -f priv_is_root priv_how
+    assert_not_contains "$out" "/etc/dst"
+    assert_contains "$out" "a thing"
+}
+
+#[test]
+it_says_nothing_when_there_is_no_terminal_to_ask_on() {
+    # Same again for the other refusal. Nothing ran, so nothing is announced.
+    priv_is_root() { return 1; }
+    priv_how() { printf 'sudo'; }
+    priv_needs_password() { return 0; }
+    _priv_can_prompt() { return 1; }
+    local out; out="$(priv_run "a thing" install /tmp/src /etc/dst 2>&1)" || true
+    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt
+    assert_not_contains "$out" "/etc/dst"
+}
+
 # --- giving the file back ------------------------------------------------------
 
 #[test]

@@ -53,9 +53,6 @@ _nut_resolve() {
         hash)
             { printf '%s' "$_nr_root/lib/hash.sh"; return 0; }
             ;;
-        github)
-            { printf '%s' "$_nr_root/lib/github.sh"; return 0; }
-            ;;
         inuse)
             { printf '%s' "$_nr_root/lib/inuse.sh"; return 0; }
             ;;

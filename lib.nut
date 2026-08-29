@@ -19,7 +19,6 @@ fs::impl::stat_bsd       lib/fs/impl/stat_bsd.sh      internal
 fs::impl::stat_gnu       lib/fs/impl/stat_gnu.sh      internal
 git                      lib/git.sh
 hash                     lib/hash.sh
-github                   lib/github.sh
 inuse                    lib/inuse.sh
 http                     lib/http.sh
 key                      lib/key.sh

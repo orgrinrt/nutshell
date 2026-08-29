@@ -154,3 +154,89 @@ the_digest_it_reads_back_is_the_digest_it_wrote() {
     assert_eq "$(hash_sums_get "$HROOT/SUMS" f)" "$d"
     _h_end
 }
+
+# The digest of a known input, as a constant.
+#
+# `it_hashes_a_file_to_what_the_system_tool_says` compares against `_h_expect`,
+# which dispatches to the same `sha256sum` or `shasum` and cuts the same field,
+# so on any machine carrying one of those it compares a computation to itself.
+# It still earns its place, since it catches the argument being passed wrong,
+# but it cannot catch the tool being wrong and neither could anything else here.
+#
+# `5891b5b5...` is sha256 of the five bytes `hello\n`, and it is a fact about
+# sha256 rather than about this machine.
+#[test]
+it_hashes_a_known_input_to_its_known_digest() {
+    _h_setup
+    assert_eq "$(hash_sha256 "$HROOT/f")" \
+        "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+    _h_end
+}
+
+# Each arm's own output shape, parsed.
+#
+# The three tools disagree about where the digest sits on the line, and
+# `openssl` is the one that differs: it writes `SHA256(path)= <digest>`, so the
+# arm carries its own extra `${out##* }` and nothing was entering it. `_h_expect`
+# has no openssl arm either, so on a machine with `sha256sum` the openssl branch
+# was dead in every run this suite has ever done.
+#
+# Shimmed rather than skipped where a tool is absent. A skipped arm is the same
+# blind spot with a nicer name, and what is being pinned here is the parse
+# rather than the tool: given exactly what each writes, the right field comes
+# out.
+_h_stub() {
+    local name="$1" line="$2"
+    mkdir -p "$HROOT/bin"
+    printf '#!/bin/sh\nprintf %%s\\\\n "%s"\n' "$line" > "$HROOT/bin/$name"
+    chmod +x "$HROOT/bin/$name"
+    PATH="$HROOT/bin:$PATH"
+    # The name goes into a global rather than being closed over. Written first
+    # as `hash_impl() { printf '%s' "$name"; }`, where `name` is this
+    # function's own local and is long gone by the time the body runs, so every
+    # arm got an empty string and fell to the `*)` case. All three assertions
+    # failed at once, which is the only reason it was visible: had one of them
+    # been the whole test it would have read as the tool being absent.
+    _H_STUB_IMPL="$name"
+    hash_impl() { printf '%s' "$_H_STUB_IMPL"; }
+}
+
+#[test]
+it_parses_the_digest_out_of_each_tools_own_output_shape() {
+    local want="5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+    local saved="$PATH"
+
+    _h_setup
+    _h_stub sha256sum "${want}  ${HROOT}/f"
+    assert_eq "$(hash_sha256 "$HROOT/f")" "$want"
+    PATH="$saved"; unset -f hash_impl; unset _H_STUB_IMPL; _h_end
+
+    _h_setup
+    _h_stub shasum "${want}  ${HROOT}/f"
+    assert_eq "$(hash_sha256 "$HROOT/f")" "$want"
+    PATH="$saved"; unset -f hash_impl; unset _H_STUB_IMPL; _h_end
+
+    # The one with the prefix, and the one that was never entered.
+    _h_setup
+    _h_stub openssl "SHA256(${HROOT}/f)= ${want}"
+    assert_eq "$(hash_sha256 "$HROOT/f")" "$want"
+    PATH="$saved"; unset -f hash_impl; unset _H_STUB_IMPL; _h_end
+}
+
+# The control for the test above, so it is not three assertions that would pass
+# against any implementation. A tool writing a shape no arm knows must not come
+# back looking like a digest.
+#[test]
+it_does_not_invent_a_digest_from_a_shape_no_arm_knows() {
+    local saved="$PATH" out
+    _h_setup
+    _h_stub openssl "no digest on this line at all"
+    # The arm has to be entered for this to mean anything. A stub that never
+    # ran would also produce no digest, and an earlier draft of this test
+    # passed that way while all three arms above were failing.
+    assert_eq "$(hash_impl)" "openssl"
+    out="$(hash_sha256 "$HROOT/f" 2>/dev/null)"
+    assert_ne "$out" "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+    assert_ne "${#out}" "64"
+    PATH="$saved"; unset -f hash_impl; unset _H_STUB_IMPL; _h_end
+}

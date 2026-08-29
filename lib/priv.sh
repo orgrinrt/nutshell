@@ -247,6 +247,24 @@ priv_needs_password() {
     return 0
 }
 
+# The command about to be elevated, printed so a person can read it.
+#
+# Quoted per word through `_priv_sq`, which is what makes an argument holding a
+# space readable as one argument. Unquoted, `install -m 0644 /tmp/a b c/d` is
+# ambiguous about how many files are being written, and that is exactly the
+# detail somebody is being asked to approve.
+#
+# **Straight to stderr, and never through `log_info`.** Two reasons and both
+# bite. `log_info` writes to stdout, so a caller doing `x="$(priv_run ...)"`
+# would find this line inside `x`. And it is dropped above the info level, so
+# the one machine running quiet is the one that asks for a password with
+# nothing beside it, which is the whole failure being fixed.
+_priv_say_command() {
+    local q="" a
+    for a in "$@"; do q="${q}${q:+ }$(_priv_sq "$a")"; done
+    printf '    %s\n' "$q" >&2
+}
+
 #[pub]
 # Run one command as root, then return.
 #
@@ -282,10 +300,16 @@ priv_run() {
     fi
 
     # Said before the prompt appears, so an unexpected password request has a
-    # sentence beside it explaining what asked for it.
-    if priv_needs_password; then
-        log_info "${what}: asking for your password for this one step"
-    fi
+    # sentence beside it explaining what asked for it, and the command itself
+    # under that, so the sentence can be checked rather than trusted. Somebody
+    # who reads "asking for your password" and nothing else is being asked to
+    # take the tool's word for what root is about to do.
+    #
+    # Both lines, whenever this elevates, and not only when a prompt appears.
+    # Passwordless sudo borrows the same authority and says nothing about it,
+    # which is the case where a silent elevation is easiest to miss.
+    printf '%s: running one command as root\n' "$what" >&2
+    _priv_say_command "$@"
 
     case "$how" in
         sudo) sudo -- "$@" ;;

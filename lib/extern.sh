@@ -294,12 +294,20 @@ _extern_lay_out() {
     # so a clone leaves it behind and the checkout fails on the exact commit
     # the lockfile asked for. A worktree reads the mirror's object store, where
     # it is.
-    git -C "$mirror" worktree add --quiet --detach "$dir" "$commit" 2>/dev/null || {
+    local said
+    said="$(git -C "$mirror" worktree add --quiet --detach "$dir" "$commit" 2>&1)" || {
         log_error "could not lay ${name} out at ${commit}"
+        # What git said, because without it every cause reads the same and the
+        # message names none of them. A directory already there, a mirror with
+        # no such commit, a full disk and a permission refusal all arrived as
+        # the line above and nothing else, and the first of those had to be
+        # found by running this command by hand.
+        [ -n "$said" ] && log_error "git said: ${said}"
         git -C "$mirror" worktree prune 2>/dev/null
         return 1
     }
 }
+
 
 _extern_key() { printf '%s' "$1" | cksum | tr -d ' '; }
 

@@ -1091,3 +1091,32 @@ it_prefers_a_branch_over_a_tag_of_the_same_name() {
 
     assert_eq "$(_extern_remote_ref "$d" v1)" "heads ${head}"
 }
+
+#[test]
+it_says_what_git_said_when_a_lay_out_fails() {
+    # Every cause used to arrive as one line naming none of them, so the real
+    # one had to be found by running the `worktree add` by hand. A target
+    # directory that is already there and not empty is the cheapest way to make
+    # git refuse for a reason the line above cannot express.
+    #
+    # Straight at `_extern_lay_out`, because `_extern_guard` clears exactly
+    # this wreckage before calling it, so the case is unreachable through
+    # `extern_path` and reaching it that way would be testing the guard.
+    _isolate
+    local fix work dep commit target out
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    dep="${work}/dep"
+    commit="$(git -C "$dep" rev-parse HEAD)"
+
+    target="$(_ex_tmp target)/w"
+    mkdir -p "$target"
+    printf 'in the way\n' > "${target}/f"
+
+    out="$(_extern_lay_out fixture "$dep" "file://${dep}" "$commit" "$target" 2>&1)"
+
+    # `git said:`, not the commit: the line above it names the commit whether
+    # or not git's own words survive, so asserting that passed against the
+    # version this fixes.
+    assert_contains "$out" "git said:"
+    assert_contains "$out" "already exists"
+}

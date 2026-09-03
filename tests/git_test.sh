@@ -182,14 +182,21 @@ it_measures_a_named_head_instead_of_the_checkout() {
         # measured against the checkout, the bump is what shows
         [[ "$(git_changed_files "$base")" == "Cargo.toml" ]] || exit 2
         # named, the work branch is what shows, and the checkout is not in it
-        [[ "$(GIT_HEAD=work git_changed_files "$base")" == "b.txt" ]] || exit 3
-        GIT_HEAD=work git_changed "$base" Cargo.toml && exit 4
-        [[ "$(GIT_HEAD=work git_added_lines "$base" b.txt)" == "+two" ]] || exit 5
-        out="$(GIT_HEAD=work git_subjects "$base")"
+        [[ "$(NUT_GIT_HEAD=work git_changed_files "$base")" == "b.txt" ]] || exit 3
+        NUT_GIT_HEAD=work git_changed "$base" Cargo.toml && exit 4
+        [[ "$(NUT_GIT_HEAD=work git_added_lines "$base" b.txt)" == "+two" ]] || exit 5
+        out="$(NUT_GIT_HEAD=work git_subjects "$base")"
         [[ "$out" == *"feat: the work"* ]] || exit 6
         [[ "$out" != *"chore: bump"* ]] || exit 7
         # an empty value is the default, not an empty ref
-        [[ "$(GIT_HEAD= git_changed_files "$base")" == "Cargo.toml" ]] || exit 8
+        [[ "$(NUT_GIT_HEAD= git_changed_files "$base")" == "Cargo.toml" ]] || exit 8
+        # the tracked set is the named head's tree, and the patterns still filter it
+        [[ "$(NUT_GIT_HEAD=work git_tracked | tr '\n' ' ')" == "a.txt b.txt " ]] || exit 9
+        [[ "$(NUT_GIT_HEAD=work git_tracked '*.txt' 'nothing.rs' | tr '\n' ' ')" == "a.txt b.txt " ]] || exit 10
+        [[ "$(git_tracked | tr '\n' ' ')" == "Cargo.toml a.txt " ]] || exit 11
+        # a file that is only on the named head has an age there, and none here
+        NUT_GIT_HEAD=work git_file_age_days b.txt >/dev/null || exit 12
+        git_file_age_days b.txt >/dev/null && exit 13
         exit 0
     )
     assert_eq "$?" "0" "the named head, whatever is checked out"

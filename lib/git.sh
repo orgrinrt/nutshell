@@ -102,12 +102,17 @@ git_trunk() {
 #
 # Measured against the checkout, which is what a hook or a script standing in
 # a branch wants. A review of somebody else's branch wants the branch rather
-# than whatever happens to be checked out, so every helper here reads the head
-# it measures from `GIT_HEAD` where that is set, and `HEAD` otherwise:
+# than whatever happens to be checked out, so the helpers that read a tree or
+# a range take the head they measure from `NUT_GIT_HEAD` where that is set,
+# and `HEAD` otherwise:
 #
-#     GIT_HEAD=origin/feat/thing git_changed_files origin/dev
+#     NUT_GIT_HEAD=origin/feat/thing git_changed_files origin/dev
 #
-# The base is still the caller's; only the other end of the range moves.
+# The base is still the caller's; only the other end of the range moves. The
+# covered set is `git_changed_files`, `git_changed`, `git_added_lines`,
+# `git_file_age_days`, `git_subjects` and `git_tracked`; `git_trailers` takes
+# its range as an argument, and everything else here asks about the repository
+# rather than about a tree.
 
 # git_changed_files <base> [pathspec...]
 #
@@ -119,7 +124,7 @@ git_trunk() {
 # Usage: git_changed_files dev [pathspec...] -> one path per line
 git_changed_files() {
     local base="$1"; shift
-    git diff --name-only "${base}...${GIT_HEAD:-HEAD}" -- "$@" 2>/dev/null
+    git diff --name-only "${base}...${NUT_GIT_HEAD:-HEAD}" -- "$@" 2>/dev/null
 }
 
 # git_changed <base> <pathspec...>
@@ -142,7 +147,7 @@ git_changed() {
 # Usage: git_added_lines dev src -> the added side of the diff
 git_added_lines() {
     local base="$1" path="$2"
-    git diff "${base}...${GIT_HEAD:-HEAD}" -- "$path" 2>/dev/null | grep '^+' | grep -v '^+++'
+    git diff "${base}...${NUT_GIT_HEAD:-HEAD}" -- "$path" 2>/dev/null | grep '^+' | grep -v '^+++'
 }
 
 # -----------------------------------------------------------------------------
@@ -159,8 +164,8 @@ git_added_lines() {
 git_file_age_days() {
     local path="$1"
     local file_at head_at
-    file_at=$(git log -1 --format=%ct -- "$path" 2>/dev/null)
-    head_at=$(git log -1 --format=%ct 2>/dev/null)
+    file_at=$(git log -1 --format=%ct "${NUT_GIT_HEAD:-HEAD}" -- "$path" 2>/dev/null)
+    head_at=$(git log -1 --format=%ct "${NUT_GIT_HEAD:-HEAD}" 2>/dev/null)
     { [ -z "$file_at" ] || [ -z "$head_at" ]; } && { printf '0'; return 1; }
     printf '%d' $(( (head_at - file_at) / 86400 ))
 }
@@ -202,12 +207,30 @@ git_identities() {
 # Usage: git_subjects dev -> "<short-hash>\t<subject>" per commit added
 git_subjects() {
     local base="$1"
-    git log "${base}..${GIT_HEAD:-HEAD}" --format='%h%x09%s' 2>/dev/null
+    git log "${base}..${NUT_GIT_HEAD:-HEAD}" --format='%h%x09%s' 2>/dev/null
 }
 
 # git_tracked [pattern...]
+#
+# The index where the checkout is being measured; the named head's tree under
+# `NUT_GIT_HEAD`, filtered by the same patterns, which match at any depth the
+# way `ls-files` matches them.
 #[pub]
 # Usage: git_tracked ['*.sh'] -> one tracked path per line
 git_tracked() {
-    git ls-files "$@" 2>/dev/null
+    if [ -z "${NUT_GIT_HEAD:-}" ]; then
+        git ls-files "$@" 2>/dev/null
+        return
+    fi
+    local f p
+    git ls-tree -r --name-only "$NUT_GIT_HEAD" 2>/dev/null | while IFS= read -r f; do
+        if [ $# -eq 0 ]; then
+            printf '%s\n' "$f"
+            continue
+        fi
+        for p in "$@"; do
+            # shellcheck disable=SC2254
+            case "$f" in $p) printf '%s\n' "$f"; break ;; esac
+        done
+    done
 }

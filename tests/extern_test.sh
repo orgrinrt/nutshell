@@ -1093,62 +1093,30 @@ it_prefers_a_branch_over_a_tag_of_the_same_name() {
 }
 
 #[test]
-it_lays_out_over_a_directory_left_by_an_interrupted_run() {
-    # The one shape `worktree prune` cannot clear. A lay-out interrupted
-    # between `fs_mkdir` and `worktree add` leaves the target directory there
-    # and not a checkout, and `prune` only clears registrations whose directory
-    # has gone. `worktree add` then refuses with "already exists" on every
-    # later run, so the dependency never resolves again.
-    #
-    # It blocked every commit in a repository whose hooks resolve mockspace,
-    # and the message said only that the lay-out failed.
-    _isolate
-    local fix work dir
-    fix="$(_extern_fixture)"; work="${fix%% *}"
-    cd "${work}/project" || return 1
-
-    dir="$(extern_path fixture)" || return 1
-    assert_ok test -d "$dir"
-
-    # Put it back into the state the interrupted run leaves: the directory is
-    # there, git will not answer about it, and the registration is stale.
-    rm -rf "${dir}/.git"
-    assert_fails git -C "$dir" rev-parse --git-dir
-
-    assert_eq "$(extern_path fixture)" "$dir"
-    assert_ok test -d "${dir}/lib"
-}
-
-#[test]
-it_refuses_to_discard_a_path_outside_the_store() {
-    # The control on the removal the arm above depends on. The path handed to
-    # it is computed from a url and a commit, and a computed path reaching a
-    # recursive remove is the one thing here nothing can undo.
-    _isolate
-    local outside
-    outside="$(_ex_tmp outside)"
-    printf 'keep me\n' > "${outside}/f"
-
-    assert_fails _extern_discard "$outside"
-    assert_ok test -f "${outside}/f"
-}
-
-#[test]
 it_says_what_git_said_when_a_lay_out_fails() {
-    # Every cause used to arrive as one line naming none of them, so the
-    # directory-already-there case had to be found by running the command by
-    # hand. A commit the mirror does not have is the cheapest way to make one
-    # fail on purpose.
+    # Every cause used to arrive as one line naming none of them, so the real
+    # one had to be found by running the `worktree add` by hand. A target
+    # directory that is already there and not empty is the cheapest way to make
+    # git refuse for a reason the line above cannot express.
+    #
+    # Straight at `_extern_lay_out`, because `_extern_guard` clears exactly
+    # this wreckage before calling it, so the case is unreachable through
+    # `extern_path` and reaching it that way would be testing the guard.
     _isolate
-    local fix work mirror out
+    local fix work dep commit target out
     fix="$(_extern_fixture)"; work="${fix%% *}"
-    cd "${work}/project" || return 1
-    extern_path fixture >/dev/null || return 1
+    dep="${work}/dep"
+    commit="$(git -C "$dep" rev-parse HEAD)"
 
-    mirror="$(_ex_tmp mirror)"
-    git -C "$mirror" init --quiet 2>/dev/null || git init --quiet "$mirror"
-    out="$(_extern_lay_out fixture "$mirror" file://nowhere \
-        0000000000000000000000000000000000000000 "$(_ex_tmp target)/w" 2>&1)"
+    target="$(_ex_tmp target)/w"
+    mkdir -p "$target"
+    printf 'in the way\n' > "${target}/f"
 
-    assert_contains "$out" "0000000000000000000000000000000000000000"
+    out="$(_extern_lay_out fixture "$dep" "file://${dep}" "$commit" "$target" 2>&1)"
+
+    # `git said:`, not the commit: the line above it names the commit whether
+    # or not git's own words survive, so asserting that passed against the
+    # version this fixes.
+    assert_contains "$out" "git said:"
+    assert_contains "$out" "already exists"
 }

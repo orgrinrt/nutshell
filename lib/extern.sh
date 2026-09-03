@@ -263,7 +263,20 @@ extern_path() {
     # handed the caller a path that git refuses to answer any question about,
     # permanently, with nothing to do about it but find the cache by hand.
     if ! _extern_is_repo "$dir"; then
-        [ -e "$dir" ] && git -C "$mirror" worktree prune 2>/dev/null
+        # `prune` clears a registration whose directory has gone. It does
+        # nothing for the opposite case, a directory that is there and is not a
+        # checkout, which is what a lay-out interrupted between `fs_mkdir` and
+        # `worktree add` leaves behind. `worktree add` then refuses with
+        # "already exists" on every later run, so the dependency never resolves
+        # again and the only message anybody sees is that the lay-out failed.
+        #
+        # The directory is keyed by url and commit and holds nothing but a
+        # checkout of that commit, so removing it costs a re-checkout and
+        # nothing else.
+        if [ -e "$dir" ]; then
+            git -C "$mirror" worktree prune 2>/dev/null
+            _extern_discard "$dir" || return 1
+        fi
         _extern_guard "$dir" _extern_lay_out "$name" "$mirror" "$url" "$commit" "$dir" || return 1
     fi
 
@@ -294,11 +307,36 @@ _extern_lay_out() {
     # so a clone leaves it behind and the checkout fails on the exact commit
     # the lockfile asked for. A worktree reads the mirror's object store, where
     # it is.
-    git -C "$mirror" worktree add --quiet --detach "$dir" "$commit" 2>/dev/null || {
+    local said
+    said="$(git -C "$mirror" worktree add --quiet --detach "$dir" "$commit" 2>&1)" || {
         log_error "could not lay ${name} out at ${commit}"
+        # What git said, because without it every cause reads the same and the
+        # message names none of them. A directory already there, a mirror with
+        # no such commit, a full disk and a permission refusal all arrived as
+        # the line above and nothing else, and the first of those had to be
+        # found by running this command by hand.
+        [ -n "$said" ] && log_error "git said: ${said}"
         git -C "$mirror" worktree prune 2>/dev/null
         return 1
     }
+}
+
+# _extern_discard <dir> -> removes a directory inside the store
+#
+# Refuses anything outside the store root, because the path it is handed is
+# computed and a computed path passed to a recursive remove is the one thing
+# here that cannot be undone.
+_extern_discard() {
+    local dir="$1" root
+    root="$(_extern_cache_root)"
+    case "$dir" in
+        "${root}"/?*) ;;
+        *)
+            log_error "refusing to discard ${dir}, which is not inside ${root}"
+            return 1
+            ;;
+    esac
+    fs_rm "$dir"
 }
 
 _extern_key() { printf '%s' "$1" | cksum | tr -d ' '; }

@@ -99,6 +99,15 @@ git_trunk() {
 # -----------------------------------------------------------------------------
 # What changed
 # -----------------------------------------------------------------------------
+#
+# Measured against the checkout, which is what a hook or a script standing in
+# a branch wants. A review of somebody else's branch wants the branch rather
+# than whatever happens to be checked out, so every helper here reads the head
+# it measures from `GIT_HEAD` where that is set, and `HEAD` otherwise:
+#
+#     GIT_HEAD=origin/feat/thing git_changed_files origin/dev
+#
+# The base is still the caller's; only the other end of the range moves.
 
 # git_changed_files <base> [pathspec...]
 #
@@ -110,7 +119,7 @@ git_trunk() {
 # Usage: git_changed_files dev [pathspec...] -> one path per line
 git_changed_files() {
     local base="$1"; shift
-    git diff --name-only "${base}...HEAD" -- "$@" 2>/dev/null
+    git diff --name-only "${base}...${GIT_HEAD:-HEAD}" -- "$@" 2>/dev/null
 }
 
 # git_changed <base> <pathspec...>
@@ -133,7 +142,7 @@ git_changed() {
 # Usage: git_added_lines dev src -> the added side of the diff
 git_added_lines() {
     local base="$1" path="$2"
-    git diff "${base}...HEAD" -- "$path" 2>/dev/null | grep '^+' | grep -v '^+++'
+    git diff "${base}...${GIT_HEAD:-HEAD}" -- "$path" 2>/dev/null | grep '^+' | grep -v '^+++'
 }
 
 # -----------------------------------------------------------------------------
@@ -193,7 +202,7 @@ git_identities() {
 # Usage: git_subjects dev -> "<short-hash>\t<subject>" per commit added
 git_subjects() {
     local base="$1"
-    git log "${base}..HEAD" --format='%h%x09%s' 2>/dev/null
+    git log "${base}..${GIT_HEAD:-HEAD}" --format='%h%x09%s' 2>/dev/null
 }
 
 # git_tracked [pattern...]

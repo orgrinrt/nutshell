@@ -162,6 +162,41 @@ it_lists_the_subjects_a_branch_adds() {
 }
 
 #[test]
+it_measures_a_named_head_instead_of_the_checkout() {
+    # A review sweep run from a clone sitting on the release line reported a
+    # version bump on a pull request that touched no manifest, because every
+    # helper here measured the checkout. `GIT_HEAD` names the branch under
+    # review instead, and the checkout stops mattering.
+    local d; d="$(make_repo)"
+    (
+        cd "$d" || exit 1
+        base="$(git rev-parse --abbrev-ref HEAD)"
+        git checkout -qb work
+        echo two > b.txt
+        git add -A && git commit -qm "feat: the work"
+        # the checkout moves somewhere else entirely, with its own change
+        git checkout -q "$base" && git checkout -qb elsewhere
+        printf 'version = "2"\n' > Cargo.toml
+        git add -A && git commit -qm "chore: bump"
+
+        # measured against the checkout, the bump is what shows
+        [[ "$(git_changed_files "$base")" == "Cargo.toml" ]] || exit 2
+        # named, the work branch is what shows, and the checkout is not in it
+        [[ "$(GIT_HEAD=work git_changed_files "$base")" == "b.txt" ]] || exit 3
+        GIT_HEAD=work git_changed "$base" Cargo.toml && exit 4
+        [[ "$(GIT_HEAD=work git_added_lines "$base" b.txt)" == "+two" ]] || exit 5
+        out="$(GIT_HEAD=work git_subjects "$base")"
+        [[ "$out" == *"feat: the work"* ]] || exit 6
+        [[ "$out" != *"chore: bump"* ]] || exit 7
+        # an empty value is the default, not an empty ref
+        [[ "$(GIT_HEAD= git_changed_files "$base")" == "Cargo.toml" ]] || exit 8
+        exit 0
+    )
+    assert_eq "$?" "0" "the named head, whatever is checked out"
+    rm -rf "$d"
+}
+
+#[test]
 it_lists_tracked_files_and_ignores_the_rest() {
     local d; d="$(make_repo)"
     ( cd "$d" && echo x > untracked.txt )

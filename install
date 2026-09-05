@@ -16,15 +16,27 @@
 # want after moving one.
 #
 # Usage:
-#   ./install                 link into the first sensible directory on PATH
+# **A second link goes somewhere sudo can see it.** `sudo` replaces PATH with
+# its own `secure_path`, which never contains a home directory, so a link in
+# `~/.local/bin` alone means every `sudo <nutshell script>` dies with `env:
+# 'nutshell': No such file or directory` while pointing at a program that is
+# plainly right there. `/usr/local/bin` is on the default `secure_path` of
+# every distribution this runs on, so linking there too is what makes the
+# documented shebang work under sudo. That is not a niche case: a tool that
+# services machines spends half its life under one.
+#
+# Usage:
+#   ./install                 link into the first sensible directory on PATH,
+#                             and into /usr/local/bin so sudo can find it
 #   ./install ~/bin           link into a directory you name
-#   ./install --uninstall     remove the link
+#   ./install --no-system     skip the /usr/local/bin link
+#   ./install --uninstall     remove the links
 # =============================================================================
 
 set -uo pipefail
 . "${BASH_SOURCE[0]%/*}/init"
 
-use log fs validate
+use log fs validate priv
 
 readonly SELF_ROOT="${NUTSHELL_ROOT}"
 readonly TARGET="${SELF_ROOT}/bin/nutshell"
@@ -49,57 +61,184 @@ _pick_dir() {
     return 1
 }
 
+# Where sudo will look. Not guessed: `sudo -V` prints the compiled-in
+# `secure_path` when there is one, and a machine that has been configured
+# otherwise is exactly the machine where guessing would be wrong.
+# Two spellings, because sudo has two. A sudoers file names the setting
+# `secure_path`, and `sudo -V` renders the same setting in prose, as "Value to
+# override user's $PATH with". Grepping only the first reads a real sudo's
+# answer as no answer and falls back to the conventional set, which is right on
+# a stock machine and wrong on exactly the configured machine this reads sudo
+# to catch.
+_sudo_path() {
+    local line
+    line="$(sudo -V 2>/dev/null \
+        | grep -iE 'secure_path|override user.*PATH with' \
+        | head -1)" || true
+    line="${line#*: }"
+    [[ -n "$line" ]] && { printf '%s' "$line"; return 0; }
+    # No sudo, or a build that does not report one. The conventional set, which
+    # is what every distribution here compiles in.
+    printf '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+}
+
+# Is the interpreter already reachable from a root shell?
+#
+# `printf '%s\n'`, and the newline is the whole of it: `read` returns non-zero
+# on a last line with no terminator, so the loop body never runs for it. With
+# `%s` a one-directory path is dropped entirely and every longer one loses its
+# last directory, which on the conventional set is `/bin` and on a configured
+# machine is wherever somebody put the thing.
+_sudo_can_see() {
+    local dir
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] || continue
+        [[ -x "${dir}/nutshell" ]] && return 0
+    done < <(printf '%s\n' "$(_sudo_path)" | tr ':' '\n')
+    return 1
+}
+
+# The link that makes `sudo <script>` work, in the first directory on sudo's
+# own path that exists.
+#
+# Elevates when it has to, once, with the reason on screen. An install that
+# printed the command instead would be the same manual step it exists to
+# remove, and printing it is what every tool does that nobody ever finishes
+# setting up.
+_system_link() {
+    local dir target=""
+    while IFS= read -r dir; do
+        [[ -n "$dir" && -d "$dir" ]] || continue
+        case "$dir" in */sbin) continue ;; esac
+        target="${dir}/nutshell"; break
+    done < <(printf '%s\n' "$(_sudo_path)" | tr ':' '\n')
+
+    [[ -n "$target" ]] || { log_warn "nothing on sudo path to link into"; return 1; }
+
+    if [[ -L "$target" && "$(readlink "$target")" == "$TARGET" ]]; then
+        log_info "sudo already finds it at ${target}"
+        return 0
+    fi
+    if [[ -e "$target" && ! -L "$target" ]]; then
+        log_error "${target} exists and is not a symlink; leaving it alone"
+        return 1
+    fi
+
+    if [[ -w "${target%/*}" ]]; then
+        ln -sfn "$TARGET" "$target" || return 1
+    else
+        priv_run "link nutshell where sudo can find it" \
+            ln -sfn "$TARGET" "$target" || {
+            log_warn 'not linked, so sudo will not resolve the shebang'
+            return 1
+        }
+    fi
+    log_success "sudo finds it at ${target}"
+    return 0
+}
+
 _uninstall() {
     local dir link
-    for dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
+    for dir in "$HOME/.local/bin" "$HOME/bin"; do
         link="${dir}/nutshell"
         if [[ -L "$link" ]]; then
             rm -f "$link" && log_success "removed ${link}"
         fi
     done
+    # The system one needs root to take back out, the same as it needed root to
+    # put in. Left behind it points at a checkout that may be gone.
+    for dir in /usr/local/bin /usr/bin; do
+        link="${dir}/nutshell"
+        [[ -L "$link" ]] || continue
+        if [[ -w "$dir" ]]; then
+            rm -f "$link" && log_success "removed ${link}"
+        else
+            priv_run "remove ${link}" rm -f "$link" \
+                && log_success "removed ${link}" \
+                || log_warn "left ${link} in place"
+        fi
+    done
     return 0
 }
 
-if [[ "${1:-}" == "--uninstall" ]]; then
-    _uninstall
-    exit 0
-fi
+# The script proper. A function rather than top-level statements so a test can
+# source this file for the three helpers above without installing anything,
+# which is the only way they get tested at all: each one is a decision about
+# somebody's PATH and none of them is checkable by reading.
+_main() {
+    if [[ "${1:-}" == "--uninstall" ]]; then
+        _uninstall
+        return 0
+    fi
 
-require_file "$TARGET" || { log_error "no interpreter at ${TARGET}"; exit 1; }
+    want_system=1
+    if [[ "${1:-}" == "--no-system" ]]; then
+        want_system=0; shift
+    fi
 
-on_path=0
-dir="$(_pick_dir "${1:-}")" || on_path=1
-link="${dir}/nutshell"
+    require_file "$TARGET" || { log_error "no interpreter at ${TARGET}"; return 1; }
 
-fs_mkdir "$dir" || { log_error "cannot create ${dir}"; exit 1; }
+    on_path=0
+    dir="$(_pick_dir "${1:-}")" || on_path=1
+    link="${dir}/nutshell"
 
-# Replace rather than refuse. A stale link to a checkout that moved is the
-# common case, and refusing would leave the broken one in place.
-if [[ -e "$link" && ! -L "$link" ]]; then
-    log_error "${link} exists and is not a symlink; refusing to replace a real file"
-    exit 1
-fi
+    fs_mkdir "$dir" || { log_error "cannot create ${dir}"; return 1; }
 
-ln -sfn "$TARGET" "$link" || { log_error "could not link ${link}"; exit 1; }
-log_success "nutshell ${NUTSHELL_VERSION} linked at ${link}"
+    # Replace rather than refuse. A stale link to a checkout that moved is the
+    # common case, and refusing would leave the broken one in place.
+    if [[ -e "$link" && ! -L "$link" ]]; then
+        log_error "${link} exists and is not a symlink; refusing to replace a real file"
+        return 1
+    fi
 
-if [[ "$on_path" -eq 1 ]]; then
-    log_warn "${dir} is not on PATH, so the shebang will not resolve yet"
-    log_warn "add it: export PATH=\"${dir}:\$PATH\""
-    exit 0
-fi
+    ln -sfn "$TARGET" "$link" || { log_error "could not link ${link}"; return 1; }
+    log_success "nutshell ${NUTSHELL_VERSION} linked at ${link}"
 
-# Prove it rather than claim it. An install that reports success while the
-# shebang still fails is the failure mode this whole script exists to fix.
-probe="$(fs_temp_file)"
-printf '#!/usr/bin/env nutshell\nuse log\nlog_info ok\n' > "$probe"
-chmod +x "$probe"
-if out="$("$probe" 2>&1)" && [[ "$out" == *ok* ]]; then
-    log_success "the shebang resolves: #!/usr/bin/env nutshell"
-else
-    log_error "linked, but a shebang script still fails:"
-    printf '%s\n' "$out" >&2
+    if [[ "$on_path" -eq 1 ]]; then
+        log_warn "${dir} is not on PATH, so the shebang will not resolve yet"
+        log_warn "add it: export PATH=\"${dir}:\$PATH\""
+        return 0
+    fi
+
+    # Prove it rather than claim it. An install that reports success while the
+    # shebang still fails is the failure mode this whole script exists to fix.
+    probe="$(fs_temp_file)"
+    printf '#!/usr/bin/env nutshell\nuse log\nlog_info ok\n' > "$probe"
+    chmod +x "$probe"
+    if out="$("$probe" 2>&1)" && [[ "$out" == *ok* ]]; then
+        log_success "the shebang resolves: #!/usr/bin/env nutshell"
+    else
+        log_error "linked, but a shebang script still fails:"
+        printf '%s\n' "$out" >&2
+        rm -f "$probe"
+
+    # And the same proof for the case this script kept getting wrong: the shebang
+    # resolving for you says nothing about it resolving for root, and a tool that
+    # services machines is run under sudo constantly.
+    if [[ "$want_system" -eq 1 ]]; then
+        if _sudo_can_see; then
+            log_success "sudo can find it too"
+        else
+            _system_link || true
+        fi
+    fi
+        return 1
+    fi
     rm -f "$probe"
-    exit 1
-fi
-rm -f "$probe"
+
+    # And the same proof for the case this script kept getting wrong: the shebang
+    # resolving for you says nothing about it resolving for root, and a tool that
+    # services machines is run under sudo constantly.
+    if [[ "$want_system" -eq 1 ]]; then
+        if _sudo_can_see; then
+            log_success "sudo can find it too"
+        else
+            _system_link || true
+        fi
+    fi
+    return 0
+}
+
+# Sourced for the helpers, or run to install.
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && { _main "$@"; exit $?; }
+return 0

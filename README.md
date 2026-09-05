@@ -1,47 +1,73 @@
-# nutshell
+# `nutshell`
 
-> Everything you need, in a nutshell.
+<div align="center" style="text-align: center;">
 
-A minimal bash library for shell scripting. Requires bash 4.0 or newer;
-macOS ships 3.2 at `/bin/bash`, so install a current bash there first.
+[![GitHub Stars](https://img.shields.io/github/stars/orgrinrt/nutshell.svg)](https://github.com/orgrinrt/nutshell/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/nutshell.svg)](https://github.com/orgrinrt/nutshell/issues)
+![License](https://img.shields.io/github/license/orgrinrt/nutshell?color=%23009689)
 
----
+> A bash library and the interpreter that finds it. Ships lists, maps, toml, http, tests and about thirty other modules, and a `nut-lower` that flattens a script to plain POSIX sh.
 
-## Installation
+</div>
 
-One nutshell on the machine, shared by everything that uses it. That is the
-good state, and the two lines below are the whole of it:
+Shell scripts grow the same way everywhere: a helper here, a copy of it in the
+next project, and eventually four versions of the same argument parser that
+disagree about edge cases. `nutshell` is the library that stops that, plus the
+piece that makes a library reachable at all, which is an interpreter on `PATH`
+that a script names in its shebang.
+
+The trade it makes is one shared installation rather than a copy in each tree. A
+script says `#!/usr/bin/env nutshell` and gets the modules; a project that needs
+a particular version says so in one line of `nut.toml` and gets that instead,
+fetched into a store shared by everything on the machine. There is no vendored
+resolver, no per-project dependency tree, and no boilerplate at the top of a
+file.
+
+It needs bash 4.0 or newer to run, which is worth saying because macOS ships 3.2
+at `/bin/bash` and that is the machine this is most often reached from. What it
+produces need not be bash at all: `nut-lower` resolves a script's modules ahead
+of time and writes the library half as one file, and with the right features off
+that file is POSIX `sh`.
+
+## Usage
+
+One `nutshell` on the machine, shared by everything that uses it:
 
 ```bash
 git clone https://github.com/orgrinrt/nutshell.git
 ./nutshell/install
 ```
 
-`install` links the interpreter onto PATH, so a script can say
-`#!/usr/bin/env nutshell` and a project can find it without carrying a copy.
+That links the interpreter onto `PATH`. A script then needs no boilerplate, and
+the shebang is the whole of it:
 
-### When a project needs a version the machine does not have
+```bash
+#!/usr/bin/env nutshell
 
-Say so in `nut.toml`, at the root of the file, above the first table:
+use os log
+
+log_info "building on $(os_name)"
+```
+
+`use` takes any number of modules and loads each once however many times it is
+asked for. The list is in `### Modules` below.
+
+A project that needs a nutshell the machine does not have says so in `nut.toml`,
+at the root of the file, above the first table:
 
 ```toml
 nutshell_branch = "dev"       # or nutshell_version = "0.7.0" for a release
 ```
 
-Then the entry points say `#!/usr/bin/env nutshell` and stop worrying about it.
 The launcher reads the manifest above the script, resolves the pin, and execs
-the nutshell the project asked for. It takes what is installed if that
-satisfies, then the store, then fetches into the store. A pin naming a branch
-means that branch's head, asked at most once an hour.
+into that nutshell before the first line runs. Root level matters: a bare key
+after a table header belongs to that table, so `nutshell_branch` under `[meta]`
+is a pin nothing reads and nothing complains about.
 
-**Root level matters.** A bare key after a table header belongs to that table,
-so `nutshell_branch` under `[meta]` is a pin nothing reads and nothing
-complains about.
-
-**State a floor if it matters to you.** A pin that cannot be resolved is not
-fatal by default: the ambient nutshell stays in place and the project runs on
-whatever the machine has. When it is older, the failures land on the project's
-own tests and read as a defect there. `NUTSHELL_VERSION` is exported, so one
+A pin that cannot be resolved is not fatal by default, which is the one sharp
+edge here. The ambient nutshell stays in place and the project runs on whatever
+the machine has, so when that is older the failures land on the project's own
+tests and read as a defect there. `NUTSHELL_VERSION` is exported, so one
 comparison in the entry point says it out loud instead:
 
 ```bash
@@ -54,35 +80,138 @@ if [[ "$(printf '%s\n%s\n' "$_min" "${NUTSHELL_VERSION:-0.0.0}" | sort -V | head
 fi
 ```
 
-### Do not carry a copy in the tree
+## Example
 
-Not a nutshell, and not a resolver either. A copy of anything is a second
-version that drifts from the machine's in silence, and there is no moment where
-that becomes visible: it resolves what existed when it was added and nothing
-since, and the error names a missing function rather than a stale copy.
+A release script that reads its own manifest, asks a registry what is published,
+and refuses before it does anything irreversible:
 
-The symptom, if you have one of these, is a missing function in a file two
-dependencies away: `list_new: command not found` from a library that does
-declare `use list`, because the nutshell underneath it is old enough to still
-call it `array`. A pin is one line in a manifest and its value is in front of
-you. A copied resolver is seven hundred lines with its version in a variable
-default, and nothing ever says which version that is.
+```bash
+#!/usr/bin/env nutshell
+# scripts/release.sh
 
-There is no vendored fallback path, including for a machine with no network
-being rescued. That case is an installed nutshell, which `./install` puts on
-PATH and which is visible in a way a copy in a tree is not.
+use toml http json log deps git
+
+deps_require git curl
+
+version=$(toml_get nut.toml version)
+name=$(toml_get nut.toml name)
+
+if [[ -n "$(git_changed_files)" ]]; then
+    log_error "the tree is dirty; commit or stash first"
+    exit 1
+fi
+
+published=$(http_get "https://registry.example/api/v1/${name}" | json_get '.max_version')
+if [[ "$published" == "$version" ]]; then
+    log_warn "${name} ${version} is already published; nothing to do"
+    exit 0
+fi
+
+log_info "releasing ${name} ${version}, over ${published}"
+git tag -a "v${version}" -m "release ${version}"
+```
+
+Nothing above is a wrapper around a wrapper: `toml_get` reads the file, `http_get`
+is curl with the flags nobody remembers, and `git_changed_files`
+is the porcelain call plus the parsing. The point is that the script reads as
+what it does.
+
+## Motivation
+
+The reason there is an interpreter at all, rather than a library to source, is
+that sourcing needs a path and a path needs somebody to have put the library
+somewhere. Every answer to that except a shared installation ends in a copy: a
+copy of nutshell in the tree, or a copy of a resolver that fetches nutshell.
+
+A copy is a second version, and it drifts from the machine's without saying so.
+It resolves the modules that existed when it was added and none added since, so
+what surfaces is an error naming a missing function rather than one naming a
+stale copy. A pin is one line in a manifest and its value is on that line; a
+copied resolver is several hundred lines with its version in a variable default.
+
+What that costs is the install step, once per machine. After it, a fresh clone
+of anything needs nothing at all: its `nut.toml` names the nutshell it wants and
+the launcher fetches that into the store on first run.
+
+## Extras
+
+### Status
+
+Pre-1.0 and the module surface still moves. Function names within a module are
+stable in practice; a module gaining or losing one is a minor bump, and the
+`use` line and the shebang have not changed and are not going to.
+
+### Modules
+
+| Module | What it carries |
+|---|---|
+| `os` | `os_name`, `os_is_macos`, `os_is_linux` |
+| `log` | `log_info`, `log_warn`, `log_error`, `log_success` |
+| `deps` | `deps_has`, `deps_require`, `deps_path` |
+| `fs` | `fs_exists`, `fs_mkdir`, `fs_temp_file`, `fs_size` |
+| `string` | `str_upper`, `str_lower`, `str_trim`, `str_contains` |
+| `array` | over arguments, `arr_contains`, `arr_index`, `arr_filter`; over a `list` in place, `arr_unique`, `arr_reverse`, `arr_sort` |
+| `list` | an ordered list needing no bash array: `list_push`, `list_get`, `list_each`, `list_len` |
+| `map` | a key to value table needing no associative array: `map_set`, `map_get`, `map_has`, `map_keys` |
+| `text` | `text_grep`, `text_replace`, `text_count_matches` |
+| `json` | `json_get`, `json_set`, `json_valid`, `json_pretty` |
+| `http` | `http_get`, `http_post`, `http_download` |
+| `toml` | `toml_get`, `toml_get_or`, `toml_is_true`, `toml_array` |
+| `toml::write` | changing a file in place: `toml_set`, `toml_unset` |
+| `toml::json` | `toml_to_json` |
+| `hash` | `hash_impl`, and reading a published sums file, `hash_sums_get`, `hash_sums_pick` |
+| `prompt` | `prompt_confirm`, `prompt_input`, `prompt_select` |
+| `color` | `color_red`, `color_green`, `color_bold` |
+| `validate` | `is_set`, `is_integer`, `require_command` |
+| `xdg` | `xdg_config_home`, `xdg_data_home`, `xdg_app_cache` |
+| `test` | `assert_eq`, `assert_ok`, `assert_fails`, `test_run`, `test_summary` |
+| `check-runner` | `cfg_get`, `log_pass`, `log_fail` |
+| `attr` | attributes on definitions: `attr_has`, `attr_arg`, `attr_find` |
+| `cli` | subcommand dispatch with did-you-mean: `cli_command`, `cli_run` |
+| `srcfile` | a source file read once: `nut_load_file`, `nut_defined_at`, `nut_body_of` |
+| `checkcache` | a check's answer kept until it can change: `nut_cache_hit`, `nut_cache_read` |
+| `priv` | elevating for one step and stepping back: `priv_run`, `priv_as_user` |
+| `git` | reading a repository: `git_trunk`, `git_changed_files`, `git_trailers` |
+| `modgraph` | the module graph and its violations: `modgraph_build`, `modgraph_audit` |
+| `extern` | libraries from elsewhere: `extern_path`, `extern_resolve` |
+
+### Writing a module
+
+A module is a file in `lib/`. It guards against being sourced twice, declares
+what it needs, and marks what it offers:
+
+```bash
+# lib/mymodule.sh
+nut_once || return 0
+
+use log string
+
+# my_function <name>
+#
+# Greets somebody.
+#[pub]
+my_function() {
+    log_info "hello, $(str_trim "$1")"
+}
+```
+
+`nut_once` is the include guard and returns non-zero the second time the file is
+read. `use` at the top of a module declares its dependencies the same way a
+script does, and `modgraph` audits those: a cycle, a call into a module nobody
+declared, and a call to something not marked `#[pub]` are all findings. Tests go
+in `tests/<module>_test.sh` on the `test` module, and functions marked `#[test]`
+are what the runner collects.
 
 ### The store
 
 Fetched dependencies live in one place shared by every project on the machine,
 keyed by url and commit, so two projects on the same commit of the same library
-have one copy of it between them and neither carries a dependency tree of its
-own.
+have one copy between them.
 
 The interpreter is one of those dependencies rather than a special case.
-Versions sit side by side, a tool asks for the one it needs, and a version that
-is not on the machine yet is fetched at its tag rather than being a failure. A
-machine carrying four of them is the ordinary state.
+Versions sit side by side, a tool asks for the one it needs, and a version not
+on the machine yet is fetched at its tag rather than being a failure. A machine
+carrying four of them is the ordinary state.
 
 ```
 <store>/
@@ -91,542 +220,31 @@ machine carrying four of them is the ordinary state.
   toolchains/branches/<ref>/<revision>/
 ```
 
-`XDG_DATA_HOME` names the store wherever it is set, on any platform. With it
-unset the store is `~/.local/share/nutshell` on Linux and
-`~/Library/Application Support/nutshell` on macOS, which is where each puts
-application data. The point of both is that neither is the cache directory.
-
-`NUTSHELL_STORE` moves the root and `NUTSHELL_TOOLCHAINS` just the toolchains.
-A fetch goes to whatever the installed checkout's `origin` is, so an HTTPS
-clone fetches over HTTPS and an ssh one over ssh.
-
-Under the data directory and not the cache directory, because a cache is
-something a cleaner is entitled to delete and this is where every project's
-dependencies actually live.
-
-A pin that names a version gets a directory named for that version, and one
-that names a branch gets a directory named for the revision that branch
-resolved to. The second is what makes the store safe to share: a revision
-directory is written once and never replaced, so somebody else's push cannot
-delete the tree a running interpreter is reading out of.
-
-The store used to sit under the cache directory. Nothing migrates it: what was
-there is reproducible, so the first resolution after upgrading fetches into the
-new place and the old directory is left for you to delete. It is
-`${XDG_CACHE_HOME:-~/.cache}/nutshell` on Linux and
-`~/Library/Caches/nutshell` on macOS.
-
-A pin that names a version resolves in this order: `NUTSHELL_HOME` if it is
-set, then an installed interpreter if it satisfies what the tool asked for,
-then the store, then a fetch into the store, then whatever the project has
-vendored. One shared interpreter that everything uses is still the good state;
-the store is for the tools that cannot use it, and the vendored copy is the
-last resort for a machine with no network.
-
-A pin that names a branch is a different question and takes a different route:
-`NUTSHELL_HOME`, then the branch's head, then vendored. It does not consult the
-installed interpreter or the version store, because neither can answer it. A
-branch pin is not a floor, it is an identity: `dev` means the head of dev
-today, and nothing already on the machine can be assumed to be that. The remote
-is asked at most once an hour, and when it cannot be reached the last known
-revision runs and says which one it is.
-
----
-
-## Quick Start
-
-With nutshell installed, a script needs no boilerplate at all. The shebang is
-the whole of it:
-
-```bash
-#!/usr/bin/env nutshell
-
-use os log
-
-log_info "hello"
-```
-
-For a script that wants a particular nutshell rather than the machine's, the
-shebang is the same and the manifest beside it says which:
-
-```toml
-# nut.toml, root level, above the first table
-nutshell_branch = "dev"
-```
-
-The launcher reads it, resolves it, and execs into it before your first line
-runs. There is no second form and no third: a resolver copied into the tree, or
-a nutshell copied into the tree, is the arrangement the section above tells you
-not to adopt.
-
----
-
-## Project Structure
-
-```
-nutshell/
-├── init                    # what `nutshell` sources
-├── check                   # Main QA entry point (executable)
-├── bin/
-│   └── nutshell           # Interpreter for #!/usr/bin/env nutshell
-├── lib/                   # All modules
-│   ├── os.sh, log.sh, deps.sh, ...
-│   ├── json.sh, http.sh, prompt.sh, ...
-│   └── check-runner.sh    # QA/check framework
-├── examples/
-│   ├── configs/           # Configuration templates
-│   │   ├── default.nut.toml
-│   │   ├── empty.nut.toml
-│   │   └── tough.nut.toml
-│   └── checks/            # Built-in QA checks
-│       ├── run_builtins.sh
-│       └── check_*.sh
-├── tests/                 # The suite, run by ./test
-├── schemas/               # JSON schema for nut.toml
-├── docs/                  # Design notes
-├── install                # Link bin/nutshell onto PATH
-├── release                # Cut a release: gate, tag, publish
-├── test                   # Test entry point (executable)
-├── nutshell.sh            # Alternative: load ALL modules at once
-├── README.md
-└── nut.toml               # Nutshell's own config
-```
-
-A `nut.lock` appears next to `nut.toml` once a declared dependency first
-resolves; it records the commit each dependency pinned to.
-
-A typical project setup:
-
-```
-myproject/
-├── scripts/
-│   ├── lib/
-│   │   └── nutshell/          # ← Nutshell lives here
-│   │       ├── init           # ← The file you source
-│   │       ├── bin/
-│   │       └── lib/
-│   ├── build.sh               # Your scripts
-│   ├── check.sh
-│   └── deploy.sh
-├── src/
-├── deno.json                  # (or package.json, Makefile, etc.)
-└── ...
-```
-
----
-
-## Usage Patterns
-
-### Pattern 1: Standalone Scripts (Most Common)
-
-Each script is independent. Each one has the init line:
-
-```bash
-#!/usr/bin/env nutshell
-# scripts/build.sh
-
-use os log fs
-
-log_info "Building for $(os_name)..."
-fs_mkdir dist
-# ...
-```
-
-**When to use:** Most projects. Simple, each script works on its own.
-
-### Pattern 2: Entry Point + Internal Scripts
-
-One script bootstraps, others use the clean shebang:
-
-```bash
-#!/usr/bin/env nutshell
-# scripts/main.sh - the entry point
-
-# The launcher put its bin on PATH, so anything this starts gets the same
-# nutshell without resolving again.
-"${0%/*}/internal/build.sh" "$@"
-```
-
-```bash
-#!/usr/bin/env nutshell
-# scripts/internal/build.sh - clean shebang, no init line
-use os log
-
-log_info "Building..."
-```
-
-**When to use:** Complex script suites where you want cleaner internal files.
-
----
-
-## Integrating with Task Runners
-
-Nutshell scripts work with any task runner. The scripts bootstrap themselves,
-so the runner does not have to know where nutshell is.
-
-`nutshell-check` below is the project's own one-line wrapper: it resolves
-nutshell the same way the tool does and hands over. `check` in this repository
-is that wrapper.
-
-**deno.json:**
-```json
-{
-  "tasks": {
-    "build": "./scripts/build.sh",
-    "check": "nutshell-check"
-  }
-}
-```
-
-**package.json:**
-```json
-{
-  "scripts": {
-    "build": "./scripts/build.sh",
-    "check": "nutshell-check"
-  }
-}
-```
-
-**Makefile:**
-```makefile
-build:
-	./scripts/build.sh
-
-check:
-	nutshell-check
-```
-
-Anyone can run `deno task build` or `npm run check` without knowing nutshell exists.
-
----
-
-## Available Modules
-
-Load modules with `use`:
-
-```bash
-use os log json http
-```
-
-| Module | Description |
-|--------|-------------|
-| `os` | OS detection (`os_name`, `os_is_macos`, `os_is_linux`) |
-| `log` | Logging (`log_info`, `log_warn`, `log_error`, `log_success`) |
-| `deps` | Tool detection (`deps_has`, `deps_require`, `deps_path`) |
-| `fs` | Filesystem (`fs_exists`, `fs_mkdir`, `fs_temp_file`, `fs_size`) |
-| `string` | String manipulation (`str_upper`, `str_lower`, `str_trim`, `str_contains`) |
-| `array` | Operations over a list of arguments (`arr_contains`, `arr_index`, `arr_filter`), and over a `list` in place (`arr_unique`, `arr_reverse`, `arr_sort`) |
-| `list` | An ordered list that needs no bash array (`list_push`, `list_get`, `list_each`, `list_len`) |
-| `map` | A key to value table that needs no associative array (`map_set`, `map_get`, `map_has`, `map_keys`) |
-| `text` | Text processing (`text_grep`, `text_replace`, `text_count_matches`) |
-| `json` | JSON parsing (`json_get`, `json_set`, `json_valid`, `json_pretty`) |
-| `http` | HTTP requests (`http_get`, `http_post`, `http_download`) |
-| `toml` | TOML reading (`toml_get`, `toml_get_or`, `toml_is_true`, `toml_array`) |
-| `toml::write` | Changing a TOML file in place (`toml_set`, `toml_unset`) |
-| `toml::json` | TOML as JSON (`toml_to_json`) |
-| `prompt` | User prompts (`prompt_confirm`, `prompt_input`, `prompt_select`) |
-| `color` | Terminal colors (`color_red`, `color_green`, `color_bold`) |
-| `validate` | Validation (`is_set`, `is_integer`, `require_command`) |
-| `xdg` | XDG directories (`xdg_config_home`, `xdg_data_home`, `xdg_app_cache`) |
-| `check-runner` | QA framework (`cfg_get`, `log_pass`, `log_fail`) |
-| `test` | Test harness (`assert_eq`, `test_run`, `test_summary`) |
-| `attr` | Attributes on definitions (`attr_has`, `attr_arg`, `attr_find`) |
-| `cli` | Subcommand dispatch with did-you-mean (`cli_command`, `cli_run`) |
-| `srcfile` | A source file read once (`nut_load_file`, `nut_defined_at`, `nut_body_of`) |
-| `checkcache` | A check's answer kept until it can change (`nut_cache_hit`, `nut_cache_read`) |
-| `priv` | Elevating for one step and stepping back (`priv_run`, `priv_as_user`) |
-| `git` | Reading a repository (`git_trunk`, `git_changed_files`, `git_trailers`) |
-| `modgraph` | The module graph and its violations (`modgraph_build`, `modgraph_audit`) |
-| `extern` | Libraries from elsewhere (`extern_path`, `extern_resolve`) |
-
----
-
-## For Module Authors
-
-A module is a file in `lib/`. It guards against being sourced twice, declares
-what it needs, and marks what it offers.
-
-```bash
-#!/usr/bin/env bash
-# lib/mymodule.sh
-
-nut_once || return 0
-
-use log fs
-
-#[pub]
-# Usage: my_function -> greets
-my_function() {
-    log_info "Hello from mymodule!"
-}
-```
-
-### The include guard
-
-`nut_once` returns 0 the first time a given file calls it and non-zero after,
-so the idiom reads as "carry on, or stop". It derives its key from the calling
-file, which is why there is no name to invent and no name to type twice.
-
-### Declaring dependencies
-
-`use` at the top of a module says what it cannot work without. It is the same
-`use` a script writes, because it is the same act.
-
-This is worth more than convenience. Bash has one global function table: once a
-module is sourced, everything it defined is callable from anywhere, whether the
-caller declared it or not. So a module that reaches into another without saying
-so works, right up until load order changes. `toml.sh` called `str_trim` for
-its whole life while declaring nothing, and `toml_get` returned either an
-answer or silence depending on whether something else had loaded `string`
-first. Nothing reported it, because from inside bash a function that is present
-is present.
-
-The `module_contract` check reads these declarations and reports the calls no
-declaration covers. It cannot make the boundary real, and it says so; what it
-can do is make crossing one visible.
-
-### Attributes
-
-An attribute is a comment, which is the whole reason for the shape. `#` is
-already bash's comment character, so `#[pub]` needs no cooperation from the
-parser: `bash -n`, shellcheck and editors keep working, and a file using
-attributes is still an ordinary shell file.
-
-```bash
-#[pub]                       # part of the module's surface
-#[allow(loc = 400)]          # with an argument
-#[test]                      # a test, found by the harness
-```
-
-They attach downward to the next definition and accumulate, and a doc comment
-between an attribute and its definition does not break the run.
-
-### Tests
-
-A test is a function marked `#[test]`. Nothing registers it and there is no
-naming convention to remember, so a test that exists cannot be missing from the
-run and a renamed one cannot leave a stale entry behind.
-
-```bash
-#!/usr/bin/env bash
-# tests/string_test.sh
-
-use string test
-
-#[test]
-it_trims_both_ends() {
-    assert_eq "$(str_trim "  x  ")" "x"
-}
-```
-
-Run them with `./test`. Each runs in its own subshell, failures do not stop the
-run, and every assertion counts rather than only the last one the function
-happened to evaluate.
-
-The assertions are `assert_eq`, `assert_ne`, `assert_contains`, `assert_empty`,
-`assert_ok`, `assert_fails` and `assert_exits`. Each prints what it expected
-against what it got, because a bare "assertion failed" sends the reader back to
-the source to work out what the values even were.
-
-### Reaching your own modules
-
-A module you wrote lives in your `lib/`, and `super::` is how you name it:
-
-```bash
-use super::attribution
-```
-
-Three namespaces, and they answer three different questions:
-
-| Written | Resolves to |
-|---|---|
-| `use log` | nutshell's own module |
-| `use shebang::tui::term` | a module in a library declared in `nut.toml` |
-| `use super::mine` | `lib/mine.sh` in **this** unit, found from its `nut.toml` |
-
-`super::` is anchored on the manifest rather than on the running script, so a
-module three directories down reaches `lib/` the same way the entry script does,
-and moving the entry script changes nothing.
-
-It does not fall through. `use super::string` in a project with no
-`lib/string.sh` is an error naming the module, not a silent load of nutshell's
-`string`, because a unit that gets handed a module it did not write has no way
-to tell.
-
-### Where am I: the current file against the entry point
-
-Two different questions, and reaching for the wrong one is the mistake this
-section exists to prevent.
-
-```bash
-nut_dir      # the directory of the file calling it
-nut_file     # that file, absolute
-```
-
-Those name the **current file**, the way Deno's `import.meta.dirname` and Rust's
-`file!()` do. A module that wants a sibling wants `nut_dir`.
-
-`NUTSHELL_SCRIPT` and `NUTSHELL_SCRIPT_DIR` name the **entry point**: the script
-the interpreter was handed. They stay the same in every file the run loads, so a
-module that builds a path from them is describing somebody else's location and
-breaks the moment the entry point moves. That is not hypothetical; it took a
-whole test suite down when a runner moved from `tests/` to the repository root.
-
-The whole exported environment, which is five things:
-
-| Variable | What it is | Set by |
-|---|---|---|
-| `NUTSHELL_SCRIPT` | The entry script, absolute | `bin/nutshell` |
-| `NUTSHELL_SCRIPT_DIR` | Its directory | `bin/nutshell` |
-| `NUTSHELL_PIN_ROOT` | The pinned checkout, when a project pins one | `bin/nutshell` |
-| `NUTSHELL_ROOT` | The nutshell checkout in use | `init` |
-| `NUTSHELL_VERSION` | The version string | `init` |
-
-`NUTSHELL_PIN_TTL` is read rather than exported: set it to change how long a
-pinned branch head is reused before re-resolving.
-
-Names beginning with a single underscore are internal and are not listed,
-because they are not the interface. An earlier version of this table had six
-entries that do not exist, produced by a grep for `NUTSHELL_[A-Z_]+` which
-matched those private names inside their own underscore prefix, and it swapped
-the meanings of two of them on the way. In the section whose whole purpose was
-that a reader kept getting these wrong.
-
-### Depending on another library
-
-A dependency is declared in `nut.toml`, not in the script that wants it:
-
-```toml
-[deps.shebang]
-git = "https://github.com/orgrinrt/the-whole-shebang.git"
-ref = "main"
-```
-
-and a module inside it is reached by namespacing the `use`:
-
-```bash
-use shebang::tui::term
-```
-
-Declared in the manifest because a script that fetches its own dependencies
-decides for the whole project where code comes from, and does it somewhere
-nobody looks. One file answers "what does this project pull in".
-
-Resolution goes through the store, so several projects naming the same commit
-share one checkout and the second pays nothing.
-
-`nut.lock` records the commit each dependency resolved to, and is written on
-first resolution and obeyed from then on. `ref = "main"` names a branch, and a
-branch moves; without the lock two checkouts of one project can be running
-different code and neither can say so. Commit it. Taking a newer commit means
-deleting the entry, which is a thing somebody does rather than a thing that
-happens.
-
-## Examples
-
-### Example: Build Script
-
-```bash
-#!/usr/bin/env nutshell
-# scripts/build.sh
-
-use os log deps fs
-
-# Check requirements
-deps_require "cargo"
-
-# Build based on OS
-log_info "Building for $(os_name)..."
-
-if os_is_macos; then
-    cargo build --release --target aarch64-apple-darwin
-else
-    cargo build --release
-fi
-
-fs_mkdir dist
-cp target/release/myapp dist/
-
-log_success "Build complete!"
-```
-
-### Example: API Client
-
-```bash
-#!/usr/bin/env nutshell
-# scripts/fetch-data.sh
-
-use log http json
-
-API_URL="https://api.example.com"
-
-http_get_json "$API_URL/users"
-
-if http_ok; then
-    users=$(http_body)
-    count=$(json_length "$users")
-    log_success "Fetched $count users"
-else
-    log_error "API request failed: $(http_status)"
-    exit 1
-fi
-```
-
-### Example: Interactive Installer
-
-```bash
-#!/usr/bin/env nutshell
-# scripts/install.sh
-
-use log prompt fs color
-
-color_bold "=== My App Installer ==="
-echo
-
-if ! prompt_confirm "Install My App?" "y"; then
-    log_info "Installation cancelled"
-    exit 0
-fi
-
-install_dir=$(prompt_dir "Installation directory:" "$HOME/.local/share/myapp")
-log_info "Installing to: $install_dir"
-
-fs_mkdir "$install_dir"
-cp -r ./dist/* "$install_dir/"
-
-log_success "Installation complete!"
-```
-
----
-
-## The Shebang Line Explained
-
-Every script starts with this line:
-
-```bash
-#!/usr/bin/env nutshell
-```
-
-Breaking it down:
-- `env` finds `nutshell` on PATH, wherever `./install` linked it
-- the launcher reads the `nut.toml` above the script and resolves the pin in it
-- it execs into the nutshell the project asked for, then runs your script there
-
-This works regardless of:
-- Where the script is called from (`./scripts/build.sh` or `scripts/build.sh`)
-- The current working directory
-- Whether called directly or via a task runner
-
-**Just copy the line. Don't modify it.**
-
----
-
-## Lowering, and feature flags
+`XDG_DATA_HOME` names the store wherever it is set, on any platform. Unset, it
+is `~/.local/share/nutshell` on Linux and `~/Library/Application Support/nutshell`
+on macOS, which is where each puts application data rather than cache: a cache is
+something a cleaner is entitled to delete, and this is where every project's
+dependencies actually live. `NUTSHELL_STORE` moves the root and
+`NUTSHELL_TOOLCHAINS` just the toolchains.
+
+A version pin gets a directory named for the version; a branch pin gets one
+named for the revision that branch resolved to. The second is what makes the
+store safe to share, since a revision directory is written once and never
+replaced, so somebody else's push cannot delete the tree a running interpreter
+is reading out of.
+
+The two pins resolve by different routes, because they are different questions.
+A version is a floor: `NUTSHELL_HOME`, then an installed interpreter if it
+satisfies, then the store, then a fetch, then whatever the project vendored. A
+branch is an identity, so `dev` means the head of dev today and nothing already
+on the machine can be assumed to be that: `NUTSHELL_HOME`, then the branch's
+head, then vendored. The remote is asked at most once an hour, and when it
+cannot be reached the last known revision runs and says which one it is.
+
+### Lowering and features
 
 `nut-lower` resolves a script's `use` lines ahead of time and writes the library
-half as one file, with everything nothing calls removed. The script sources that
-file instead of calling `use`:
+half as one file, with everything nothing calls removed:
 
 ```bash
 nut-lower scripts/build.sh -o lowered.sh
@@ -637,12 +255,12 @@ nut-lower scripts/build.sh -o lowered.sh
 . ./lowered.sh
 ```
 
-It is the library half, not a runnable copy of the script, so the output is a
-file to source and carries no executable bit.
+It is the library half rather than a runnable copy of the script, so the output
+is a file to source and carries no executable bit.
 
-Two things decide what goes in. A **gate** asks about the machine doing the
-lowering: which shell is running, whether a binary is on PATH. A **feature** is a
-choice about the machine that will run the result. That is the difference that
+Two things decide what goes into it. A gate asks about the machine doing the
+lowering, which shell is running and whether a binary is on `PATH`. A feature is
+a choice about the machine that will run the result. That difference is what
 lets a POSIX artifact come off a host that has bash.
 
 Features live in `nut.toml` and take cargo's shape:
@@ -655,203 +273,46 @@ bash    = []
 
 A row in `lib.nut` carrying `#[feature(bash)]` is in when that feature is on.
 `--features a,b` adds to what is enabled and `--no-default-features` drops the
-default set, both the way cargo means them. A manifest declaring no features
-behaves as it did before any of this existed.
+default set, both the way cargo means them.
 
-## QA / Check System
+### Checks
 
-Nutshell includes a QA system for checking your shell scripts:
+`./check` runs the quality checks over a tree, configured under `[qa]` and
+`[tests.*]` in `nut.toml`. `--builtins` runs only the shipped ones, `--list`
+names them. The templates in `examples/configs/` are a documented empty one, a
+recommended default, and a strict one.
 
-```bash
-./check
-```
+| Check | What it looks for |
+|---|---|
+| `syntax` | bash syntax |
+| `file_size` | file size and line count limits |
+| `function_duplication` | copy-pasted functions |
+| `trivial_wrappers` | wrappers that add nothing |
+| `no_cruft` | debug code and leftover markers |
+| `public_api_docs` | a documented surface |
+| `config_schema` | the shape of `nut.toml` |
+| `module_contract` | cycles, undeclared calls, private calls, unreachable modules |
 
-Or with options:
+### Limitations
 
-```bash
-./check --builtins      # Only built-in checks
-./check --list          # List available checks
-./check --help          # Show help
-```
+Bash 4.0 is the floor for running nutshell itself, and the refusal is loud
+rather than a confusing failure further in. A lowered artifact has no such
+floor and is only as constrained as the features left on.
 
-### Configuration
+## Support
 
-Configure via `nut.toml` in your project root:
+Feel free to contribute! If unsure about wasting work, the best practice is to throw in an issue describing what you'd do, and only then commit to writing a big PR, because chances are, it might not be something that belongs here. However, forks are always a valid choice and we'd encourage everyone to experiment and have their own takes on this. When doing this, do mind the license(s) though!
 
-```toml
-[qa]
-run_builtins = true
+A module is the unit worth proposing: one file in `lib/`, its `#[pub]` surface, and its tests beside it.
 
-[tests.syntax]
-shell = "bash"
+Whether you use this project, have learned something from it, or just like it, please consider supporting it by buying me a coffee, so I can dedicate more time on open-source projects like this :)
 
-[tests.file_size]
-max_loc = 300
-```
-
-See `examples/configs/` for configuration templates:
-- `empty.nut.toml` - Every option documented, all checks disabled
-- `default.nut.toml` - Recommended settings
-- `tough.nut.toml` - Strict settings for quality-conscious projects
-
-### Built-in Checks
-
-| Check | Description |
-|-------|-------------|
-| `syntax` | Bash syntax validation |
-| `file_size` | File size / LOC limits |
-| `function_duplication` | Detect copy-pasted functions |
-| `trivial_wrappers` | Find unnecessary wrapper functions |
-| `no_cruft` | Detect debug code, TODOs |
-| `public_api_docs` | Validate API documentation |
-| `config_schema` | Validate nut.toml structure |
-| `module_contract` | Cycles, undeclared calls, private calls, unreachable modules |
-
----
-
-## Why This Design?
-
-**Q: Why a global install rather than a copy in the project?**  
-A: Because a copy in the project is a second version, and it drifts from the
-machine's without saying so. It resolves the modules that existed when it was
-added and none added since, so what you get is an error naming a missing
-function rather than one naming a stale copy.
-
-**Q: Then what about a fresh clone with nothing installed?**  
-A: Install the launcher once per machine, which is the `./install` above. After
-that a fresh clone of anything needs nothing: its `nut.toml` names the nutshell
-it wants and the launcher fetches that into the store on first run.
-
-**Q: Can I use `#!/usr/bin/env nutshell` everywhere?**  
-A: Yes, once `./install` has linked it onto PATH, and that is the shape to
-prefer. `init` also puts nutshell's `bin/` on PATH, so anything a script starts
-after sourcing it can use the shebang without the install.
-
-**Q: What if I have many scripts?**  
-A: Then the shebang is worth the one-time install: no boilerplate per file at
-all. Where that is not available, an entry point resolves once and everything
-it calls inherits PATH, which is Pattern 2 below.
-
----
-
-## Module Reference
-
-### Logging (`use log`)
-
-```bash
-log_debug "Debug info"      # Only shown if LOG_LEVEL=debug
-log_info "Information"      # Blue
-log_warn "Warning"          # Yellow
-log_error "Error"           # Red
-log_success "Success!"      # Green
-log_fatal "Fatal error"     # Red, then exits
-```
-
-### OS Detection (`use os`)
-
-```bash
-os_name        # "linux", "macos", "windows", "unknown"
-os_arch        # "x86_64", "arm64", etc.
-os_is_linux    # Returns 0 (true) or 1 (false)
-os_is_macos    # Returns 0 or 1
-os_is_wsl      # Returns 0 or 1
-os_is_windows  # Returns 0 or 1
-```
-
-### HTTP (`use http`)
-
-```bash
-http_get "https://example.com"
-http_post "https://example.com" "data=value"
-http_get_json "https://api.example.com/data"
-http_post_json "https://api.example.com/data" '{"key":"value"}'
-
-http_body      # Response body
-http_status    # HTTP status code
-http_ok        # True if 2xx status
-
-http_download "https://example.com/file.zip" "./file.zip"
-```
-
-### JSON (`use json`)
-
-```bash
-json_get '{"name":"alice"}' "name"              # "alice"
-json_get '{"user":{"id":1}}' "user.id"          # "1"
-json_set '{"a":1}' "b" "2"                      # '{"a":1,"b":2}'
-json_valid '{"a":1}'                            # Returns 0 (valid)
-json_pretty '{"a":1}'                           # Formatted output
-json_keys '{"a":1,"b":2}'                       # "a" and "b"
-json_length '[1,2,3]'                           # "3"
-```
-
-### Filesystem (`use fs`)
-
-```bash
-fs_exists "path"           # True if exists
-fs_is_file "path"          # True if regular file
-fs_is_dir "path"           # True if directory
-fs_mkdir "path"            # Create directory (with parents)
-fs_size "file"             # Size in bytes
-fs_temp_file "prefix"      # Create temp file, print path
-fs_temp_dir "prefix"       # Create temp dir, print path
-```
-
-### Prompts (`use prompt`)
-
-```bash
-prompt_confirm "Continue?" "y"                    # Yes/no, default yes
-name=$(prompt_input "Name:" "default")            # Text input
-pass=$(prompt_password "Password:")               # Hidden input
-choice=$(prompt_select "Pick:" "A" "B" "C")       # Selection
-count=$(prompt_int "Count:" 1 100)                # Integer with range
-```
-
-### Strings (`use string`)
-
-```bash
-str_upper "hello"                    # "HELLO"
-str_lower "HELLO"                    # "hello"
-str_trim "  hello  "                 # "hello"
-str_contains "hello" "ell"           # Returns 0 (true)
-str_replace "hello" "l" "L"          # "heLLo"
-str_split ":" "a:b:c" arr            # arr=("a" "b" "c")
-str_join "," "a" "b" "c"             # "a,b,c"
-str_distance "build" "buidl"         # 2
-```
-
-### Dependencies (`use deps`)
-
-```bash
-deps_has "git"                       # True if available
-deps_require "git"                   # Exit if missing
-deps_require_all "git" "curl"        # Exit if any missing
-deps_path "git"                      # "/usr/bin/git"
-deps_is_gnu "sed"                    # True if GNU variant
-```
-
----
-
-## A note on coding agents
-
-We do not recommend using coding agents with this codebase.
-
-If you still choose to use a coding agent:
-
-- Be aware of the environmental and social impact of large-scale model inference.
-  Minimise agent use where it is not needed. Be responsible.
-- Only use an agent if you yourself understand the architecture. Do not use an
-  agent because you do not understand; you will waste time and energy, both
-  yours and the planet's.
-- This repository provides agent instructions for GitHub Copilot
-  that help, but they do not eliminate the
-  problem. You will still need to correct the agent frequently.
-
-The recommendation stands: do this work yourself unless you know what you are doing
-and why.
-
----
+<a href="https://buymeacoffee.com/orgrinrt" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: auto !important;width: auto !important;" ></a>
 
 ## License
 
-MPL-2.0
+> The project is licensed under the **Mozilla Public License 2.0**.
+
+`SPDX-License-Identifier: MPL-2.0`
+
+> You can check out the full license [here](https://github.com/orgrinrt/nutshell/blob/main/LICENSE)

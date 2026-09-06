@@ -376,8 +376,21 @@ _lib_nut_lookup() {
         # visibility, ignored the fourth word entirely, and loaded the module
         # on a machine whose predicate did not hold. Silently, which is the
         # only way this kind of thing ever goes.
+        # `read -ra` at both splits below, since both read `lib.nut`. An
+        # unquoted split hands authored text to the glob, so a `*` in a row
+        # becomes whatever files sit beside the checkout, and the resolver
+        # generated from this same manifest has the identical pair.
         vis=""
-        for word in $rest; do
+        local -a rwords gwords
+        read -ra rwords <<< "$rest"
+        # `${a[@]+"${a[@]}"}` and not `"${a[@]}"`, at every one of these. Before
+        # bash 4.4, expanding an array with no assigned elements under `set -u`
+        # throws `unbound variable` and kills the shell, and `bin/nutshell` sets
+        # `-u` before it sources this. Most rows in a `lib.nut` carry no third
+        # field, so `rest` is empty on nearly all of them and the first `use`
+        # would die on bash 4.0 through 4.3, which is inside the 4.0 floor this
+        # library declares.
+        for word in ${rwords[@]+"${rwords[@]}"}; do
             # The retired form, refused loudly. Ignoring it is what made a
             # module load on a machine its predicate excluded.
             if [[ "$word" == when=* ]]; then
@@ -391,7 +404,8 @@ _lib_nut_lookup() {
         done
 
         local g held=0
-        for g in $gates; do
+        read -ra gwords <<< "$gates"
+        for g in ${gwords[@]+"${gwords[@]}"}; do
             if ! _nut_gate "$g"; then held=1; break; fi
         done
         gates=""

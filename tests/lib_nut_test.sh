@@ -370,6 +370,30 @@ it_reports_a_visibility_it_does_not_understand() {
 }
 
 #[test]
+it_reads_a_glob_in_a_row_as_the_word_somebody_wrote() {
+    # `for dword in $drest` handed a trailing column to the shell's glob, so a
+    # `*` in a row became the contents of whatever directory the check happened
+    # to run from. One typo then reported one complaint per file, none of them
+    # naming the typo, and the count moved with the directory rather than with
+    # the manifest, so nobody could reproduce it from the manifest alone.
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/lib"; : > "$d/lib/x.sh"
+    printf 'x lib/x.sh *\n' > "$d/lib.nut"
+    # Decoys the glob would find. The check runs from here, so if the split
+    # still globs it is these names that come back rather than `*`.
+    : > "$d/decoy_one"; : > "$d/decoy_two"; : > "$d/decoy_three"
+
+    out="$(cd "$d" && "$ROOT_DIR/bin/nut-declare" --check . 2>&1 || true)"
+
+    assert_ok      grep -q 'unknown word on x: \*' <<<"$out"
+    assert_fails   grep -q 'decoy_' <<<"$out"
+    # One complaint, not one per file. Without this a run that reported the
+    # glob and the decoys both would pass the two assertions above.
+    assert_eq "$(grep -c 'unknown word' <<<"$out")" "1"
+    rm -rf "$d"
+}
+
+#[test]
 it_reports_a_gate_it_does_not_understand() {
     # A gate `_nut_gate` refuses is a variant that silently never loads, and
     # the row looks fine. Caught here it is a typo somebody can see.

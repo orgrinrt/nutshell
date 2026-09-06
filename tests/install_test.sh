@@ -283,11 +283,57 @@ it_leaves_a_symlink_that_points_somewhere_else_alone() {
     assert_contains "$out" "points elsewhere"
 
     # the control: a link that is ours, in the same directory, still goes
-    ln -sfn "${other}/bin/nutshell" "${d}/nutshell"
+    ln -sfn "$TARGET" "${d}/nutshell"
     _uninstall > /dev/null 2>&1
     assert_fails test -L "${d}/nutshell"
 
     unset -f sudo _user_dirs; rm -rf "$d" "$other"
+}
+
+#[test]
+it_leaves_a_distributions_own_nutshell_link_alone() {
+    # The shape the comment above `_ours` names, which the arm above cannot
+    # reach: its foreign target is chosen so it does not end in `bin/nutshell`,
+    # and a predicate matching anything that does was letting exactly this
+    # through. A package shipping `/usr/bin/nutshell` into `/usr/lib/nutshell/`
+    # spells its target the same way a checkout does, so the only thing that
+    # tells the two apart is whether it is this checkout's.
+    local d distro; d="$(mktemp -d)"; distro="$(mktemp -d)"
+    mkdir -p "${distro}/bin"
+    : > "${distro}/bin/nutshell"
+    ln -sfn "${distro}/bin/nutshell" "${d}/nutshell"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
+
+    local out; out="$(_uninstall 2>&1)"
+    assert_ok test -L "${d}/nutshell"
+    assert_ok test -f "${distro}/bin/nutshell"
+    assert_contains "$out" "points elsewhere"
+
+    unset -f sudo _user_dirs; rm -rf "$d" "$distro"
+}
+
+#[test]
+it_leaves_a_second_checkouts_link_alone() {
+    # The other half of the same sentence. Two clones on one machine, and an
+    # uninstall run from this one has no business taking the link the other one
+    # made, however much both of them are nutshell.
+    local d twin; d="$(mktemp -d)"; twin="$(mktemp -d)"
+    mkdir -p "${twin}/bin"
+    : > "${twin}/bin/nutshell"
+    ln -sfn "${twin}/bin/nutshell" "${d}/nutshell"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
+
+    _uninstall > /dev/null 2>&1
+    assert_ok test -L "${d}/nutshell"
+
+    # the control, so the arm is not passing because `_uninstall` did nothing
+    ln -sfn "$TARGET" "${d}/nutshell"
+    _uninstall > /dev/null 2>&1
+    assert_fails test -L "${d}/nutshell"
+
+    unset -f sudo _user_dirs; rm -rf "$d" "$twin"
 }
 
 #[test]
@@ -297,8 +343,8 @@ it_says_so_rather_than_reporting_success_when_the_user_link_will_not_come_out() 
     # stock linux, produced `rm: Permission denied` on stderr, a return of 0,
     # and a summary saying the uninstall was done with the link still there.
     # That is the defect this branch is named for, in the half nobody read.
-    local d target; d="$(mktemp -d)"; target="$(mktemp -d)"
-    ln -sfn "${target}/bin/nutshell" "${d}/nutshell"
+    local d; d="$(mktemp -d)"
+    ln -sfn "$TARGET" "${d}/nutshell"
     chmod 555 "$d"
     sudo() { printf 'secure_path: %s\n' "$(mktemp -d)"; }
     _user_dirs() { printf '%s\n' "$d"; }
@@ -311,7 +357,7 @@ it_says_so_rather_than_reporting_success_when_the_user_link_will_not_come_out() 
     assert_ok test -L "${d}/nutshell"
 
     unset -f sudo _user_dirs priv_run
-    chmod 755 "$d"; rm -rf "$d" "$target"
+    chmod 755 "$d"; rm -rf "$d"
 }
 
 #[test]
@@ -320,8 +366,8 @@ it_says_the_same_when_the_system_link_will_not_come_out() {
     # same twelve lines written twice and the writability split was in one of
     # them, so this is what says they cannot drift apart again: they are one
     # function now, and both lists reach it.
-    local d target; d="$(mktemp -d)"; target="$(mktemp -d)"
-    ln -sfn "${target}/bin/nutshell" "${d}/nutshell"
+    local d; d="$(mktemp -d)"
+    ln -sfn "$TARGET" "${d}/nutshell"
     chmod 555 "$d"
     sudo() { printf 'secure_path: %s\n' "$d"; }
     _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
@@ -333,7 +379,7 @@ it_says_the_same_when_the_system_link_will_not_come_out() {
     assert_ok test -L "${d}/nutshell"
 
     unset -f sudo _user_dirs priv_run
-    chmod 755 "$d"; rm -rf "$d" "$target"
+    chmod 755 "$d"; rm -rf "$d"
 }
 
 # --- the system step, which is reached from one place ------------------------

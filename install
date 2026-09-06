@@ -168,7 +168,7 @@ _system_link() {
     return 0
 }
 
-# Is this link one of ours?
+# Is this link the one this checkout made?
 #
 # The install refuses to overwrite anything that is not a symlink and checks the
 # target before claiming a link is already right. The uninstall owes the same
@@ -177,13 +177,20 @@ _system_link() {
 # distribution package shipping `/usr/bin/nutshell` into `/usr/lib/nutshell/`,
 # and `./install --uninstall` from one takes the other's.
 #
-# Only that the target ends in `bin/nutshell`, since a second checkout is ours
-# too and this is about not deleting somebody else's file rather than about
-# owning a path.
+# `$TARGET` and nothing else, which is this checkout's own `bin/nutshell`. A
+# wider test that took anything ending in `bin/nutshell` reads as generous and
+# lets both of those cases straight back through, since a distribution's file
+# is spelled that way as readily as ours and the second checkout the comment
+# above names is exactly the shape it admits.
+#
+# What it costs is a link this checkout made and then moved away from: the path
+# no longer matches, so the uninstall leaves it and says so. That is the right
+# way round, a link nobody can attribute being somebody's to remove by hand
+# rather than root's to remove on a guess.
 _ours() {
     local t
     t="$(readlink "$1" 2>/dev/null)" || return 1
-    [[ "$t" == */bin/nutshell || "$t" == "$TARGET" ]]
+    [[ "$t" == "$TARGET" ]]
 }
 
 # Take our link back out of every directory on stdin, one per line.

@@ -314,6 +314,28 @@ it_says_so_rather_than_reporting_success_when_the_user_link_will_not_come_out() 
     chmod 755 "$d"; rm -rf "$d" "$target"
 }
 
+#[test]
+it_says_the_same_when_the_system_link_will_not_come_out() {
+    # The twin of the arm above, over the other list. The two halves were the
+    # same twelve lines written twice and the writability split was in one of
+    # them, so this is what says they cannot drift apart again: they are one
+    # function now, and both lists reach it.
+    local d target; d="$(mktemp -d)"; target="$(mktemp -d)"
+    ln -sfn "${target}/bin/nutshell" "${d}/nutshell"
+    chmod 555 "$d"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
+    priv_run() { return 1; }
+
+    local out; out="$(_uninstall 2>&1)"
+    assert_contains "$out" "left ${d}/nutshell in place"
+    assert_not_contains "$out" "removed ${d}/nutshell"
+    assert_ok test -L "${d}/nutshell"
+
+    unset -f sudo _user_dirs priv_run
+    chmod 755 "$d"; rm -rf "$d" "$target"
+}
+
 # --- the system step, which is reached from one place ------------------------
 
 #[test]

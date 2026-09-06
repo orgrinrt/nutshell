@@ -86,15 +86,19 @@ _pick_dir() {
 # prompts: with no cached credentials it fails, and failing to the conventional
 # set is the same answer the old code always gave rather than a new hazard.
 #
-# Two spellings kept, because sudo has two: a sudoers file names the setting
-# `secure_path` and the prose rendering says "Value to override user's $PATH
-# with". `-l` renders a value with its colons backslash-escaped, so the escapes
-# come out before the string is used as a path list.
+# One spelling, because `-l` has one. The prose rendering, "Value to override
+# user's $PATH with", belongs to the `-V` settings dump, which is the output
+# this function stopped reading and which a non-root caller does not get at all.
+# Matching it here caught nothing and stood ready to match some unrelated line
+# of somebody's sudoers.
+#
+# `-l` renders a value with its colons backslash-escaped, so the escapes come
+# out before the string is used as a path list.
 _sudo_path() {
     local line
     line="$(sudo -n -l 2>/dev/null \
         | tr ',' '\n' \
-        | grep -iE 'secure_path|override user.*PATH with' \
+        | grep -i 'secure_path' \
         | head -1)" || true
     line="${line#*=}"
     line="${line#*: }"
@@ -182,14 +186,19 @@ _ours() {
     [[ "$t" == */bin/nutshell || "$t" == "$TARGET" ]]
 }
 
-_uninstall() {
+# Take our link back out of every directory on stdin, one per line.
+#
+# The `-w` and `priv_run` split the install's own link has. Without it a
+# root-owned directory on the list, and `/usr/local/bin` is one on a stock
+# linux, produces `rm: Permission denied` on stderr, a return of 0, and a
+# summary saying the uninstall is done with the link still there.
+#
+# One function over two lists rather than the same twelve lines twice. Written
+# twice, the two copies read correctly side by side and the next fix to either
+# reaches one of them, which is how the `-w` split came to be in the user half
+# and missing from the system half in the first place.
+_unlink_from() {
     local dir link
-    # The same `-w` and `priv_run` split the system loop has. Without it a
-    # root-owned directory on this list, and `/usr/local/bin` is one on a stock
-    # linux, produces `rm: Permission denied` on stderr, a return of 0, and a
-    # summary saying the uninstall is done with the link still there. That is
-    # the defect this branch exists to fix, in the half of the function nobody
-    # looked at.
     while IFS= read -r dir; do
         [[ -n "$dir" ]] || continue
         link="${dir}/nutshell"
@@ -202,7 +211,11 @@ _uninstall() {
                 && log_success "removed ${link}" \
                 || log_warn "left ${link} in place"
         fi
-    done < <(_user_dirs)
+    done
+}
+
+_uninstall() {
+    _unlink_from < <(_user_dirs)
 
     # The system one comes back out of wherever `_system_link` put it, which is
     # sudo's own path rather than a pair written down here. The pair was right
@@ -216,19 +229,7 @@ _uninstall() {
     #
     # Root to take back out, the same as it needed root to put in. Left behind
     # it points at a checkout that may be gone.
-    while IFS= read -r dir; do
-        [[ -n "$dir" ]] || continue
-        link="${dir}/nutshell"
-        [[ -L "$link" ]] || continue
-        _ours "$link" || { log_warn "left ${link}, which points elsewhere"; continue; }
-        if [[ -w "$dir" ]]; then
-            rm -f "$link" && log_success "removed ${link}"
-        else
-            priv_run "remove ${link}" rm -f "$link" \
-                && log_success "removed ${link}" \
-                || log_warn "left ${link} in place"
-        fi
-    done < <(printf '%s\n' "$(_sudo_path)" | tr ':' '\n')
+    _unlink_from < <(printf '%s\n' "$(_sudo_path)" | tr ':' '\n')
     return 0
 }
 

@@ -64,7 +64,8 @@ while read -r name file rest || [ -n "$name" ]; do
     [ -n "$file" ] || continue
 
     vis=""
-    for w in $rest; do
+    read -ra rwords <<< "$rest"
+    for w in "${rwords[@]}"; do
         case "$w" in
             when=*) printf 'nut-gen-resolver: %s still uses `%s` on `%s`\n' \
                         "$NUT" "$w" "$name" >&2; exit 1 ;;
@@ -82,7 +83,13 @@ while read -r name file rest || [ -n "$name" ]; do
     # One branch per row, in manifest order, so the first whose gates hold
     # wins exactly as the walk did.
     printf '            '
-    for g in $gates; do
+    # Both splits here read `lib.nut`, so both go through `read -ra` rather
+    # than the glob. This one is the worse of the two: a `*` among the gates
+    # expands against the working directory and the filenames it finds are
+    # printed straight into the generated resolver as gate names, so the
+    # defect ships inside generated source and nothing about the run says so.
+    read -ra gwords <<< "$gates"
+    for g in "${gwords[@]}"; do
         printf '_nut_gate %s && ' "'$g'"
     done
     if [ "$vis" = "internal" ]; then

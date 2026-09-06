@@ -95,7 +95,15 @@ USAGE
 # literally. Assembled from a variable there is nothing here to follow, which
 # is why `fs.sh` writes its three out in a `case` rather than building the name.
 _nl_uses_in() {
+    # `read -ra` rather than `for m in $line`, at every split of authored text
+    # in this file. The words come off a `use` line somebody wrote, so an
+    # unquoted split hands them to the glob, and `use foo::*` in a checkout
+    # with files beside it yields filenames where module names should be. It
+    # fails on the machine that has the matching file and nowhere else, which
+    # is the failure that never reproduces. `read` splits on IFS and does not
+    # glob, so there is no shell state to save and put back.
     local file="$1" line m
+    local -a words
     while IFS= read -r line; do
         case "$line" in
             *use[[:space:]]*) ;;
@@ -108,7 +116,8 @@ _nl_uses_in() {
             *) continue ;;
         esac
         line="${line#use }"
-        for m in $line; do
+        read -ra words <<< "$line"
+        for m in "${words[@]}"; do
             case "$m" in
                 -*|'||'*|'&&'*|'{'*) continue ;;
             esac

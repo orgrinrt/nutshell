@@ -366,9 +366,32 @@ is_hostname() {
     #
     # Everything else agrees. A leading dot, `..`, `a..b` and a bare `.` are
     # refused by both.
-    local label first last
+    # `set -f` around the split, because the unquoted `$val` globs each field
+    # after splitting it: a caller's `*` was expanded against the working
+    # directory and its filenames were checked as labels. In a directory
+    # holding `INDEX` and `README`, `is_hostname 'a.*.c'` answered valid; in an
+    # empty one it answered invalid. A validator whose verdict depends on where
+    # the process happens to be standing is worse than any of the sites in the
+    # compiler, because here the wrong answer is the permissive one and a
+    # caller acts on it.
+    #
+    # `read -ra` is what the compiler uses for the same shape and is not
+    # available here: this module is run under a real POSIX shell by its own
+    # suite, and `read -a` is a bashism. `set -f` is the portable form, and
+    # `lib/json/impl/jq.sh` already carries it around the identical loop, down
+    # to saving whether globbing was off to begin with so a caller who disabled
+    # it does not get it back on.
+    local label first last oldf
+    case "$-" in *f*) oldf=1 ;; *) oldf=0 ;; esac
     local IFS='.'
+    set -f
+    # shellcheck disable=SC2086
     for label in $val; do
+        # First thing in the body, before any `return`. The word list is
+        # expanded once at the `for`, so globbing has already been prevented by
+        # the time this runs, and every one of the four refusals below leaves
+        # the function with the caller's own setting rather than with ours.
+        [ "$oldf" = 1 ] || set +f
         [ "${#label}" -ge 1 ] && [ "${#label}" -le 63 ] || return 1
         case "$label" in *[!a-zA-Z0-9-]*) return 1 ;; esac
         first="${label%"${label#?}"}"
@@ -376,6 +399,10 @@ is_hostname() {
         case "$first" in *[!a-zA-Z0-9]*) return 1 ;; esac
         case "$last"  in *[!a-zA-Z0-9]*) return 1 ;; esac
     done
+    # And for the path where the body never ran, which the emptiness guard
+    # above makes unreachable today and which a later edit to that guard would
+    # make reachable without anything saying so.
+    [ "$oldf" = 1 ] || set +f
     return 0
 }
 

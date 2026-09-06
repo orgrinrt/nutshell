@@ -445,3 +445,93 @@ it_refuses_a_port_written_with_a_leading_zero() {
     assert_ok    is_port "7"
     assert_ok    is_port "8080"
 }
+
+# A directory holding two filenames that are themselves valid labels.
+#
+# `INDEX` and `README` are the point: a `*` expanded here produces two words a
+# label check accepts, so the glob is invisible in the verdict and shows up
+# only as the verdict changing with the working directory. Names with a dot or
+# a space would be refused for their own reasons and the arm would pass with
+# the defect intact.
+_vt_glob_dir() {
+    local d; d="$(mktemp -d)"
+    : > "${d}/INDEX"
+    : > "${d}/README"
+    printf '%s' "$d"
+}
+
+#[test]
+# A hostname is what the caller passed, not what the directory holds.
+#
+# `for label in $val` globs each field after splitting it, so a `*` in the
+# caller's string was expanded against the working directory and the resulting
+# filenames were checked as labels. The wrong answer is the permissive one: in
+# a directory holding `INDEX` and `README` this validator called `a.*.c` a
+# hostname, and one directory over it did not.
+it_answers_the_same_wherever_it_is_called_from() {
+    local d e; d="$(_vt_glob_dir)"; e="$(mktemp -d)"
+    local here there
+    here="$(  cd "$d" && is_hostname 'a.*.c' && echo y || echo n )"
+    there="$( cd "$e" && is_hostname 'a.*.c' && echo y || echo n )"
+    assert_eq "$here" "n"
+    assert_eq "$here" "$there"
+    rm -rf "$e"
+    # and the ordinary answers are unchanged by the repair
+    assert_ok    is_hostname "example.com"
+    assert_ok    is_hostname "a.b.c"
+    assert_fails is_hostname "a..b"
+    rm -rf "$d"
+}
+
+#[test]
+# The control, and it is the whole reason the arm above is worth having.
+#
+# The old construction is declared here rather than described, and driven over
+# the same input in the same directory. It answers `y`, which is the defect, and
+# an arm asserting `n` of `is_hostname` in one directory would have passed
+# against it.
+it_is_the_split_that_was_wrong_and_here_is_the_old_one_answering() {
+    _vt_old_is_hostname() {
+        local val="${1:-}" label
+        local IFS='.'
+        # shellcheck disable=SC2086
+        for label in $val; do
+            [ "${#label}" -ge 1 ] && [ "${#label}" -le 63 ] || return 1
+            case "$label" in *[!a-zA-Z0-9-]*) return 1 ;; esac
+        done
+        return 0
+    }
+    # The contrast is an empty directory and not another populated one: where a
+    # glob matches nothing the shell leaves it literal, so `*` is checked as a
+    # label and refused. `/` would answer `y` as well, its own entries being
+    # valid labels, and an arm using it would report no difference and read as
+    # the defect being absent.
+    local d e; d="$(_vt_glob_dir)"; e="$(mktemp -d)"
+    local old_here old_there
+    old_here="$(  cd "$d" && _vt_old_is_hostname 'a.*.c' && echo y || echo n )"
+    old_there="$( cd "$e" && _vt_old_is_hostname 'a.*.c' && echo y || echo n )"
+    assert_eq "$old_here" "y"
+    assert_eq "$old_there" "n"
+    rm -rf "$e"
+    unset -f _vt_old_is_hostname
+    rm -rf "$d"
+}
+
+#[test]
+# Globbing is the caller's setting and the repair borrows it rather than taking
+# it. Both directions: a caller who had it on gets it back on, and a caller who
+# had turned it off does not get it back.
+it_leaves_the_callers_globbing_as_it_found_it() {
+    local before after
+    set +f; is_hostname "example.com"; case "$-" in *f*) after=off ;; *) after=on ;; esac
+    assert_eq "$after" "on"
+    set -f; is_hostname "example.com"; case "$-" in *f*) after=off ;; *) after=on ;; esac
+    assert_eq "$after" "off"
+    set +f
+    # and a refusal takes the same path out, which the four `return 1` sites
+    # inside the loop are what make worth asserting separately
+    set -f; is_hostname "a..b"; case "$-" in *f*) after=off ;; *) after=on ;; esac
+    assert_eq "$after" "off"
+    set +f
+    before=""; [ -z "$before" ]
+}

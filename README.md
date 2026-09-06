@@ -38,8 +38,26 @@ git clone https://github.com/orgrinrt/nutshell.git
 ./nutshell/install
 ```
 
-That links the interpreter onto `PATH`. A script then needs no boilerplate, and
-the shebang is the whole of it:
+That links the interpreter twice, and the second one is the half that is easy
+to miss. `sudo` replaces PATH with its own `secure_path`, which never holds a
+home directory, so a link in `~/.local/bin` alone means every
+`sudo <nutshell script>` dies with `env: 'nutshell': No such file or directory`
+while pointing at a program that is plainly sitting right there. The second
+link goes into the first directory on sudo's own path that exists, asked of
+`sudo -n -l` rather than guessed, since a machine carrying a different
+`secure_path` is exactly the machine a guess gets wrong, and where sudo will
+not answer the conventional set stands in and the install says which it used.
+That half needs root to write, once, with the reason on screen. Both are proven
+rather than reported: the install runs a real shebang script and checks that
+root can reach the interpreter, and says which of the two failed when one does.
+
+```bash
+./install ~/bin           link into a named directory instead
+./install --no-system     the PATH link only, and no password prompt
+./install --uninstall     take both links back out
+```
+
+A script then needs no boilerplate, and the shebang is the whole of it:
 
 ```bash
 #!/usr/bin/env nutshell

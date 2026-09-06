@@ -170,7 +170,14 @@ case "$MODE" in
             if [[ -z "$dfile" ]]; then
                 printf 'not a declaration: %s\n' "$dname"; rc=1; continue
             fi
-            for dword in $drest; do
+            # `read -ra`, since `$drest` is the tail of a line out of `lib.nut`
+            # and an unquoted split globs it. A stray `*` there would report
+            # every file in the working directory as an unknown word, which
+            # buries the one real complaint under however many files there are.
+            read -ra dwords <<< "$drest"
+            # `${a[@]+...}`: before bash 4.4 an empty array throws under
+            # `set -u`, and `$drest` is empty on most rows.
+            for dword in ${dwords[@]+"${dwords[@]}"}; do
                 case "$dword" in
                     internal) ;;
                     *) printf 'unknown word on %s: %s\n' "$dname" "$dword"; rc=1 ;;

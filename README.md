@@ -143,6 +143,10 @@ stable in practice; a module gaining or losing one is a minor bump, and the
 
 ### Modules
 
+A few names each rather than the whole surface, and `lib/` is what says which
+modules there are. This table went three modules stale between one release and
+the next without anything reporting it.
+
 | Module | What it carries |
 |---|---|
 | `os` | `os_name`, `os_is_macos`, `os_is_linux` |
@@ -174,6 +178,9 @@ stable in practice; a module gaining or losing one is a minor bump, and the
 | `git` | reading a repository: `git_trunk`, `git_changed_files`, `git_trailers` |
 | `modgraph` | the module graph and its violations: `modgraph_build`, `modgraph_audit` |
 | `extern` | libraries from elsewhere: `extern_path`, `extern_resolve` |
+| `bench` | measuring one thing against its real alternatives: `bench_case`, `bench_arm`, `bench_verify` |
+| `inuse` | which cached paths a live process is reading: `inuse_hold`, `inuse_holders`, `inuse_held_by_other` |
+| `key` | a string as the tail of a variable name: `nut_key` |
 
 ### Writing a module
 
@@ -285,6 +292,9 @@ recommended default, and a strict one.
 | Check | What it looks for |
 |---|---|
 | `syntax` | bash syntax |
+| `posix_floor` | how much of the tree a POSIX shell can still read |
+| `resolver_current` | the generated `resolver` still agrees with `lib.nut` |
+| `readme_tables` | the two tables below name every module and every check |
 | `file_size` | file size and line count limits |
 | `function_duplication` | copy-pasted functions |
 | `trivial_wrappers` | wrappers that add nothing |

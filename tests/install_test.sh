@@ -171,3 +171,100 @@ it_reports_rather_than_links_when_nothing_on_the_path_exists() {
     assert_contains "$out" "nothing on sudo path"
     unset -f sudo
 }
+
+# --- taking it back out ------------------------------------------------------
+
+#[test]
+it_removes_the_system_link_from_wherever_sudo_says_it_is() {
+    # The uninstall used to walk a hardcoded `/usr/local/bin /usr/bin`, which
+    # is right on a stock machine and wrong on exactly the configured one the
+    # install reads sudo to catch. A directory on neither list held the link
+    # the install had just put there, and the uninstall reported success.
+    local d; d="$(mktemp -d)"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
+
+    assert_ok _system_link
+    assert_ok test -L "${d}/nutshell"
+    assert_ok _uninstall
+    assert_fails test -e "${d}/nutshell"
+
+    unset -f sudo _user_dirs; rm -rf "$d"
+}
+
+#[test]
+it_removes_the_user_link_from_the_same_list_the_install_picks_from() {
+    # One list, two readers. Stub it and both must move, which is the property
+    # that makes the pair above unable to disagree again.
+    local u s; u="$(mktemp -d)"; s="$(mktemp -d)"
+    sudo() { printf 'secure_path: %s\n' "$s"; }
+    _user_dirs() { printf '%s\n' "$u"; }
+    PATH="${u}:${PATH}"
+
+    assert_eq "$(_pick_dir)" "$u"
+    ln -sfn "$TARGET" "${u}/nutshell"
+    assert_ok _uninstall
+    assert_fails test -e "${u}/nutshell"
+
+    unset -f sudo _user_dirs; rm -rf "$u" "$s"
+}
+
+#[test]
+it_leaves_a_real_file_alone_when_uninstalling() {
+    # Somebody else's `nutshell` on the path is not ours to delete, and an
+    # uninstall that took one would be worse than one that left a link behind.
+    local d; d="$(mktemp -d)"
+    printf 'somebody else\n' > "${d}/nutshell"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
+
+    assert_ok _uninstall
+    assert_eq "$(cat "${d}/nutshell")" "somebody else"
+
+    unset -f sudo _user_dirs; rm -rf "$d"
+}
+
+# --- the system step, which is reached from one place ------------------------
+
+#[test]
+it_does_not_reach_for_the_system_link_when_the_system_half_was_declined() {
+    # `--no-system`. The install has no business asking for a password it was
+    # told not to want.
+    local d; d="$(mktemp -d)"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    assert_ok _ensure_sudo_finds_it 0
+    assert_fails test -e "${d}/nutshell"
+    unset -f sudo; rm -rf "$d"
+}
+
+#[test]
+it_links_for_root_when_root_cannot_already_see_it() {
+    local d; d="$(mktemp -d)"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    assert_ok _ensure_sudo_finds_it 1
+    assert_ok test -L "${d}/nutshell"
+    unset -f sudo; rm -rf "$d"
+}
+
+#[test]
+it_says_so_and_links_nothing_when_root_can_already_see_it() {
+    local d; d="$(mktemp -d)"
+    printf '#!/bin/sh\n' > "${d}/nutshell"; chmod +x "${d}/nutshell"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    local out; out="$(_ensure_sudo_finds_it 1 2>&1)"
+    assert_contains "$out" "sudo can find it too"
+    assert_fails test -L "${d}/nutshell"
+    unset -f sudo; rm -rf "$d"
+}
+
+#[test]
+it_reaches_for_the_system_link_from_exactly_one_place() {
+    # The block was pasted twice and the second copy sat inside the failure
+    # branch, so an install whose own shebang probe had just failed went on to
+    # ask for a password to link a system directory. Both copies read correctly
+    # on their own, which is the whole reason nothing caught it, so the check
+    # is the count rather than the reading.
+    local n
+    n="$(grep -c '_ensure_sudo_finds_it "' "${BASH_SOURCE[0]%/*}/../install")"
+    assert_eq "$n" "1"
+}

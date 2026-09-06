@@ -20,6 +20,26 @@ git clone https://github.com/orgrinrt/nutshell.git
 `install` links the interpreter onto PATH, so a script can say
 `#!/usr/bin/env nutshell` and a project can find it without carrying a copy.
 
+It links twice, and the second one is the half that is easy to miss. `sudo`
+replaces PATH with its own `secure_path`, which never holds a home directory,
+so a link in `~/.local/bin` alone means every `sudo <nutshell script>` dies
+with `env: 'nutshell': No such file or directory` while pointing at a program
+that is plainly sitting right there. The second link goes into the first
+directory on sudo's own path that exists, read out of `sudo -V` rather than
+guessed, since a machine configured with a different `secure_path` is exactly
+the machine a guess gets wrong. It needs root to write, once, with the reason
+on screen.
+
+Both halves are proven rather than reported: the install runs a real shebang
+script, checks that root can reach the interpreter, and says which of the two
+failed when one does.
+
+```bash
+./install ~/bin           link into a named directory instead
+./install --no-system     the PATH link only, and no password prompt
+./install --uninstall     take both links back out
+```
+
 ### When a project needs a version the machine does not have
 
 Say so in `nut.toml`, at the root of the file, above the first table:

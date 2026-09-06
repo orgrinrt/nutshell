@@ -20,7 +20,7 @@
 # `~/.local/bin` alone means every `sudo <nutshell script>` dies with `env:
 # 'nutshell': No such file or directory` while pointing at a program that is
 # plainly right there. So the second link goes into the first directory on
-# sudo's own path that exists, read out of `sudo -V` rather than guessed,
+# sudo's own path that exists, asked of `sudo -n -l` rather than guessed,
 # because a machine configured with a different `secure_path` is exactly the
 # machine where a guess puts the link somewhere root never looks. That is not
 # a niche case: a tool that services machines spends half its life under one.
@@ -70,24 +70,42 @@ _pick_dir() {
     return 1
 }
 
-# Where sudo will look. Not guessed: `sudo -V` prints the compiled-in
-# `secure_path` when there is one, and a machine that has been configured
-# otherwise is exactly the machine where guessing would be wrong.
-# Two spellings, because sudo has two. A sudoers file names the setting
-# `secure_path`, and `sudo -V` renders the same setting in prose, as "Value to
-# override user's $PATH with". Grepping only the first reads a real sudo's
-# answer as no answer and falls back to the conventional set, which is right on
-# a stock machine and wrong on exactly the configured machine this reads sudo
-# to catch.
+# Where sudo will look. Asked rather than guessed, and asked with `-l` rather
+# than with `-V`.
+#
+# `sudo -V` prints the settings dump only to root. Run by an ordinary user it
+# prints five version lines and nothing else, so reading `secure_path` out of it
+# answers empty on every invocation this script will ever make, falls through to
+# the conventional set, and guesses on exactly the configured machine it was
+# written to stop guessing on. Measured on sudo 1.9.17p2: zero lines matching.
+# `man sudo` says so in terms, that the settings appear when the invoking user
+# is already root.
+#
+# `sudo -n -l` prints the Matching Defaults entries for the invoking user, which
+# is where `secure_path` lives when a machine sets one. `-n` so it never
+# prompts: with no cached credentials it fails, and failing to the conventional
+# set is the same answer the old code always gave rather than a new hazard.
+#
+# Two spellings kept, because sudo has two: a sudoers file names the setting
+# `secure_path` and the prose rendering says "Value to override user's $PATH
+# with". `-l` renders a value with its colons backslash-escaped, so the escapes
+# come out before the string is used as a path list.
 _sudo_path() {
     local line
-    line="$(sudo -V 2>/dev/null \
+    line="$(sudo -n -l 2>/dev/null \
+        | tr ',' '\n' \
         | grep -iE 'secure_path|override user.*PATH with' \
         | head -1)" || true
+    line="${line#*=}"
     line="${line#*: }"
+    line="${line//\\:/:}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%\"}"
+    line="${line#\"}"
     [[ -n "$line" ]] && { printf '%s' "$line"; return 0; }
-    # No sudo, or a build that does not report one. The conventional set, which
-    # is what every distribution here compiles in.
+    # No sudo, no cached credentials, or a machine that sets no `secure_path`.
+    # The conventional set, which is what every distribution here compiles in,
+    # and which is right whenever the question could not be asked.
     printf '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 }
 
@@ -146,13 +164,43 @@ _system_link() {
     return 0
 }
 
+# Is this link one of ours?
+#
+# The install refuses to overwrite anything that is not a symlink and checks the
+# target before claiming a link is already right. The uninstall owes the same
+# check and did not have it, so any symlink named `nutshell` anywhere on sudo's
+# path was removed, with root behind it. Two checkouts on one machine, or a
+# distribution package shipping `/usr/bin/nutshell` into `/usr/lib/nutshell/`,
+# and `./install --uninstall` from one takes the other's.
+#
+# Only that the target ends in `bin/nutshell`, since a second checkout is ours
+# too and this is about not deleting somebody else's file rather than about
+# owning a path.
+_ours() {
+    local t
+    t="$(readlink "$1" 2>/dev/null)" || return 1
+    [[ "$t" == */bin/nutshell || "$t" == "$TARGET" ]]
+}
+
 _uninstall() {
     local dir link
+    # The same `-w` and `priv_run` split the system loop has. Without it a
+    # root-owned directory on this list, and `/usr/local/bin` is one on a stock
+    # linux, produces `rm: Permission denied` on stderr, a return of 0, and a
+    # summary saying the uninstall is done with the link still there. That is
+    # the defect this branch exists to fix, in the half of the function nobody
+    # looked at.
     while IFS= read -r dir; do
         [[ -n "$dir" ]] || continue
         link="${dir}/nutshell"
-        if [[ -L "$link" ]]; then
+        [[ -L "$link" ]] || continue
+        _ours "$link" || { log_warn "left ${link}, which points elsewhere"; continue; }
+        if [[ -w "$dir" ]]; then
             rm -f "$link" && log_success "removed ${link}"
+        else
+            priv_run "remove ${link}" rm -f "$link" \
+                && log_success "removed ${link}" \
+                || log_warn "left ${link} in place"
         fi
     done < <(_user_dirs)
 
@@ -172,6 +220,7 @@ _uninstall() {
         [[ -n "$dir" ]] || continue
         link="${dir}/nutshell"
         [[ -L "$link" ]] || continue
+        _ours "$link" || { log_warn "left ${link}, which points elsewhere"; continue; }
         if [[ -w "$dir" ]]; then
             rm -f "$link" && log_success "removed ${link}"
         else
@@ -213,10 +262,20 @@ _main() {
         return 0
     fi
 
+    # Every position, not just the first. `./install ~/bin --no-system` reads
+    # naturally and used to install the system link and prompt for a password,
+    # which is the one thing the flag exists to prevent, and nothing about the
+    # run said the flag had been ignored.
     want_system=1
-    if [[ "${1:-}" == "--no-system" ]]; then
-        want_system=0; shift
-    fi
+    local -a rest=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --no-system) want_system=0 ;;
+            *) rest+=("$arg") ;;
+        esac
+    done
+    set -- ${rest[@]+"${rest[@]}"}
 
     require_file "$TARGET" || { log_error "no interpreter at ${TARGET}"; return 1; }
 

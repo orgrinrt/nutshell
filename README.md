@@ -25,10 +25,12 @@ replaces PATH with its own `secure_path`, which never holds a home directory,
 so a link in `~/.local/bin` alone means every `sudo <nutshell script>` dies
 with `env: 'nutshell': No such file or directory` while pointing at a program
 that is plainly sitting right there. The second link goes into the first
-directory on sudo's own path that exists, read out of `sudo -V` rather than
+directory on sudo's own path that exists, asked of `sudo -n -l` rather than
 guessed, since a machine configured with a different `secure_path` is exactly
-the machine a guess gets wrong. It needs root to write, once, with the reason
-on screen.
+the machine a guess gets wrong. Where sudo cannot answer, because there are no
+cached credentials or because the machine sets no `secure_path` at all, the
+conventional set stands in and the install says which it used. It needs root to
+write, once, with the reason on screen.
 
 Both halves are proven rather than reported: the install runs a real shebang
 script, checks that root can reach the interpreter, and says which of the two

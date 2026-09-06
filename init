@@ -383,7 +383,14 @@ _lib_nut_lookup() {
         vis=""
         local -a rwords gwords
         read -ra rwords <<< "$rest"
-        for word in "${rwords[@]}"; do
+        # `${a[@]+"${a[@]}"}` and not `"${a[@]}"`, at every one of these. Before
+        # bash 4.4, expanding an array with no assigned elements under `set -u`
+        # throws `unbound variable` and kills the shell, and `bin/nutshell` sets
+        # `-u` before it sources this. Most rows in a `lib.nut` carry no third
+        # field, so `rest` is empty on nearly all of them and the first `use`
+        # would die on bash 4.0 through 4.3, which is inside the 4.0 floor this
+        # library declares.
+        for word in ${rwords[@]+"${rwords[@]}"}; do
             # The retired form, refused loudly. Ignoring it is what made a
             # module load on a machine its predicate excluded.
             if [[ "$word" == when=* ]]; then
@@ -398,7 +405,7 @@ _lib_nut_lookup() {
 
         local g held=0
         read -ra gwords <<< "$gates"
-        for g in "${gwords[@]}"; do
+        for g in ${gwords[@]+"${gwords[@]}"}; do
             if ! _nut_gate "$g"; then held=1; break; fi
         done
         gates=""

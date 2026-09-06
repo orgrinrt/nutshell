@@ -24,8 +24,48 @@ use test
 it_reads_the_secure_path_sudo_reports() {
     # Not guessed. A machine configured with a different secure_path is exactly
     # the machine where a guess would put the link somewhere root never looks.
-    sudo() { printf 'Value to override user'\''s $PATH with: /opt/bin:/usr/bin\n'; }
+    #
+    # The stub answers `-l` and not `-V`, and the difference is the whole
+    # defect the first version of this shipped: `sudo -V` prints its settings
+    # only to root, so a stub that answers it is more capable than the binary
+    # and the test passes over code that never ran. Measured on sudo 1.9.17p2
+    # as an ordinary user: five version lines and zero matches.
+    sudo() {
+        [[ "$*" == *-l* ]] || return 1
+        printf 'Matching Defaults entries for t on h:\n    env_reset, secure_path=/opt/bin\\:/usr/bin, !log_allowed\n'
+    }
     assert_eq "$(_sudo_path)" "/opt/bin:/usr/bin"
+    unset -f sudo
+}
+
+#[test]
+it_reads_nothing_out_of_the_dump_sudo_gives_a_non_root_caller() {
+    # The control for the arm above, and the case that shipped broken. This is
+    # verbatim what `sudo -V` prints here to a user who is not root; a reader
+    # of it finds no secure_path, so the conventional set is the honest answer
+    # and a test asserting `/opt/bin` off this input would be asserting a stub.
+    sudo() {
+        [[ "$*" == *-l* ]] && return 1
+        printf 'Sudo version 1.9.17p2\nSudoers policy plugin version 1.9.17p2\n'
+    }
+    local p; p="$(_sudo_path)"
+    assert_contains "$p" "/usr/local/bin"
+    assert_not_contains "$p" "/opt/bin"
+    unset -f sudo
+}
+
+#[test]
+it_does_not_prompt_for_a_password_to_find_out_where_root_looks() {
+    # `-n` or the installer hangs on a machine with no cached credentials,
+    # during a step whose whole purpose is to avoid one surprise.
+    # Written to a file rather than to a variable: `_sudo_path` calls sudo
+    # inside a command substitution, so an assignment in the stub lands in a
+    # subshell and the assertion reads an empty string whatever sudo was given.
+    local seen; seen="$(mktemp)"
+    sudo() { printf '%s' "$*" > "$seen"; return 1; }
+    _sudo_path > /dev/null
+    assert_contains "$(cat "$seen")" "-n"
+    rm -f "$seen"
     unset -f sudo
 }
 
@@ -224,6 +264,56 @@ it_leaves_a_real_file_alone_when_uninstalling() {
     unset -f sudo _user_dirs; rm -rf "$d"
 }
 
+#[test]
+it_leaves_a_symlink_that_points_somewhere_else_alone() {
+    # The harder half of the arm above, and the one that shipped wrong. A real
+    # file was refused; a symlink was not, so any link named `nutshell` on
+    # sudo's path was removed, with root behind it where the directory was not
+    # writable. Two checkouts on one machine, or a distribution package
+    # shipping `/usr/bin/nutshell` into its own tree, and an uninstall from one
+    # took the other's.
+    local d other; d="$(mktemp -d)"; other="$(mktemp -d)"
+    : > "${other}/somebody-elses-thing"
+    ln -sfn "${other}/somebody-elses-thing" "${d}/nutshell"
+    sudo() { printf 'secure_path: %s\n' "$d"; }
+    _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
+
+    local out; out="$(_uninstall 2>&1)"
+    assert_ok test -L "${d}/nutshell"
+    assert_contains "$out" "points elsewhere"
+
+    # the control: a link that is ours, in the same directory, still goes
+    ln -sfn "${other}/bin/nutshell" "${d}/nutshell"
+    _uninstall > /dev/null 2>&1
+    assert_fails test -L "${d}/nutshell"
+
+    unset -f sudo _user_dirs; rm -rf "$d" "$other"
+}
+
+#[test]
+it_says_so_rather_than_reporting_success_when_the_user_link_will_not_come_out() {
+    # The system half got the writability split and the user half did not, so a
+    # root-owned directory on the user list, and `/usr/local/bin` is one on a
+    # stock linux, produced `rm: Permission denied` on stderr, a return of 0,
+    # and a summary saying the uninstall was done with the link still there.
+    # That is the defect this branch is named for, in the half nobody read.
+    local d target; d="$(mktemp -d)"; target="$(mktemp -d)"
+    ln -sfn "${target}/bin/nutshell" "${d}/nutshell"
+    chmod 555 "$d"
+    sudo() { printf 'secure_path: %s\n' "$(mktemp -d)"; }
+    _user_dirs() { printf '%s\n' "$d"; }
+    # elevation refused, which is the case where the link genuinely stays
+    priv_run() { return 1; }
+
+    local out; out="$(_uninstall 2>&1)"
+    assert_contains "$out" "left ${d}/nutshell in place"
+    assert_not_contains "$out" "removed ${d}/nutshell"
+    assert_ok test -L "${d}/nutshell"
+
+    unset -f sudo _user_dirs priv_run
+    chmod 755 "$d"; rm -rf "$d" "$target"
+}
+
 # --- the system step, which is reached from one place ------------------------
 
 #[test]
@@ -258,13 +348,75 @@ it_says_so_and_links_nothing_when_root_can_already_see_it() {
 }
 
 #[test]
-it_reaches_for_the_system_link_from_exactly_one_place() {
+it_does_not_reach_for_root_after_its_own_probe_has_failed() {
     # The block was pasted twice and the second copy sat inside the failure
     # branch, so an install whose own shebang probe had just failed went on to
     # ask for a password to link a system directory. Both copies read correctly
-    # on their own, which is the whole reason nothing caught it, so the check
-    # is the count rather than the reading.
-    local n
-    n="$(grep -c '_ensure_sudo_finds_it "' "${BASH_SOURCE[0]%/*}/../install")"
-    assert_eq "$n" "1"
+    # on their own, which is why nothing caught it by reading.
+    #
+    # Driven rather than counted. The first version of this arm grepped the
+    # script for the number of call sites, which is a claim about its text: two
+    # calls on one line pass it, an unquoted argument passes it, and moving the
+    # single call back inside the failure branch, which is the regression
+    # itself, passes it too.
+    #
+    # `fs_temp_file` is stubbed to a path that cannot be written, so the probe
+    # fails for a reason the script already handles, and `TARGET` is left alone,
+    # being readonly.
+    local marker; marker="$(mktemp)"; rm -f "$marker"
+    local d; d="$(mktemp -d)"
+    PATH="${d}:${PATH}"
+    fs_temp_file() { printf '%s' "/no/such/directory/probe"; }
+    _ensure_sudo_finds_it() { : > "$marker"; }
+
+    local rc=0
+    _main "$d" > /dev/null 2>&1 || rc=$?
+
+    assert_ne "$rc" "0"
+    assert_fails test -e "$marker"
+
+    unset -f fs_temp_file _ensure_sudo_finds_it
+    rm -rf "$d"
+}
+
+#[test]
+it_reaches_for_the_system_link_once_the_probe_has_passed() {
+    # The control for the arm above: the same drive with a probe that works,
+    # where the system half must be reached. Without it, an install that never
+    # reaches root at all passes the arm above and nothing says so.
+    local marker; marker="$(mktemp)"; rm -f "$marker"
+    local d; d="$(mktemp -d)"
+    PATH="${d}:${PATH}"
+    _ensure_sudo_finds_it() { : > "$marker"; }
+
+    local rc=0
+    _main "$d" > /dev/null 2>&1 || rc=$?
+
+    assert_eq "$rc" "0"
+    assert_ok test -e "$marker"
+
+    unset -f _ensure_sudo_finds_it
+    rm -f "$marker"; rm -rf "$d"
+}
+
+#[test]
+it_takes_the_no_system_flag_wherever_it_is_written() {
+    # `./install ~/bin --no-system` reads naturally and used to be read as a
+    # directory argument plus nothing, so the flag was ignored, the system link
+    # went in and a password was asked for. The flag is the whole reason
+    # somebody types it.
+    local marker; marker="$(mktemp)"; rm -f "$marker"
+    local d; d="$(mktemp -d)"
+    PATH="${d}:${PATH}"
+    _ensure_sudo_finds_it() { [[ "${1:-1}" -eq 1 ]] && : > "$marker"; return 0; }
+
+    _main "$d" --no-system > /dev/null 2>&1
+    assert_fails test -e "$marker"
+
+    # and the control, the same call without the flag, which must reach it
+    _main "$d" > /dev/null 2>&1
+    assert_ok test -e "$marker"
+
+    unset -f _ensure_sudo_finds_it
+    rm -f "$marker"; rm -rf "$d"
 }

@@ -224,6 +224,15 @@ assert_fails() {
 # behaviour; an assertion's refusal is a recorded failure, so it would count.
 assert_refused() {
     _test_asserted
+    # A name that does not exist exits non-zero, and non-zero is what this
+    # wants, so without this the control passes on nothing at all. The runner's
+    # missing-assertion guard catches part of it and cannot catch the rest: it
+    # matches `assert_` at the head of the name, so a misspelled assertion is
+    # seen and any other command is not.
+    if ! command -v "$1" >/dev/null 2>&1; then
+        _test_failed "no such command [$1], so nothing was controlled"
+        return 1
+    fi
     local rc=0
     # Dynamic scope, so every assertion reached from here is quiet and the
     # variable is gone the moment this returns.

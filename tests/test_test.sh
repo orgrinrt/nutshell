@@ -121,22 +121,50 @@ it_keeps_an_expected_refusal_off_the_tally() {
 }
 
 #[test]
-it_leaves_a_misspelled_name_visible_to_the_missing_assertion_guard() {
-    # The one thing a quiet mode may not hide. `assert_refused assert_contians`
-    # would otherwise be a control that passes on a name that does not exist,
-    # since a missing command exits non-zero and non-zero is what it wants.
+it_refuses_a_name_that_does_not_exist_rather_than_controlling_nothing() {
+    # A missing command exits non-zero and non-zero is what this wants, so a
+    # typo would otherwise be a control that passes without running anything.
     #
-    # The suppression is of what `_test_failed` writes; bash's own complaint
-    # about the name is a different stream of text from a different writer, and
-    # the guard reads the runner's whole output.
-    local out; out="$( ( assert_refused assert_contians "x" "y" ) 2>&1 )"
-    assert_contains "$out" "assert_contians"
-    assert_ok _test_has_missing_assertion "$out"
+    # Both spellings of the mistake, because they are caught by different
+    # things. The runner's missing-assertion guard reads bash's own complaint
+    # and matches `assert_` at the head of the name, so it sees the first of
+    # these and is blind to the second.
+    # Each refusal is a real recorded failure, so the tally goes to a file of
+    # its own; left alone it would fail this test with the thing it is testing.
+    local out tally
+    tally="$(mktemp)"
+    out="$( ( _TEST_MARK="$tally"; assert_refused assert_contians "x" "y" ) 2>&1 )"
+    assert_contains "$out" "assert_contians" "a misspelled assertion said nothing"
 
-    # The control on that: a spelled name leaves nothing for the guard, so the
-    # arm above is not passing on some other line of the output.
-    out="$( ( assert_refused assert_contains "x" "y" ) 2>&1 )"
-    assert_fails _test_has_missing_assertion "$out"
+    out="$( ( _TEST_MARK="$tally"; assert_refused frobnicate "x" "y" ) 2>&1 )"
+    assert_contains "$out" "frobnicate" "a name that is not an assertion said nothing"
+
+    # And it is loud, since the quiet mode must not swallow the one message
+    # saying the control never ran.
+    assert_contains "$out" "nothing was controlled"
+
+    # The control: a name that does exist is not refused for this reason, so
+    # the three above are not passing on some other line of the output.
+    out="$( ( _TEST_MARK="$tally"; assert_refused assert_contains "x" "y" ) 2>&1 )"
+    assert_not_contains "$out" "no such command"
+    rm -f "$tally"
+}
+
+#[test]
+it_leaves_the_assertion_after_a_refusal_loud_and_counted() {
+    # `local` on the quiet flag is the only thing bounding it to this call, and
+    # every other arm in this file stays green when that word is deleted. What
+    # a deletion costs is here: the flag would outlive the call, so each later
+    # failure in the same test goes both silent and uncounted, which is the
+    # defect the whole file exists to refuse.
+    local tally out
+    tally="$(mktemp)"
+    out="$( ( _TEST_MARK="$tally"
+              assert_refused assert_eq "a" "b"
+              assert_eq "loud" "counted" ) 2>&1 )"
+    assert_contains "$(cat "$tally")" "f" "the failure after a refusal was not counted"
+    assert_contains "$out" "loud" "the failure after a refusal printed nothing"
+    rm -f "$tally"
 }
 
 #[test]

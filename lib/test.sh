@@ -155,9 +155,9 @@ assert_not_contains() {
 # whatever else it happened to check.
 #
 # The same absence as `assert_not_contains` above, which cost three tests here.
-# Three suites in the surrounding workspace had reached for `fail` by name, one
-# of them defining a local shim and two of them silently passing on every branch
-# that called it.
+# Suites written against this module reach for the name on their own and one of
+# them had defined a local shim for it, which is the usual sign that a primitive
+# is missing rather than unwanted.
 #
 # Usage: fail "the scan matched a body with the declaration removed"
 fail() {

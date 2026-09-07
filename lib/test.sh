@@ -145,6 +145,28 @@ assert_not_contains() {
 }
 
 #[pub]
+# Fail the test outright, where the condition is a branch rather than a compare.
+#
+# Every assertion above pairs a value with an expectation, and a good many checks
+# are not that shape: a loop that finds a line it should not have, a `case` arm
+# that should be unreachable, a guard on something no `assert_` spells. Those get
+# written as `if <bad>; then fail "..."; fi`, and without this that is an unknown
+# command, so it prints to stderr, registers no assertion, and the test passes on
+# whatever else it happened to check.
+#
+# The same absence as `assert_not_contains` above, which cost three tests here.
+# Three suites in the surrounding workspace had reached for `fail` by name, one
+# of them defining a local shim and two of them silently passing on every branch
+# that called it.
+#
+# Usage: fail "the scan matched a body with the declaration removed"
+fail() {
+    _test_asserted
+    _test_failed "$@"
+    return 1
+}
+
+#[pub]
 # Usage: assert_empty "$value" ["about"] -> 0 or 1
 assert_empty() {
     _test_asserted

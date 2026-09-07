@@ -84,6 +84,90 @@ it_passes_every_assertion_when_it_should() {
 }
 
 #[test]
+it_runs_an_assertion_to_watch_it_refuse() {
+    # The control on a control. A pattern written to reject a wrong input is
+    # only known to reject it once it has been run against that input, and the
+    # shape every suite reaches for first instead is matching the pattern
+    # against a literal by hand, a few lines from where the assertion is
+    # written, which compares two things the same person typed at the same
+    # moment and would pass with the assertion deleted.
+    assert_refused assert_contains "export MOCK_ROOT=\"\$PWD\"" '\$PWD'
+    assert_refused assert_eq "a" "b"
+    assert_refused assert_not_contains "hello" "ell"
+
+    # And it has to refuse when the inner one passes, or it is the thing it
+    # exists to replace: a control whose outcome was fixed at write time.
+    assert_fails _try_rc assert_refused assert_eq "a" "a"
+    assert_fails _try_rc assert_refused assert_contains "hello" "ell"
+}
+
+#[test]
+it_keeps_an_expected_refusal_off_the_tally() {
+    # The whole reason it is not `assert_fails`. An assertion's refusal is a
+    # recorded failure, so running one on purpose would fail the suite that ran
+    # it. The tally is read off its own file, not through a stub, because a
+    # stubbed `_test_mark` cannot show that the real one was left alone.
+    local tally; tally="$(mktemp)"
+    ( _TEST_MARK="$tally"; assert_refused assert_eq "a" "b" ) >/dev/null 2>&1
+    assert_not_contains "$(cat "$tally")" "f" "the inner refusal was counted"
+    assert_contains "$(cat "$tally")" "a" "and it still counts as an assertion"
+
+    # The other half: when the inner one passes, the failure that produces is
+    # the suite's and does reach the tally.
+    : > "$tally"
+    ( _TEST_MARK="$tally"; assert_refused assert_eq "a" "a" ) >/dev/null 2>&1
+    assert_contains "$(cat "$tally")" "f" "a control that stopped controlling is silent"
+    rm -f "$tally"
+}
+
+#[test]
+it_refuses_a_name_that_does_not_exist_rather_than_controlling_nothing() {
+    # A missing command exits non-zero and non-zero is what this wants, so a
+    # typo would otherwise be a control that passes without running anything.
+    #
+    # Both spellings of the mistake, because they are caught by different
+    # things. The runner's missing-assertion guard reads bash's own complaint
+    # and matches `assert_` at the head of the name, so it sees the first of
+    # these and is blind to the second.
+    # Each refusal is a real recorded failure, so the tally goes to a file of
+    # its own; left alone it would fail this test with the thing it is testing.
+    local out tally
+    tally="$(mktemp)"
+    out="$( ( _TEST_MARK="$tally"; assert_refused assert_contians "x" "y" ) 2>&1 )"
+    assert_contains "$out" "assert_contians" "a misspelled assertion said nothing"
+
+    out="$( ( _TEST_MARK="$tally"; assert_refused frobnicate "x" "y" ) 2>&1 )"
+    assert_contains "$out" "frobnicate" "a name that is not an assertion said nothing"
+
+    # And it is loud, since the quiet mode must not swallow the one message
+    # saying the control never ran.
+    assert_contains "$out" "nothing was controlled"
+
+    # The control: a name that does exist is not refused for this reason, so
+    # the three above are not passing on some other line of the output.
+    out="$( ( _TEST_MARK="$tally"; assert_refused assert_contains "x" "y" ) 2>&1 )"
+    assert_not_contains "$out" "no such command"
+    rm -f "$tally"
+}
+
+#[test]
+it_leaves_the_assertion_after_a_refusal_loud_and_counted() {
+    # `local` on the quiet flag is the only thing bounding it to this call, and
+    # every other arm in this file stays green when that word is deleted. What
+    # a deletion costs is here: the flag would outlive the call, so each later
+    # failure in the same test goes both silent and uncounted, which is the
+    # defect the whole file exists to refuse.
+    local tally out
+    tally="$(mktemp)"
+    out="$( ( _TEST_MARK="$tally"
+              assert_refused assert_eq "a" "b"
+              assert_eq "loud" "counted" ) 2>&1 )"
+    assert_contains "$(cat "$tally")" "f" "the failure after a refusal was not counted"
+    assert_contains "$out" "loud" "the failure after a refusal printed nothing"
+    rm -f "$tally"
+}
+
+#[test]
 it_says_when_a_test_asserted_nothing() {
     # The guard that caught the missing assertion. A test body that checks
     # nothing is a test that cannot fail, and reporting it as a pass is how a

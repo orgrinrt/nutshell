@@ -82,7 +82,13 @@ list_new _TEST_FAILURES
 # Report a failed assertion and record that one happened. The record is a file
 # because each test runs in its own subshell, and a variable set there cannot
 # reach the runner that has to decide the verdict.
+# `_TEST_QUIET` is `assert_refused` running an assertion on purpose to watch it
+# refuse. That refusal is the control's result rather than the suite's, so it
+# neither prints nor marks. Only what this function writes is suppressed: a
+# misspelled name is bash's own complaint on stderr and still reaches the
+# missing-assertion guard, which is the one thing a quiet mode must not hide.
 _test_failed() {
+    [ -n "${_TEST_QUIET:-}" ] && return 1
     printf '%s\n' "$@" >&2
     _test_mark f
     return 1
@@ -197,6 +203,46 @@ assert_fails() {
         return 1
     fi
     return 0
+}
+
+#[pub]
+# Usage: assert_refused assert_contains "$body" '\$PWD' -> 0 when it refuses
+#
+# The control on an assertion, which is the one thing the assertions above
+# cannot express about themselves. A pattern written to reject a wrong input is
+# only known to reject it once it has been run against that input, and running
+# it means the failure it produces has to go somewhere other than the tally.
+#
+# The alternative every suite reaches for first is mimicking the assertion:
+# writing the wrong input as a literal and matching the pattern against it by
+# hand, in a `case` or a `[[ ]]`. That compares two literals a few lines apart,
+# both written at the same moment by the same person, so its outcome was fixed
+# before it ever ran and it says nothing about the assertion beside it. The
+# assertion can then be deleted and the control still passes.
+#
+# `assert_fails` is not this. It takes a command whose refusal is its ordinary
+# behaviour; an assertion's refusal is a recorded failure, so it would count.
+assert_refused() {
+    _test_asserted
+    # A name that does not exist exits non-zero, and non-zero is what this
+    # wants, so without this the control passes on nothing at all. The runner's
+    # missing-assertion guard catches part of it and cannot catch the rest: it
+    # matches `assert_` at the head of the name, so a misspelled assertion is
+    # seen and any other command is not.
+    if ! command -v "$1" >/dev/null 2>&1; then
+        _test_failed "no such command [$1], so nothing was controlled"
+        return 1
+    fi
+    local rc=0
+    # Dynamic scope, so every assertion reached from here is quiet and the
+    # variable is gone the moment this returns.
+    local _TEST_QUIET=1
+    "$@" || rc=$?
+    [ "$rc" -ne 0 ] && return 0
+    # Loud about which one, since a control that has stopped controlling is
+    # indistinguishable from a suite with nothing wrong in it.
+    _TEST_QUIET=""
+    _test_failed "expected [$*] to refuse, and it passed"
 }
 
 #[pub]

@@ -220,6 +220,17 @@ log_flat() {
     _log_marked "$_LOG_M_FLAT" "" "$*"
 }
 
+# Whether a job just put in the background is there.
+#
+# Its own function because the decision is testable and the thing that triggers
+# it is not: nothing here can make a `fork` fail on purpose, so the arms plant
+# the three answers instead, an empty pid, a pid nothing holds, and a job that
+# is running.
+_log_job_started() {
+    [ -n "${1:-}" ] || return 1
+    kill -0 "$1" 2>/dev/null
+}
+
 #[pub]
 # Run a command as a step: its output indented under it, and a mark on the end
 # saying how it went. Returns what the command returned, which is the reason to
@@ -228,7 +239,7 @@ log_flat() {
 log_run() {
     local label="$1"; shift
     log_open "$label"
-    local line rc="" sep fifo
+    local line rc="" sep fifo writer
     sep="$(printf '\037')"
 
     # A named pipe rather than `< <(...)`, which is bash. The output has to
@@ -243,6 +254,29 @@ log_run() {
     mkfifo "$fifo" || return 1
 
     { "$@" 2>&1; printf '%s%d\n' "$sep" "$?"; } > "$fifo" &
+    writer=$!
+
+    # Whether the writer exists, asked before this shell opens the pipe.
+    #
+    # The writer cannot have finished by now: its own `> "$fifo"` blocks until
+    # a reader opens the pipe, and this shell has not. So a job that is not
+    # here is one that was never created, with no race to lose, and the answer
+    # to a `&` that did not fork is to say so rather than to open a pipe
+    # nobody will ever write to.
+    #
+    # Without it the failure has no floor. Opening a fifo for reading blocks in
+    # `open` until a writer arrives, so a fork that failed under memory or
+    # process pressure stops the caller dead instead of failing it: measured as
+    # a suite frozen five minutes inside one `open`, the shell at zero percent
+    # with no children, released the instant something else opened the pipe for
+    # writing. Five stale `nut-run.*` fifos over two days say it had happened
+    # before and left nothing else behind.
+    if ! _log_job_started "$writer"; then
+        rm -f "$fifo"
+        log_close fail "${label} (the runner could not start)"
+        return 1
+    fi
+
     while IFS= read -r line; do
         # The status travels in the stream, because a pipeline loses it and a
         # runner that reports success on a failed command is worse than none.

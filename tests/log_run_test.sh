@@ -116,3 +116,46 @@ it_survives_a_command_that_does_not_exist() {
     assert_ne "$rc" "0"
     assert_eq "$(log_worst)" "fail"
 }
+
+# --- the writer has to be there before the pipe is opened ----------------------
+#
+# Opening a fifo for reading blocks until a writer opens it, so a `&` that did
+# not fork leaves the caller in `open` with nothing that ends it. That was
+# measured: a suite sat five minutes inside one such `open`, at zero percent
+# with no children, and moved the instant something else opened the pipe.
+#
+# What these cover is the decision. The trigger is a failing `fork` and nothing
+# here can make one happen on purpose, and the wiring is not covered either,
+# because forcing the refusal with a writer already backgrounded would leave
+# that writer blocked on a pipe this function has removed.
+
+#[test]
+it_says_a_job_with_no_pid_did_not_start() {
+    # The shape a `&` that did not fork leaves behind in a shell that had no
+    # jobs before it, which is where this fires.
+    assert_refused _log_job_started ""
+}
+
+#[test]
+it_says_a_pid_nothing_holds_any_more_did_not_start() {
+    # A real pid rather than a number picked for being large: this one existed
+    # a moment ago and was reaped, so the answer is about the job being gone
+    # rather than about the number being implausible.
+    local p
+    sh -c 'exit 0' &
+    p=$!
+    wait "$p" 2>/dev/null
+    assert_refused _log_job_started "$p"
+}
+
+#[test]
+it_says_a_running_job_started() {
+    # The positive control, and without it the two above pass on a function
+    # that refuses everything.
+    local p
+    command sleep 30 &
+    p=$!
+    assert_ok _log_job_started "$p"
+    kill "$p" 2>/dev/null
+    wait "$p" 2>/dev/null
+}

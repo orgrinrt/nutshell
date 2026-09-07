@@ -40,6 +40,26 @@ it_fails_both_directions_of_contains_when_it_should() {
 }
 
 #[test]
+it_can_fail_outright_without_a_value_to_compare() {
+    # `fail` is the branch-shaped check: a loop that found a line it should not
+    # have, an unreachable `case` arm, a guard no `assert_` spells. Without it,
+    # `if <bad>; then fail "..."; fi` is an unknown command, so the branch fires,
+    # prints to stderr, registers nothing, and the test reports a pass. Three
+    # suites in the surrounding workspace were written against it by name.
+    assert_fails _try_rc fail "this has to be a failure"
+    assert_contains "$(_try fail "the scan matched a planted body")" \
+        "the scan matched a planted body"
+    # It counts as an assertion, or the harness's own "asserted nothing" guard
+    # would report a test whose only check is a `fail` branch as having checked
+    # nothing. The tally is read off its own file rather than stubbed away.
+    local tally; tally="$(mktemp)"
+    ( _TEST_MARK="$tally"; fail "counted" ) >/dev/null 2>&1
+    assert_contains "$(cat "$tally")" "a" "a fail registers an assertion"
+    assert_contains "$(cat "$tally")" "f" "and registers the failure"
+    rm -f "$tally"
+}
+
+#[test]
 it_fails_every_other_assertion_when_it_should() {
     # The same control over the rest of the surface, because an assertion that
     # cannot fail is the one defect none of the suites using it would notice.

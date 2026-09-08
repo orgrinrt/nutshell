@@ -131,8 +131,10 @@ it_survives_a_command_that_does_not_exist() {
 
 #[test]
 it_says_a_job_with_no_pid_did_not_start() {
-    # The shape a `&` that did not fork leaves behind in a shell that had no
-    # jobs before it, which is where this fires.
+    # The shape a `&` that did not fork leaves behind in a shell that has
+    # backgrounded nothing at all yet. It is not the common case: `$!` is not
+    # cleared by a `&` that failed, so from the second call in one shell the
+    # pid is the previous writer's, which the arm below covers.
     assert_refused _log_job_started ""
 }
 
@@ -149,13 +151,28 @@ it_says_a_pid_nothing_holds_any_more_did_not_start() {
 }
 
 #[test]
-it_says_a_running_job_started() {
-    # The positive control, and without it the two above pass on a function
-    # that refuses everything.
+it_says_a_pid_that_did_not_move_did_not_start() {
+    # The case the pid alone cannot answer, and the ordinary one: a shell that
+    # has backgrounded something before, where the `&` fails and `$!` keeps the
+    # value it already had. The job here is deliberately alive, so `kill -0`
+    # says yes and only the comparison refuses.
     local p
     command sleep 30 &
     p=$!
-    assert_ok _log_job_started "$p"
+    assert_refused _log_job_started "$p" "$p"
+    kill "$p" 2>/dev/null
+    wait "$p" 2>/dev/null
+}
+
+#[test]
+it_says_a_running_job_started() {
+    # The positive control, and without it the three above pass on a function
+    # that refuses everything. The pid moved and the job is there, which is
+    # the only combination that starts a run.
+    local p
+    command sleep 30 &
+    p=$!
+    assert_ok _log_job_started "$p" "$(( p - 1 ))"
     kill "$p" 2>/dev/null
     wait "$p" 2>/dev/null
 }

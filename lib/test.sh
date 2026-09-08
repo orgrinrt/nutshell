@@ -162,7 +162,7 @@ assert_not_contains() {
 #
 # The same absence as `assert_not_contains` above, which cost three tests here.
 # Suites written against this module reach for the name on their own and one of
-# them had defined a local shim for it, which is the usual sign that a primitive
+# them had defined its own local copy, which is the usual sign that a primitive
 # is missing rather than unwanted.
 #
 # Usage: fail "the scan matched a body with the declaration removed"

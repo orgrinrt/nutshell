@@ -281,7 +281,9 @@ _run_check() {
         if [[ -z "$failures" ]]; then
             echo "      it failed and printed nothing; run ${check_script#"${NUTSHELL_ROOT}"/} to see why"
         else
-            printf '%s' "$failures" | head -"$shown" | sed 's/^/      /'
+            # `printf '%s\n'`, because without the newline the last line shown
+            # runs into whatever the next check prints and the two read as one.
+            printf '%s\n' "$failures" | head -"$shown" | sed 's/^/      /'
         fi
         if [[ "$total" -gt "$shown" ]]; then
             echo "      ... and $((total - shown)) more; run ${check_script#"${NUTSHELL_ROOT}"/} to see them"

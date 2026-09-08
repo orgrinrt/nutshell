@@ -363,10 +363,10 @@ test_no_cruft() {
             fi
             
             if is_truthy "$FAIL_ON_DEBUG"; then
-                log_fail "Line $line_num: Debug code detected"
+                log_fail "$filepath:$line_num: Debug code detected"
                 error_count=$((error_count + 1))
             else
-                log_test_warn "Line $line_num: Debug code detected"
+                log_test_warn "$filepath:$line_num: Debug code detected"
                 warn_count=$((warn_count + 1))
             fi
             
@@ -399,10 +399,10 @@ test_no_cruft() {
             
             # TODOs fail if fail_on_todo is true OR if we exceed max_todos
             if is_truthy "$FAIL_ON_TODO" || [[ $todo_count -gt $MAX_TODOS ]]; then
-                log_fail "Line $line_num: $pattern"
+                log_fail "$filepath:$line_num: $pattern"
                 error_count=$((error_count + 1))
             else
-                log_test_warn "Line $line_num: $pattern"
+                log_test_warn "$filepath:$line_num: $pattern"
                 warn_count=$((warn_count + 1))
             fi
             
@@ -437,15 +437,18 @@ test_no_cruft() {
                 current_file="$filepath"
             fi
             
+            # The path goes in the message rather than only in the cyan header
+            # above it, because `./check` shows a failing check's `✗` lines and
+            # nothing else, so a bare line number named no file at all.
             case "$cruft_type" in
                 comment)
-                    log_fail "Line $line_num: Comment contains '$pattern'"
+                    log_fail "$filepath:$line_num: Comment contains '$pattern'"
                     ;;
                 function)
-                    log_fail "Line $line_num: Function '$content' contains '$pattern'"
+                    log_fail "$filepath:$line_num: Function '$content' contains '$pattern'"
                     ;;
                 variable)
-                    log_fail "Line $line_num: Variable '$content' contains '$pattern'"
+                    log_fail "$filepath:$line_num: Variable '$content' contains '$pattern'"
                     ;;
             esac
             error_count=$((error_count + 1))
@@ -528,4 +531,7 @@ main() {
 # the interpreter and `BASH_SOURCE[0]` is this file, and `main` was never
 # called. Six of the eight built-in checks exited 0 having done nothing, and
 # `./check` read that as a pass and printed one.
-main "$@"
+#
+# `NUT_CHECK_LOAD_ONLY` is the door a test uses to reach the finders without a
+# run of the whole check.
+[[ -n "${NUT_CHECK_LOAD_ONLY:-}" ]] || main "$@"

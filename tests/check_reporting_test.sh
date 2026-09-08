@@ -57,6 +57,26 @@ it_says_so_when_a_check_fails_and_will_not_explain_itself_either_way() {
 }
 
 #[test]
+it_ends_the_last_failure_line_it_shows() {
+    # `printf '%s'` over the failure list drops the trailing newline, so the
+    # last line it shows runs into whatever the runner prints next. On a real
+    # run that was `✗ Line 165: Comment contains 'compatibility shim'  ⚠
+    # posix_floor`, two checks on one line, and the reader reads it as one.
+    # It takes two checks to see: the missing newline glues the last failure
+    # line to whatever the next check prints, and with one check the summary's
+    # own blank line terminates it and hides the defect.
+    local d="$_CRP_TMP/unterminated"
+    mkdir -p "$d/checks"
+    printf '[qa]\ncustom_checks = ["checks/a.sh", "checks/b.sh"]\nrun_builtins = false\n' > "$d/nut.toml"
+    printf '#!/usr/bin/env bash\nprintf "✗ the second thing\\n"\nexit 1\n' > "$d/checks/a.sh"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$d/checks/b.sh"
+    chmod +x "$d/checks/a.sh" "$d/checks/b.sh"
+
+    local out; out="$(_crp_run "$d")"
+    assert_eq "$(printf '%s\n' "$out" | grep -cx '      ✗ the second thing')" "1"
+}
+
+#[test]
 it_does_not_ask_again_when_the_check_passed() {
     # The second run costs a whole check. It happens on failure only, and a
     # check that ran twice would say so here.

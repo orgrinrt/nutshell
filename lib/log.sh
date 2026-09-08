@@ -220,6 +220,28 @@ log_flat() {
     _log_marked "$_LOG_M_FLAT" "" "$*"
 }
 
+# Whether a job just put in the background is there, given what `$!` held
+# before the `&` ran.
+#
+# `$!` is not cleared by a `&` that failed to fork, so it still names the
+# previous background job of this shell, and `log_run` is called many times in
+# one shell. A pid alone therefore cannot answer this: the previous writer is
+# usually dead and `kill -0` refuses correctly, but the failure being guarded
+# against is process-table exhaustion, which is where a pid gets recycled
+# fastest, and a recycled hit puts the caller back inside the blocking `open`.
+# So the answer is the pid moving, and the liveness check stays for the case
+# where a job was made and died before this ran.
+#
+# Its own function because the decision is testable and the thing that triggers
+# it is not: nothing here can make a `fork` fail on purpose, so the arms plant
+# the answers instead, an empty pid, a pid nothing holds, one that did not move
+# since the last call, and a job that is running.
+_log_job_started() {
+    [ -n "${1:-}" ] || return 1
+    [ "$1" != "${2:-}" ] || return 1
+    kill -0 "$1" 2>/dev/null
+}
+
 #[pub]
 # Run a command as a step: its output indented under it, and a mark on the end
 # saying how it went. Returns what the command returned, which is the reason to
@@ -228,7 +250,7 @@ log_flat() {
 log_run() {
     local label="$1"; shift
     log_open "$label"
-    local line rc="" sep fifo
+    local line rc="" sep fifo writer before
     sep="$(printf '\037')"
 
     # A named pipe rather than `< <(...)`, which is bash. The output has to
@@ -242,7 +264,39 @@ log_run() {
     fifo="$(mktemp -u "${TMPDIR:-/tmp}/nut-run.XXXXXX")" || return 1
     mkfifo "$fifo" || return 1
 
+    # What `$!` held before the `&`, which is what it will still hold if the
+    # `&` fails to fork. Read with `-u` off for the length of the read and no
+    # longer: before this shell has backgrounded anything, `$!` is unset, and
+    # under `set -u` reading it kills the caller. A subshell would relax it
+    # too and costs a fork, which is the one thing not to spend here.
+    case $- in
+        *u*) before=""; set +u; before=$!; set -u ;;
+        *)   before=$! ;;
+    esac
     { "$@" 2>&1; printf '%s%d\n' "$sep" "$?"; } > "$fifo" &
+    writer=$!
+
+    # Whether the writer exists, asked before this shell opens the pipe.
+    #
+    # The writer cannot have finished by now: its own `> "$fifo"` blocks until
+    # a reader opens the pipe, and this shell has not. So a job that is not
+    # here is one that was never created, with no race to lose, and the answer
+    # to a `&` that did not fork is to say so rather than to open a pipe
+    # nobody will ever write to.
+    #
+    # Without it the failure has no floor. Opening a fifo for reading blocks in
+    # `open` until a writer arrives, so a fork that failed under memory or
+    # process pressure stops the caller dead instead of failing it: measured as
+    # a suite frozen five minutes inside one `open`, the shell at zero percent
+    # with no children, released the instant something else opened the pipe for
+    # writing. Five stale `nut-run.*` fifos over two days say it had happened
+    # before and left nothing else behind.
+    if ! _log_job_started "$writer" "$before"; then
+        rm -f "$fifo"
+        log_close fail "${label} (the runner could not start)"
+        return 1
+    fi
+
     while IFS= read -r line; do
         # The status travels in the stream, because a pipeline loses it and a
         # runner that reports success on a failed command is worse than none.

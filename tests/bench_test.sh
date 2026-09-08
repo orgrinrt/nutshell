@@ -21,24 +21,50 @@ _bench_fresh() {
     BENCH_REPEATS=2
     BENCH_RESULTS="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-bench.XXXXXX")"
     export BENCH_RESULTS
+    _CLOCK_AT="$(mktemp "${TMPDIR:-/tmp}/nutshell-clock.XXXXXX")"
+    BENCH_CLOCK=_pinned_clock
+    _pin_runs 5
 }
-_bench_done() { rm -rf "$BENCH_RESULTS"; unset BENCH_RESULTS; }
+_bench_done() {
+    rm -rf "$BENCH_RESULTS"; unset BENCH_RESULTS
+    rm -f "$_CLOCK_AT"; unset _CLOCK_AT
+    BENCH_CLOCK=_bench_clock_ns
+}
 
-# Two arms that agree, and one that does not.
+# The clock every arm below runs on, which says what it is told.
 #
-# Each does enough work to be measurable. Written as a bare `printf` they take
-# zero milliseconds, and the harness refuses a baseline of zero because nothing
-# can be a ratio against it. That is the guard working, and it made
-# `it_measures_two_arms_that_agree` fail about one run in ten: passing on its
-# own, failing inside the full suite where the machine is busier.
-_spin() {
-    local i s=0
-    for (( i = 0; i < 3000; i++ )); do s=$(( s + i )); done
-    printf '%s' "$1"
+# The arms used to spin for a few milliseconds each and go through `date`,
+# which is two forks and most of the measurement, so a busy machine pushed the
+# worst run past twice the best and the harness refused the run. It was right
+# to: that refusal is what stops a ratio being read off a machine that cannot
+# support one. But an arm about the report, or about a reset, was then failing
+# for the weather, about one run in ten inside the full suite, and the two
+# refusals that are about the machine had no arms at all, because nothing could
+# make them happen on purpose.
+#
+# `_pin_runs` states each run's duration in milliseconds. The clock hands out a
+# start and an end per run and repeats the last duration once the list is out,
+# so an arm names the timings it cares about rather than counting reads. The
+# counter lives in a file because every read happens inside a command
+# substitution and a variable set there does not come back.
+_pin_runs() { _CLOCK_MS=("$@"); printf '0' > "$_CLOCK_AT"; }
+
+_pinned_clock() {
+    local i at ms
+    i="$(cat "$_CLOCK_AT")"
+    at=$(( i / 2 ))
+    (( at >= ${#_CLOCK_MS[@]} )) && at=$(( ${#_CLOCK_MS[@]} - 1 ))
+    ms="${_CLOCK_MS[$at]}"
+    if (( i % 2 == 0 )); then printf '%s' "$(( at * 1000000000 ))"
+    else printf '%s' "$(( at * 1000000000 + ms * 1000000 ))"; fi
+    printf '%s' "$(( i + 1 ))" > "$_CLOCK_AT"
 }
-_arm_a()      { _spin 'the same'; }
-_arm_b()      { _spin 'the same'; }
-_arm_liar()   { _spin 'something else'; }
+
+# Two arms that agree, and one that does not. What they answer is the whole of
+# what they are for now; how long they take is the clock's to say.
+_arm_a()      { printf 'the same'; }
+_arm_b()      { printf 'the same'; }
+_arm_liar()   { printf 'something else'; }
 _answer_of()  { "$1"; }
 
 # --- it measures at all ------------------------------------------------------
@@ -269,4 +295,88 @@ it_runs_a_second_case_after_a_reset() {
     assert_contains "$out" "the second question"
     assert_not_contains "$out" "the first question"
     _bench_done
+}
+
+# --- the two refusals that are about the machine ------------------------------
+#
+# Both were written, reasoned about and never exercised, because the thing that
+# causes them is the machine and nobody could ask the machine for it. With the
+# clock saying the timings they are ordinary arms, and the run that used to
+# trip them by accident no longer can.
+
+#[test]
+it_refuses_a_baseline_that_measured_nothing() {
+    # A ratio against zero is not a number, so the run says so and prints no
+    # table rather than printing one nobody can read.
+    _bench_fresh
+    _pin_runs 0
+    bench_case "too fast to time"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    _bench_done
+    assert_eq "$rc" "1"
+    assert_contains "$out" "the baseline did not measure"
+    assert_not_contains "$out" "against the first"
+}
+
+#[test]
+it_refuses_a_baseline_that_moved_more_than_twice_across_its_runs() {
+    # The baseline's own two runs are 5ms and 20ms, which is the machine
+    # saying it cannot hold still. Reported with the ranges, because a reader
+    # who wanted the numbers anyway should see how far apart they were.
+    _bench_fresh
+    _pin_runs 5 20
+    bench_case "a noisy machine"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    _bench_done
+    assert_eq "$rc" "1"
+    assert_contains "$out" "too noisy"
+    assert_contains "$out" "5"
+    assert_contains "$out" "20"
+    assert_not_contains "$out" "against the first"
+}
+
+#[test]
+it_takes_a_ratio_when_the_arms_are_far_enough_apart() {
+    # The positive control for both refusals, and the only arm that reads a
+    # ratio at all: the baseline holds at 5ms across its runs and the second
+    # arm sits at 20ms, which is outside it in the only direction that counts.
+    _bench_fresh
+    _pin_runs 5 5 20 20
+    bench_case "one arm is slower"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    _bench_done
+    assert_eq "$rc" "0"
+    assert_contains "$out" "400%"
+    # And the baseline says nothing about itself, since its own range is its
+    # own range and overlapping ranges are exactly what "within the noise"
+    # means. Kept as an assertion because it looks like a defect and is not.
+    assert_contains "$out" "within the noise"
+}
+
+# --- and the clock the harness ships ------------------------------------------
+
+#[test]
+it_reads_a_clock_that_only_goes_forward() {
+    # Everything above says what the time was, so this is the one arm that
+    # asks the machine, and it asks for the least that can be asked: two reads
+    # in nanoseconds, the second not before the first. A ratio here would be
+    # the weather again.
+    local a b
+    a="$(_bench_clock_ns)"
+    b="$(_bench_clock_ns)"
+    assert_ne "$a" ""
+    assert_ne "$b" ""
+    assert_ok test "$b" -ge "$a"
+    # Nanoseconds rather than seconds, which is the whole reason the harness
+    # asks for `%N`: a second-resolution clock would make every arm zero.
+    assert_ok test "${#a}" -ge 18
 }

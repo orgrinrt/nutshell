@@ -107,21 +107,40 @@ bench_arm() {
 # function and the size. So a second case has to name its own question and
 # cannot inherit a baseline from the first by accident.
 #
-# Not cleared: `BENCH_REPEATS` and `BENCH_RESULTS`, which describe how the run
-# is taken rather than what it asks. Naming what is cleared beats saying
-# nothing carries over, which was the earlier wording and was false.
+# Not cleared: `BENCH_REPEATS`, `BENCH_RESULTS` and `BENCH_CLOCK`, which
+# describe how the run is taken rather than what it asks. Naming what is
+# cleared beats saying nothing carries over, which was the earlier wording and
+# was false.
 # Usage: bench_run; bench_reset; bench_case "the next question"
 bench_reset() {
     _BENCH_LABEL=(); _BENCH_FN=(); _BENCH_CEIL=(); _BENCH_NOTE=()
     BENCH_TITLE=""; BENCH_VERIFY=""; BENCH_SIZE=0
 }
 
+# Where the time comes from, as the name of a function printing nanoseconds.
+#
+# It is a seam because two of this harness's refusals are about the machine
+# rather than about the arms: a baseline that measured zero, and a baseline
+# whose worst run is more than twice its best, which says the machine is too
+# noisy for a ratio to mean anything. Both are right and neither could be
+# reached on purpose, so neither had an arm, while six arms that are about the
+# report and the reset went through a real clock and inherited the weather.
+# One of them was failing about one run in ten inside the full suite.
+#
+# Set it to a function that says the timings and both halves become ordinary
+# tests. Nothing outside a test has any reason to.
+BENCH_CLOCK="${BENCH_CLOCK:-_bench_clock_ns}"
+
+_bench_clock_ns() { date +%s%N 2>/dev/null; }
+
 # One run of one arm, in milliseconds.
 _bench_once() {
     local fn="$1" start end
-    start="$(date +%s%N 2>/dev/null)" || return 1
+    start="$("$BENCH_CLOCK")" || return 1
+    [ -n "$start" ] || return 1
     "$fn" >/dev/null 2>&1
-    end="$(date +%s%N 2>/dev/null)" || return 1
+    end="$("$BENCH_CLOCK")" || return 1
+    [ -n "$end" ] || return 1
     printf '%s' "$(( (end - start) / 1000000 ))"
 }
 

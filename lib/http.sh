@@ -463,7 +463,8 @@ http_get_json() {
 #[pub]
 # Download a file to a local path
 # Usage: http_download "https://example.com/file.zip" "/tmp/file.zip"
-# Returns: 0 on success, 1 on failure
+# Returns: 0 on success, non-zero on failure, an error status included, so a
+# 404 page is never saved as though it were the file
 http_download() {
     local url="${1:-}"
     local output="${2:-}"
@@ -473,7 +474,7 @@ http_download() {
     [[ "$_HTTP_READY" != "1" ]] && return 1
     
     if [[ "$_HTTP_IMPL" == "curl" ]]; then
-        "${_TOOL_PATH_curl}" -sS -L -o "$output" \
+        "${_TOOL_PATH_curl}" -fsS -L -o "$output" \
             --max-time "$HTTP_TIMEOUT" \
             -A "$HTTP_USER_AGENT" \
             "$url"

@@ -408,3 +408,61 @@ it_still_runs_a_file_that_sources_cleanly() {
     assert_contains     "$out" "1 passed"
     assert_not_contains "$out" "did not finish"
 }
+
+#[test]
+# A test that reads its stdin to the end does not take the rest of the run.
+#
+# The loop over a file's tests reads the names from its own stdin, and a test
+# body inherited it, so one that ran a command reading stdin (a hook fed its
+# input on stdin, here) consumed every name after its own. The run ended there
+# with no error and reported the tests before it as the whole file: a suite
+# declaring 98 said `66 passed`.
+it_runs_every_test_after_one_that_reads_its_stdin() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_one() { assert_eq 1 1; }\n'
+        printf '#%s\n' '[test]'
+        printf 'it_eats_stdin() { cat >/dev/null; assert_eq 2 2; }\n'
+        printf '#%s\n' '[test]'
+        printf 'it_three() { assert_eq 3 3; }\n'
+        printf '#%s\n' '[test]'
+        printf 'it_four() { assert_eq 4 4; }\n'
+    } > "$d/zz_stdin_test.sh"
+
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK -u TEST_FILTER \
+        "${NUTSHELL_ROOT}/test" "$d/zz_stdin_test.sh" 2>&1)"
+    rm -rf "$d"
+
+    assert_contains     "$out" "4 passed"
+    assert_contains     "$out" "it_four"
+    assert_not_contains "$out" "tests it declares"
+}
+
+#[test]
+# A filter that selects some of a file's tests is not a run that ended early.
+# The control for the count the runner now checks: it compares against what
+# the filter wanted, not against everything the file declares.
+it_counts_a_filtered_run_against_what_the_filter_selects() {
+    local d; d="$(mktemp -d)"
+    {
+        printf 'use test\n'
+        printf '#%s\n' '[test]'
+        printf 'it_keep_one() { assert_eq 1 1; }\n'
+        printf '#%s\n' '[test]'
+        printf 'it_skip_two() { assert_eq 2 2; }\n'
+        printf '#%s\n' '[test]'
+        printf 'it_keep_three() { assert_eq 3 3; }\n'
+    } > "$d/zz_filter_test.sh"
+
+    local out
+    out="$(env -u _TEST_MARK_DIR -u _TEST_MARK TEST_FILTER=keep \
+        "${NUTSHELL_ROOT}/test" "$d/zz_filter_test.sh" 2>&1)"
+    rm -rf "$d"
+
+    assert_contains     "$out" "2 passed"
+    assert_not_contains "$out" "tests it declares"
+    assert_not_contains "$out" "it_skip_two"
+}

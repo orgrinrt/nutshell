@@ -388,3 +388,35 @@ it_leaves_no_function_both_unmarked_and_without_an_underscore() {
     unset MODGRAPH_NOCACHE
     assert_eq "$undecided" "" "mark these #[pub], #[pub(lib)] or #[pub(super)], or give them a leading underscore"
 }
+
+#[test]
+it_keys_the_cache_on_files_below_the_top_directory() {
+    # The key listed `*.sh` in the library directory only, so editing a module
+    # under `deps/` or `json/impl/` left the old graph in place and a listing
+    # made from it described code that was gone.
+    local d
+    d="$(fs_temp_dir nutshell-mg)"
+    mkdir -p "$d/lib/sub"
+    printf 'one() { :; }\n' > "$d/lib/sub/x.sh"
+    local before after
+    before="$(_mg_cache_file "$d/lib")"
+    printf 'one() { :; }\ntwo() { :; }\n' > "$d/lib/sub/x.sh"
+    after="$(_mg_cache_file "$d/lib")"
+    assert_ne "$before" "$after"
+}
+
+#[test]
+it_keys_the_cache_on_the_manifest() {
+    # Which module a file is comes from lib.nut, so a renamed row is a changed
+    # graph even when no source file moved.
+    local d
+    d="$(fs_temp_dir nutshell-mg)"
+    mkdir -p "$d/lib"
+    printf 'one() { :; }\n' > "$d/lib/x.sh"
+    printf 'x   lib/x.sh\n' > "$d/lib.nut"
+    local before after
+    before="$(_mg_cache_file "$d/lib")"
+    printf 'y   lib/x.sh\n' > "$d/lib.nut"
+    after="$(_mg_cache_file "$d/lib")"
+    assert_ne "$before" "$after"
+}

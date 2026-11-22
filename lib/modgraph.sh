@@ -95,10 +95,15 @@ _MG_ROOT=""
 readonly _MG_SCHEMA=4
 
 _mg_fingerprint() {
-    local dir="$1"
-    { ls -1 "$dir"/*.sh 2>/dev/null | while IFS= read -r f; do
-          printf '%s:%s:%s\n' "${f##*/}" "$(fs_size "$f" 2>/dev/null)" "$(fs_mtime "$f" 2>/dev/null)"
+    local dir="$1" root="${MODGRAPH_ROOT:-${1%/*}}"
+    # Every file under the directory, by path below it, and the manifest by
+    # content. The scan reads every level and names each file from lib.nut, so
+    # a key made of the top level alone served a stale graph after an edit to
+    # anything in a subdirectory or to the manifest.
+    { find "$dir" -name '*.sh' -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
+          printf '%s:%s:%s\n' "${f#"$dir"/}" "$(fs_size "$f" 2>/dev/null)" "$(fs_mtime "$f" 2>/dev/null)"
       done
+      [ -r "${root}/lib.nut" ] && printf 'manifest:%s\n' "$(cksum < "${root}/lib.nut")"
       printf 'schema:%s\n' "$_MG_SCHEMA"
       # Which library, not only what is in it. Without this two libraries whose
       # files happen to share names, sizes and modification times resolve to

@@ -256,6 +256,20 @@ extern_path() {
         fi
     fi
 
+    _extern_checkout "$name" "$mirror" "$url" "$commit" || return 1
+    dir="$_EXTERN_DIR"
+    map_set _EXTERN_RESOLVED "$name" "$dir"
+    printf '%s' "$dir"
+}
+
+# _extern_checkout <name> <mirror> <url> <commit>
+#
+# The working checkout of one commit, laid out if it is not there, in
+# `_EXTERN_DIR`. A variable rather than output, because the hold below lasts
+# for the life of the shell that took it and a command substitution would take
+# it in a subshell that is gone on return.
+_extern_checkout() {
+    local name="$1" mirror="$2" url="$3" commit="$4" dir
     dir="$(_extern_cache_root)/$(_extern_key "${url}@${commit}")"
     # Whether it is a working checkout, not whether the path exists. A worktree
     # whose mirror has been deleted is still a directory, and returning it
@@ -270,8 +284,28 @@ extern_path() {
     # rather than rewriting a tree being read. The EXIT trap releases it; no
     # caller has to remember.
     inuse_hold_session "$dir" 2>/dev/null || true
-    map_set _EXTERN_RESOLVED "$name" "$dir"
-    printf '%s' "$dir"
+    _EXTERN_DIR="$dir"
+}
+
+#[pub]
+# The checkout of a repository by url, with no manifest and no lockfile: what
+# a listing or a look at somebody else's library wants. A branch or HEAD is the
+# remote's head now, a tag or a revision the one commit; nothing is recorded.
+# Usage: extern_path_url <url> [<ref>] -> prints the checkout, fetching it once
+extern_path_url() {
+    local url="$1" ref="${2:-HEAD}" name mirror commit out kind="" resolved=""
+    name="${url##*/}"; name="${name%.git}"
+    [ -n "$name" ] || name="library"
+
+    mirror="$(_extern_mirror "$name" "$url" "$ref")" || return 1
+    if out="$(extern_resolve_ref "$url" "$ref")"; then
+        kind="${out%% *}"; resolved="${out#* }"
+    fi
+    commit="${resolved:-$(_extern_ref_commit "$mirror" "$ref")}"
+    [ -n "$commit" ] || { log_error "${url} has no ref '${ref}'"; return 1; }
+
+    _extern_checkout "$name" "$mirror" "$url" "$commit" || return 1
+    printf '%s' "$_EXTERN_DIR"
 }
 
 # _extern_lay_out <name> <mirror> <url> <commit> <dir>

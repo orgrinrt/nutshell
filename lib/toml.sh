@@ -21,6 +21,22 @@
 # why not. Writing is the floor's line editor in `lib/toml/write.sh` whatever
 # reads.
 #
+# A scalar reads as one text whoever reads it, the floor's:
+#   string    the value, decoded
+#   integer   decimal, `0xFF` as `255`
+#   boolean   `true` or `false`
+#   float     as the file wrote it, the underscores and a leading `+` cut, so
+#             `3.0`, `1e3`, `1.50`, `-0.0` stay those. A float's spelling is
+#             what tells it from an integer, and the shortest text that reads
+#             back to the same double needs formatting bash does not have.
+#             `toml_to_json` writes the same text, a JSON number.
+#   date-time as the file wrote it in RFC 3339's spelling: the separator a
+#             `T`, `t` and `z` upper case. Fractions and offsets stay as written.
+# yq gives every float's text through a marker in its JSON and refuses the
+# date-times it would rewrite. taplo rewrites both, `1e3` as `1000.0`, `+00:00`
+# as `Z`: a float, or a string that reads as a date-time, from taplo is answered
+# by the floor, and `toml_to_json` takes a file holding one from the floor.
+#
 # One path language for every function that takes one, the same as json's:
 # `a.b.0.c`, where a dot separates segments, a numeric segment indexes an
 # array or an array of tables, and `"quoted.key"` in double quotes is one
@@ -149,6 +165,9 @@ _toml_open_values() {
     [[ "$_TOML_ID" == "json$_TOML_US$f" && "$_TOML_SRC" == "$c" ]] && return 0
     # A number past 64 bits is not refused by every tool: taplo gives
     # -9223372036854775809 as 0. A file that may hold one goes to the floor.
+    # The match is on the text, so 19 digits in a row inside a string, a
+    # digest, send the file there too: only slower, never wrong, since the
+    # floor reads all of TOML 1.0.
     [[ "$c" =~ $_TOML_RE_WIDE ]] && { _TOML_FROM=bash; _toml_open "$f"; return; }
     _TOML_ID=""
     if _toml_tool_json "${c#$'\xef\xbb\xbf'}" && _toml_json_tree "$f" "$_tt_json"; then
@@ -211,6 +230,7 @@ _toml_value() {
     case "${_TOML_T[$_tl_node]}" in
         table|array|aot) _toml_full "$file" || return $? ;;
     esac
+    [[ "${_TOML_F[$_tl_node]-}" != L ]] || _toml_full "$file" || return $?
     _toml_text "$_tl_node"
 }
 
@@ -339,7 +359,10 @@ toml_array() {
                 case "${_TOML_T[$_tl_node$_TOML_US$__toml_i]}" in
                     table|array|aot) _toml_full "$__toml_file" || return $?; break ;;
                 esac
+                [[ "${_TOML_F[$_tl_node$_TOML_US$__toml_i]-}" != L ]] \
+                    || { _toml_full "$__toml_file" || return $?; break; }
             done ;;
+        *) [[ "${_TOML_F[$_tl_node]-}" != L ]] || _toml_full "$__toml_file" || return $? ;;
     esac
     if [[ "${_TOML_T[$_tl_node]}" == array ]]; then
         __toml_n="${_TOML_N[$_tl_node]}"

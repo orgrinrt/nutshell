@@ -13,6 +13,11 @@
 [ -n "${_NUTSHELL_TOML_IMPL_TAPLO_SH:-}" ] && return 0
 _NUTSHELL_TOML_IMPL_TAPLO_SH=1
 
+# The types whose text this tool gives other than `lib/toml.sh` names it:
+# a float, `1e3` as `1000.0` and `1.50` as `1.5`, and a date-time, `+00:00`
+# as `Z` and `.500` as `.5`. `from_json.sh` flags each, and the floor answers it.
+_TOML_TOOL_REWRITES="float dt"
+
 # _toml_tool_json <text> -> `_tt_json`, the text as JSON; non-zero where taplo refuses it
 #[pub(super)]
 _toml_tool_json() {

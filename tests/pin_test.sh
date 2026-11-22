@@ -50,6 +50,32 @@ nutshell_branch = "dev"
 }
 
 #[test]
+it_reads_a_pin_written_as_a_literal_string() {
+    assert_eq "$(_pin "nutshell_branch = 'dev'
+")" "dev"
+}
+
+#[test]
+it_reads_a_pin_under_a_quoted_key() {
+    assert_eq "$(_pin '"nutshell_branch" = "dev"
+')" "dev"
+}
+
+#[test]
+it_reads_a_pin_with_an_escape_in_its_value() {
+    # `\u0064` is `d`. TOML decodes it; a regex over the line does not.
+    assert_eq "$(_pin 'nutshell_branch = "\u0064ev"
+')" "dev"
+}
+
+#[test]
+it_ignores_a_pin_that_is_a_key_of_a_table_written_as_a_dotted_key() {
+    # `meta.nutshell_branch` is a key of `meta`, not a root key.
+    assert_eq "$(_pin 'meta.nutshell_branch = "dev"
+')" ""
+}
+
+#[test]
 it_reports_no_pin_when_there_is_none() {
     assert_eq "$(_pin 'project = "x"
 ')" ""

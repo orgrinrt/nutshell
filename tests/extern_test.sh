@@ -243,6 +243,73 @@ it_keeps_the_other_entries_when_one_is_written() {
     assert_eq "$(extern_locked fixture)" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 }
 
+# A dependency is a table of the manifest, whichever way TOML lets it be
+# written, and `extern` reads it through the toml module and no reader of its
+# own.
+_extern_declare_as() {
+    local work="$1" form="$2" url="file://${1}/dep"
+    case "$form" in
+        inline)  printf '[deps]\nfixture = { git = "%s", ref = "main" }\n' "$url" ;;
+        dotted)  printf '[deps]\nfixture.git = "%s"\nfixture.ref = "main"\n' "$url" ;;
+        root)    printf 'deps.fixture.git = "%s"\ndeps.fixture.ref = "main"\n' "$url" ;;
+        quoted)  printf '["deps"."fixture"]\n"git" = "%s"\n'"'"'ref'"'"' = '"'"'main'"'"'\n' "$url" ;;
+    esac > "${work}/project/nut.toml"
+}
+
+#[test]
+it_reads_a_dependency_written_as_an_inline_table() {
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    _extern_declare_as "$work" inline
+    cd "${work}/project" || return 1
+    assert_eq "$(extern_declared fixture)" "file://${work}/dep main"
+}
+
+#[test]
+it_reads_a_dependency_written_as_dotted_keys() {
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    _extern_declare_as "$work" dotted
+    cd "${work}/project" || return 1
+    assert_eq "$(extern_declared fixture)" "file://${work}/dep main"
+}
+
+#[test]
+it_reads_a_dependency_written_as_dotted_keys_at_the_root() {
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    _extern_declare_as "$work" root
+    cd "${work}/project" || return 1
+    assert_eq "$(extern_declared fixture)" "file://${work}/dep main"
+}
+
+#[test]
+it_reads_a_dependency_written_with_quoted_headers_and_keys() {
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    _extern_declare_as "$work" quoted
+    cd "${work}/project" || return 1
+    assert_eq "$(extern_declared fixture)" "file://${work}/dep main"
+}
+
+#[test]
+it_keeps_an_entry_of_a_hand_edited_lock_when_another_is_written() {
+    # The header is indented and padded, which is valid TOML and which a grep
+    # for a header at the start of a line does not see.
+    _isolate
+    local fix work
+    fix="$(_extern_fixture)"; work="${fix%% *}"
+    cd "${work}/project" || return 1
+    printf '  [ deps.other ]\ncommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n' > nut.lock
+    extern_lock_write fixture "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    assert_eq "$(extern_locked other)" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert_eq "$(extern_locked fixture)" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
+
 #[test]
 it_gives_two_projects_locked_apart_their_own_checkouts() {
     # The case the pin exists for, and the one every other test here hides by

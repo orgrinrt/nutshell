@@ -32,6 +32,8 @@ _TW_CR="$(printf '\r.')"; _TW_CR="${_TW_CR%.}"
 _TW_TAB="$(printf '\t.')"; _TW_TAB="${_TW_TAB%.}"
 _TW_BS="$(printf '\b.')"; _TW_BS="${_TW_BS%.}"
 _TW_FF="$(printf '\f.')"; _TW_FF="${_TW_FF%.}"
+# An opening brace, so that no function body carries a lone one.
+_TW_LB="$(printf '\173')"
 
 # Leading, then trailing, whitespace off a string, into `_tw_s`.
 #
@@ -54,24 +56,72 @@ _tw_trim() {
     done
 }
 
-# The name inside a `[section]` header, into the named variable. Fails when the
-# line is not one.
+# The path a header or a key spells, read up to <stop> outside quotes.
 #
-# The regex this replaced was `^[[:space:]]*\[(.+)\][[:space:]]*$`, and `.+` is
-# greedy: `[a][b]` captured `a][b`. Taking everything between the first `[` and
-# the last `]` keeps that, which matters because the reader does the same and
-# the two have to agree about what a header is.
+# Sets `_tw_path` to its segments joined by dots, each bare where TOML lets it
+# be and in double quotes where it does not, so `[ "a.b" . c ]` and the key
+# `"a.b".c.k` name the same section. `_tw_first` is the first segment,
+# `_tw_nseg` the count, `_tw_after` what follows <stop>. Fails when <stop>
+# never comes or a segment is empty.
+#
+# One byte at a time, because POSIX parameter expansion has no repetition. A
+# header or a key is short; a value is never scanned here.
+_tw_path_scan() {
+    _tw_rest="$1"; _tw_path=""; _tw_first=""; _tw_nseg=0; _tw_seg=""
+    _tw_q=""; _tw_quoted=0; _tw_bad=0
+    while [ -n "$_tw_rest" ]; do
+        _tw_c="${_tw_rest%"${_tw_rest#?}"}"; _tw_rest="${_tw_rest#?}"
+        if [ -n "$_tw_q" ]; then
+            if [ "$_tw_c" = "$_tw_q" ]; then
+                _tw_q=""
+            elif [ "$_tw_q" = '"' ] && [ "$_tw_c" = '\' ]; then
+                _tw_seg="$_tw_seg$_tw_c${_tw_rest%"${_tw_rest#?}"}"; _tw_rest="${_tw_rest#?}"
+            else
+                _tw_seg="$_tw_seg$_tw_c"
+            fi
+            continue
+        fi
+        case "$_tw_c" in
+            '"'|"'") _tw_q="$_tw_c"; _tw_quoted=1 ;;
+            " "|"$_TW_TAB") ;;
+            .) _tw_push_seg ;;
+            "$2") _tw_push_seg; _tw_after="$_tw_rest"; [ "$_tw_bad" -eq 0 ]; return ;;
+            *) _tw_seg="$_tw_seg$_tw_c" ;;
+        esac
+    done
+    return 1
+}
+
+_tw_push_seg() {
+    if [ -z "$_tw_seg" ] && [ "$_tw_quoted" -eq 0 ]; then
+        _tw_bad=1
+    fi
+    case "$_tw_seg" in
+        ''|*[!A-Za-z0-9_-]*) _tw_seg="\"$_tw_seg\"" ;;
+    esac
+    [ "$_tw_nseg" -eq 0 ] && _tw_first="$_tw_seg"
+    _tw_path="${_tw_path:+$_tw_path.}$_tw_seg"
+    _tw_nseg=$(( _tw_nseg + 1 )); _tw_seg=""; _tw_quoted=0
+}
+
+# The name a `[section]` or `[[array of tables]]` header names, into the named
+# variable, and `_tw_aot` set for the second kind. Fails when the line is not a
+# header. Padding inside the brackets and a comment after them are the
+# header's, as the reader takes them, so `[ a . b ] # note` is `a.b`.
 _tw_header_of() {
-    _tw_trim "$1"
+    _tw_trim "$1"; _tw_aot=0
     case "$_tw_s" in
-        "["*"]") ;;
+        "[["*) _tw_aot=1; _tw_s="${_tw_s#??}" ;;
+        "["*) _tw_s="${_tw_s#?}" ;;
         *) return 1 ;;
     esac
-    _tw_s="${_tw_s#"["}"
-    _tw_s="${_tw_s%"]"}"
-    # `.+` needs at least one character, so `[]` is not a header.
-    [ -n "$_tw_s" ] || return 1
-    eval "$2=\$_tw_s"
+    _tw_path_scan "$_tw_s" "]" || return 1
+    if [ "$_tw_aot" -eq 1 ]; then
+        case "$_tw_after" in "]"*) _tw_after="${_tw_after#"]"}" ;; *) return 1 ;; esac
+    fi
+    _tw_trim "$_tw_after"
+    case "$_tw_s" in ""|"#"*) ;; *) return 1 ;; esac
+    eval "$2=\$_tw_path"
     return 0
 }
 
@@ -92,6 +142,81 @@ _tw_is_key() {
     done
     case "$_tw_s" in "="*) return 0 ;; esac
     return 1
+}
+
+# The trailing comment of a value, with the space before it, into `_tw_cmt`,
+# empty when there is none. A `#` inside a quoted string is the string's.
+_tw_comment_of() {
+    _tw_rest="$1"; _tw_q=""; _tw_gap=""; _tw_cmt=""
+    while [ -n "$_tw_rest" ]; do
+        _tw_c="${_tw_rest%"${_tw_rest#?}"}"; _tw_rest="${_tw_rest#?}"
+        if [ -n "$_tw_q" ]; then
+            if [ "$_tw_c" = "$_tw_q" ]; then
+                _tw_q=""
+            elif [ "$_tw_q" = '"' ] && [ "$_tw_c" = '\' ]; then
+                _tw_rest="${_tw_rest#?}"
+            fi
+            continue
+        fi
+        case "$_tw_c" in
+            '"'|"'") _tw_q="$_tw_c"; _tw_gap="" ;;
+            " "|"$_TW_TAB") _tw_gap="$_tw_gap$_tw_c" ;;
+            "#") _tw_cmt="$_tw_gap#$_tw_rest"; return 0 ;;
+            *) _tw_gap="" ;;
+        esac
+    done
+}
+
+# Whether the file holds the key in a shape one line cannot change. Prints why
+# and returns 2 when it does, so `toml_set` and `toml_unset` refuse it rather
+# than write a file TOML forbids:
+#
+#   a dotted key made the key or a table above it, so the key is not on a line
+#     of its own and a header for its table would define that table twice;
+#   the key sits inside an array of tables, where a header names every element
+#     at once and a line names one;
+#   the key sits inside an inline table, which is one value on one line.
+_tw_refusal() {
+    _twr_file="$1"; _twr_key="$2"; _twr_verb="$3"; _twr_sect=""; _twr_line=""; _twr_hdr=""
+    [ -f "$_twr_file" ] || return 0
+    while IFS= read -r _twr_line || [ -n "$_twr_line" ]; do
+        if _tw_header_of "$_twr_line" _twr_hdr; then
+            _twr_sect="$_twr_hdr"
+            if [ "$_tw_aot" -eq 1 ]; then
+                case "$_twr_key" in
+                    "$_twr_hdr".*)
+                        _tw_deny "it is inside the array of tables [[$_twr_hdr]]"
+                        return 2 ;;
+                esac
+            fi
+            continue
+        fi
+        _tw_trim "$_twr_line"
+        case "$_tw_s" in ""|"#"*) continue ;; esac
+        _tw_path_scan "$_tw_s" "=" || continue
+        _twr_at="${_twr_sect:+$_twr_sect.}"
+        if [ "$_tw_nseg" -gt 1 ]; then
+            case "$_twr_key" in
+                "$_twr_at$_tw_first"|"$_twr_at$_tw_first".*)
+                    _tw_deny "a dotted key, $_tw_path, defines it or a table above it"
+                    return 2 ;;
+            esac
+        fi
+        _tw_trim "$_tw_after"
+        case "$_tw_s" in
+            "$_TW_LB"*)
+                case "$_twr_key" in
+                    "$_twr_at$_tw_path".*)
+                        _tw_deny "it is inside the inline table $_twr_at$_tw_path"
+                        return 2 ;;
+                esac ;;
+        esac
+    done < "$_twr_file"
+    return 0
+}
+
+_tw_deny() {
+    printf 'toml: %s: cannot %s %s: %s\n' "$_twr_file" "$_twr_verb" "$_twr_key" "$1" >&2
 }
 
 # Whether a line carries anything that is not a space.
@@ -138,7 +263,7 @@ _tw_is_float() {
 # belongs to it, rather than at the end of the file where it would land in
 # somebody else's.
 #
-# Usage: toml_set "file.toml" "section.key" "value"
+# Usage: toml_set "file.toml" "section.key" "value" -> returns 2 for a shape one line cannot change
 toml_set() {
     _tws_file="$1"; _tws_key="$2"; _tws_value="$3"
     [ -n "$_tws_file" ] && [ -n "$_tws_key" ] || return 1
@@ -147,6 +272,8 @@ toml_set() {
     case "$_tws_key" in
         *.*) _tws_section="${_tws_key%.*}"; _tws_leaf="${_tws_key##*.}" ;;
     esac
+
+    _tw_refusal "$_tws_file" "$_tws_key" set || return 2
 
     _tws_written="$(_toml_write_value "$_tws_value")"
 
@@ -226,7 +353,9 @@ toml_set() {
             _tw_here=1
         fi
         if [ "$_tws_done_it" -eq 0 ] && [ "$_tw_here" -eq 1 ] && _tw_is_key "$_tws_line" "$_tws_leaf"; then
-            printf '%s = %s\n' "$_tws_leaf" "$_tws_written" >> "$_tws_tmp"
+            # `_tw_is_key` leaves the line after its `=` in `_tw_s`.
+            _tw_comment_of "${_tw_s#=}"
+            printf '%s = %s%s\n' "$_tws_leaf" "$_tws_written" "$_tw_cmt" >> "$_tws_tmp"
             _tws_done_it=1
             continue
         fi
@@ -286,7 +415,7 @@ _toml_write_value() {
 #
 # A key with no section means one before the first `[header]`. Reading that as
 # "no section is open" deleted the key from every section in the file.
-# Usage: toml_unset "file.toml" "section.key"
+# Usage: toml_unset "file.toml" "section.key" -> returns 2 for a shape one line cannot change
 toml_unset() {
     _twu_file="$1"; _twu_key="$2"
     [ -f "$_twu_file" ] && [ -n "$_twu_key" ] || return 1
@@ -295,6 +424,8 @@ toml_unset() {
     case "$_twu_key" in
         *.*) _twu_section="${_twu_key%.*}"; _twu_leaf="${_twu_key##*.}" ;;
     esac
+
+    _tw_refusal "$_twu_file" "$_twu_key" unset || return 2
 
     _twu_tmp="$(mktemp)" || return 1
     _twu_in_section=0; _twu_at_root=1; _twu_line=""; _twu_hdr=""

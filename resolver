@@ -134,6 +134,15 @@ _nut_resolve() {
         toml)
             { printf '%s' "$_nr_root/lib/toml.sh"; return 0; }
             ;;
+        toml::impl::bash)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'toml::impl::bash' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/toml/impl/bash.sh"; return 0; }
+            ;;
+        toml::impl::bash_lex)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'toml::impl::bash_lex' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/toml/impl/bash_lex.sh"; return 0; }
+            ;;
+        toml::impl::bash_path)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'toml::impl::bash_path' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/toml/impl/bash_path.sh"; return 0; }
+            ;;
         toml::json)
             { printf '%s' "$_nr_root/lib/toml/json.sh"; return 0; }
             ;;

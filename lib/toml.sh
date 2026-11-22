@@ -136,11 +136,13 @@ _toml_tool_json() {
 # The tree of the backend's JSON, made once while the file's text is the same.
 # The floor's tree where that is loaded already for the same text, since it
 # answers everything, or where the backend cannot serve. `_TOML_FROM` says
-# which, `json` or `bash`.
+# which, `json` or `bash`. Where `_TOML_FLOOR_ONLY` is set, the floor alone: deps
+# sets it to read its own pins, since a backend is picked by asking deps.
 _toml_open_values() {
     local f="$1" c=""
     [[ -f "$f" && -r "$f" ]] || return 1
     _TOML_FROM=bash
+    [[ -z "${_TOML_FLOOR_ONLY:-}" ]] || { _toml_open "$f"; return; }
     IFS= read -r -d '' c < "$f" && { _toml_open "$f"; return; }
     [[ "$_TOML_ID" == "$f" && "$_TOML_SRC" == "$c" ]] && { _toml_open "$f"; return; }
     _TOML_FROM=json

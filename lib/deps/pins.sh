@@ -31,6 +31,8 @@ _DEPS_PIN=""
 # `_deps_pin_check` has said so once.
 _deps_pin_get() {
     local file="$1" tool="$2" seg path rc=0
+    # The floor alone: a backend is picked by asking deps, which is reading this.
+    local _TOML_FLOOR_ONLY=1
     _DEPS_PIN=""
     seg="${tool//\\/\\\\}"; seg="${seg//\"/\\\"}"
     path="deps.paths.\"${seg}\""
@@ -60,6 +62,7 @@ deps_pinned() {
 # found on PATH and the pins it might hold are not honoured.
 _deps_pin_check() {
     local rc=0
+    local _TOML_FLOOR_ONLY=1
     toml_has "$1" deps >/dev/null || rc=$?
     [ "$rc" -eq 2 ] || return 0
     printf '[ERROR] deps: no [deps.paths] pin in %s is read\n' "$1" >&2

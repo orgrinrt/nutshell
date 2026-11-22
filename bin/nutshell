@@ -148,6 +148,10 @@ _nut_manifest() {
 _nut_pin_v=""
 _nut_pin() {
     local file="$1" key="$2"
+    # The floor alone. The script's manifest is not known yet, and a backend
+    # picked now would be the one deps finds without the script's pins, kept
+    # for the rest of the run.
+    local _TOML_FLOOR_ONLY=1
     _nut_pin_v=""
     # Asked here first so the file is read in this shell, where the module keeps
     # the tree, and the capture below answers from it rather than reading again.

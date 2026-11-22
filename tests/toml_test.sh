@@ -432,14 +432,16 @@ it_decodes_a_unicode_escape() {
 }
 
 #[test]
-it_keeps_a_backslash_that_starts_no_escape() {
-    # Not every backslash is an escape. Eating one that introduces nothing
-    # loses a character with no warning.
+it_refuses_a_backslash_that_starts_no_escape() {
+    # TOML has no `\q`. Eating the backslash lost a character with no warning,
+    # and keeping it read a file TOML calls invalid as if it were fine.
     local d; d="$(mktemp -d)"
     printf '[a]\nv = "a\\qb"\n' > "$d/t.toml"
-    local got; got="$(toml_get "$d/t.toml" a.v)"
+    local rc=0 err
+    err="$(toml_get "$d/t.toml" a.v 2>&1 >/dev/null)" || rc=$?
     rm -rf "$d"
-    assert_eq "$got" 'a\qb'
+    assert_eq "$rc" "2"
+    assert_contains "$err" "escape"
 }
 
 #[test]
@@ -558,28 +560,19 @@ it_decodes_a_unicode_escape_in_any_locale() {
 # What has no encoding is kept as typed rather than turned into something.
 #
 # A surrogate half and anything past the last codepoint are not characters,
-# and a run of hex digits that is too short was never an escape. Each is left
-# exactly as written, because silently producing a replacement character would
-# lose the fact that the file said something impossible.
-it_keeps_an_escape_that_names_no_character() {
+# and a run of hex digits that is too short was never an escape. Each is
+# refused rather than kept as written or replaced, because either would lose
+# the fact that the file said something impossible.
+it_refuses_an_escape_that_names_no_character() {
     local d; d="$(mktemp -d)"
-    {
-        printf 'lone = "\\uD800"\n'
-        printf 'past = "\\U00110000"\n'
-        printf 'nothex = "\\uZZZZ"\n'
-        printf 'short = "\\u00"\n'
-    } > "$d/t.toml"
-
-    local loc
-    for loc in C en_US.UTF-8; do
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" lone)" '\uD800' \
-            "surrogate half under LC_ALL=${loc}"
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" past)" '\U00110000' \
-            "past the last codepoint under LC_ALL=${loc}"
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" nothex)" '\uZZZZ' \
-            "not hex under LC_ALL=${loc}"
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" short)" '\u00' \
-            "too few digits under LC_ALL=${loc}"
+    local loc line rc
+    for line in 'v = "\uD800"' 'v = "\U00110000"' 'v = "\uZZZZ"' 'v = "\u00"'; do
+        printf '%s\n' "$line" > "$d/t.toml"
+        for loc in C en_US.UTF-8; do
+            rc=0
+            LC_ALL="$loc" toml_get "$d/t.toml" v >/dev/null 2>&1 || rc=$?
+            assert_eq "$rc" "2" "${line} under LC_ALL=${loc}"
+        done
     done
     rm -rf "$d"
 }
@@ -781,33 +774,22 @@ it_refuses_an_inline_table_that_never_closes_its_string() {
 }
 
 #[test]
-it_cannot_read_a_quoted_key_holding_an_equals_and_says_so_in_the_comment() {
-    # `{ "k=y" = "1" }` is legal TOML and this splits on the first `=`, so it
-    # looks for a key called `"k`. Pinned as the known limit rather than left
-    # for somebody to discover, since the comment used to claim the opposite.
-    assert_fails toml_inline_get '{ "k=y" = "1" }' "k=y"
+it_reads_a_quoted_key_holding_an_equals() {
+    # `{ "k=y" = "1" }` is legal TOML. The splitter cut it at the first `=`;
+    # the reader takes the quoted key as one key.
+    assert_eq "$(toml_inline_get '{ "k=y" = "1" }' "k=y")" "1"
 }
 
 
 #[test]
-it_refuses_a_multi_line_nested_array_rather_than_truncating_it() {
-    # A known gap, pinned at what it actually does rather than at what is
-    # wanted. The defect is upstream of the splitter, in the line collector,
-    # which ends a multi-line value at any line ending in `]` and so stops at
-    # the inner array's own bracket.
-    #
-    # Before the depth check this handed back two elements, the second of them
-    # `["z"` with its bracket missing, and reported success. Now the unbalanced
-    # bracket is caught and it refuses. That is still not the answer wanted,
-    # and it is the right failure, because a caller can see it went wrong.
-    #
-    # Reading it correctly means teaching the collector the depth the splitter
-    # now knows, which changes how every multi-line value is read and wants its
-    # own pass. The single-line and trailing-comma forms both work and are
-    # tested above, and those are the shapes the registry this fix serves uses.
+it_reads_a_multi_line_nested_array_whole() {
+    # The line collector used to end a multi-line value at the inner array's
+    # own bracket. The reader keeps the depth across lines now.
     local d; d="$(mktemp -d)"
     printf '[a]\nv = [\n  ["x", "y"],\n  ["z"]\n]\n' > "$d/t.toml"
-    local -a arr=(); assert_fails toml_array "$d/t.toml" a.v arr
-    assert_eq "${#arr[@]}" "0"
+    local -a arr=(); assert_ok toml_array "$d/t.toml" a.v arr
+    assert_eq "${#arr[@]}" "2"
+    assert_eq "${arr[0]}" '["x", "y"]'
+    assert_eq "${arr[1]}" '["z"]'
     rm -rf "$d"
 }

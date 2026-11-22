@@ -541,3 +541,110 @@ it_parses_under_a_posix_shell() {
     done
     skip "no strict POSIX shell on this machine to check against"
 }
+
+# The writer edits one line, so it refuses what one line cannot change without
+# breaking the file: a key that a dotted key defined, a key inside an array of
+# tables, a key inside an inline table. Each used to append a table TOML
+# forbids and return 0.
+
+_tw_refuse() {
+    # _tw_refuse <content> <fn> <key> [value]: runs <fn> <file> <key> [value]
+    # and sets _TW_RC, _TW_ERR, and _TW_SAME when the file is left untouched.
+    local d; d="$(_tw_dir)"
+    printf '%b' "$1" > "$d/t.toml"
+    cp "$d/t.toml" "$d/before.toml"
+    shift
+    _TW_RC=0
+    local fn="$1"; shift
+    _TW_ERR="$("$fn" "$d/t.toml" "$@" 2>&1 >/dev/null)" || _TW_RC=$?
+    _TW_SAME=0
+    cmp -s "$d/t.toml" "$d/before.toml" && _TW_SAME=1
+    rm -rf "$d"
+}
+
+#[test]
+it_refuses_to_set_a_key_defined_by_a_dotted_key() {
+    _tw_refuse 'fruit.apple.color = "red"\n' toml_set fruit.apple.color blue
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "dotted key"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_beside_one_a_dotted_key_made_in_a_table() {
+    _tw_refuse '[server]\nnet.port = 80\n' toml_set server.net.host localhost
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "dotted key"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_inside_an_array_of_tables() {
+    _tw_refuse '[[products]]\nname = "a"\n' toml_set products.name b
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "array of tables"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_under_a_table_of_an_array_of_tables() {
+    _tw_refuse '[[servers]]\nname = "a"\n[servers.opts]\nfast = true\n' toml_set servers.opts.fast false
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "array of tables"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_inside_an_inline_table() {
+    _tw_refuse 'i = { x = 1 }\n' toml_set i.x 2
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "inline table"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_unset_a_key_defined_by_a_dotted_key() {
+    _tw_refuse 'fruit.apple.color = "red"\nx = 1\n' toml_unset fruit.apple.color
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "dotted key"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_unset_a_key_inside_an_array_of_tables() {
+    _tw_refuse '[[products]]\nname = "a"\n' toml_unset products.name
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "array of tables"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_unset_a_key_inside_an_inline_table() {
+    _tw_refuse 'i = { x = 1, y = 2 }\n' toml_unset i.x
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "inline table"
+    assert_eq "$_TW_SAME" "1"
+}
+
+
+#[test]
+it_keeps_a_trailing_comment_on_the_edited_line() {
+    local d; d="$(_tw_dir)"
+    printf 'title = "Hello"   # trailing comment\nn = 1 # count\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" title New
+    assert_ok toml_set "$d/t.toml" n 2
+    local got; got="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" $'title = "New"   # trailing comment\nn = 2 # count'
+}
+
+#[test]
+it_edits_a_key_under_a_padded_or_commented_header_in_place() {
+    local d; d="$(_tw_dir)"
+    printf '[ sp ]\nk = 1\n\n[b] # the b table\nk = 1\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" sp.k 2
+    assert_ok toml_set "$d/t.toml" b.k 3
+    local got; got="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" $'[ sp ]\nk = 2\n\n[b] # the b table\nk = 3'
+}

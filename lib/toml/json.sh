@@ -30,7 +30,7 @@ use super::toml
 toml_to_json() {
     local file="${1:-}" rc=0
     [[ -n "$file" ]] || return 1
-    _toml_open "$file" || return $?
+    _toml_open_values "$file" || return $?
     _tj_out=""
     _tj_emit R || rc=$?
     if (( rc != 0 )); then

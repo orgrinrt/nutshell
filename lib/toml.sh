@@ -6,14 +6,23 @@
 #
 # Layer 0 (Core): Depends on validate.sh
 #
-# FIXME(67897977fc7b): every reader answers from the bash floor alone; the
-# backend layer that picks mikefarah yq or taplo through `deps` is not here yet.
 # FIXME(a199af8c5f27): `deps` reads `[deps.paths]` and `bin/nutshell` reads its
 # pin by hand, outside this module.
 #
-# The TOML API. `use toml` and call it. Every reader here answers from the tree
-# the bash floor builds in `lib/toml/impl/bash.sh`, which reads TOML 1.0 in
-# full or refuses the file.
+# The TOML API. `use toml` and call it. The values come from the best reader
+# `deps` finds, picked at the first call: taplo where it prints TOML as JSON, else
+# mikefarah yq where it reads TOML, else the bash floor in
+# `lib/toml/impl/bash.sh`, which reads TOML 1.0 in full or refuses the file and
+# needs nothing. Never the python yq. A tool turns the file into JSON once per
+# process, kept while the file's text is unchanged, and every reader answers
+# from the tree of it through one path language.
+#
+# JSON has the values and not how the file wrote them, so whatever turns on
+# that, a table's header or an inline table, `[[x]]` or an array of inline
+# tables, header order, the text of an array as written, is answered by the
+# floor, and so is any file a tool refuses: the floor then reads it or names
+# why not. Writing is the floor's line editor in `lib/toml/write.sh` whatever
+# reads.
 #
 # One path language for every function that takes one, the same as json's:
 # `a.b.0.c`, where a dot separates segments, a numeric segment indexes an
@@ -36,7 +45,12 @@ _NUTSHELL_TOML_SH=1
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency would be real and unrecorded at once.
 use validate
-use super::toml::impl::bash super::toml::impl::bash_path
+use deps
+use super::toml::impl::bash super::toml::impl::bash_path super::toml::impl::json_tree
+
+_TOML_BACKEND=""
+_TOML_FROM=""
+_TOML_RE_WIDE='0x(_?[0-9A-Fa-f]){16}|0o(_?[0-7]){21}|0b(_?[01]){63}|[0-9](_?[0-9]){18}'
 
 # -----------------------------------------------------------------------------
 # Internal helpers
@@ -92,6 +106,69 @@ _toml_open() {
     return "$rc"
 }
 
+# _toml_tool_json <text> -> `_tt_json`, the text as JSON from the backend
+# The stub `nut_lazy_guard` keeps: the first call picks the backend, whose
+# module rebinds this name, and calls it. Where only the floor serves, it is
+# rebound to rc 3, no JSON. In this shell, never a subshell, or the pick is
+# lost with it and made again on every call.
+_toml_tool_json() {
+    nut_lazy_guard _toml_tool_json || return 1
+    local _NUT_LAZY__toml_tool_json=1
+    # FIXME(63ac7b74f97a): the variant stands in for `deps_can toml_json_taplo`
+    # and `deps_can toml_read`, which scan every tool first, 200 ms on the first
+    # read; a tool that then fails on a file sends it to the floor all the same.
+    if [[ "$(deps_variant taplo)" == taplo ]]; then
+        _TOML_TOOL="$(deps_path taplo)"
+        nut_reload super::toml::impl::taplo
+        _TOML_BACKEND=taplo
+    elif [[ "$(deps_variant yq)" == mikefarah ]]; then
+        # FIXME(1d1168da9656): mikefarah yq 4.44.3 reads a key or a table
+        # defined twice instead of refusing the file, so where it is the only
+        # tool an invalid file reads; taplo goes first for that.
+        _TOML_TOOL="$(deps_path yq)"
+        nut_reload super::toml::impl::yq
+        _TOML_BACKEND=yq
+    else
+        _toml_tool_json() { return 3; }
+        _TOML_BACKEND=bash
+    fi
+    _toml_tool_json "$@"
+}
+
+# _toml_open_values <file> -> the file read for its values, codes as `_toml_open`
+# The tree of the backend's JSON, made once while the file's text is the same.
+# The floor's tree where that is loaded already for the same text, since it
+# answers everything, or where the backend cannot serve. `_TOML_FROM` says
+# which, `json` or `bash`.
+_toml_open_values() {
+    local f="$1" c=""
+    [[ -f "$f" && -r "$f" ]] || return 1
+    _TOML_FROM=bash
+    IFS= read -r -d '' c < "$f" && { _toml_open "$f"; return; }
+    [[ "$_TOML_ID" == "$f" && "$_TOML_SRC" == "$c" ]] && { _toml_open "$f"; return; }
+    _TOML_FROM=json
+    [[ "$_TOML_ID" == "json$_TOML_US$f" && "$_TOML_SRC" == "$c" ]] && return 0
+    # A number past 64 bits is not refused by every tool: taplo gives
+    # -9223372036854775809 as 0. A file that may hold one goes to the floor.
+    [[ "$c" =~ $_TOML_RE_WIDE ]] && { _TOML_FROM=bash; _toml_open "$f"; return; }
+    _TOML_ID=""
+    if _toml_tool_json "${c#$'\xef\xbb\xbf'}" && _toml_json_tree "$f" "$_tt_json"; then
+        _TOML_ID="json$_TOML_US$f" _TOML_SRC="$c" _TOML_RC=0
+        return 0
+    fi
+    _TOML_FROM=bash
+    _toml_open "$f"
+}
+
+# _toml_full <file> -> where the tree is the backend's, the floor's instead, and
+# `_tl_node` found again in it, for an answer that turns on how the file wrote it
+_toml_full() {
+    [[ "$_TOML_FROM" == json ]] || return 0
+    _TOML_FROM=bash
+    _toml_open "$1" || return $?
+    _toml_lookup
+}
+
 # _toml_children <node> -> `_tc_keys`, the keys of a table in file order
 _toml_children() {
     local k="${_TOML_K[$1]-}"
@@ -118,13 +195,24 @@ _toml_children() {
 # `toml_tables` read those.
 # Usage: toml_get "file.toml" "section.key" -> prints the value
 toml_get() {
-    local file="${1:-}" key="${2:-}"
+    _toml_value "${1:-}" "${2:-}" || return $?
+    printf '%s\n' "$_tx_out"
+}
+
+# _toml_value <file> <path> -> `_tx_out`, what `toml_get` prints, in this shell
+# so the backend picked and the tree read outlive the call
+_toml_value() {
+    local file="$1" key="$2"
     [[ -n "$file" && -n "$key" ]] || return 1
-    _toml_open "$file" || return $?
+    _toml_open_values "$file" || return $?
     _toml_path_split "$key" || return 1
     _toml_lookup || return 1
-    _toml_text "$_tl_node" || return 1
-    printf '%s\n' "$_tx_out"
+    # Only a scalar is the same whoever read it; anything else is given as the
+    # file wrote it, or not at all, which the floor knows.
+    case "${_TOML_T[$_tl_node]}" in
+        table|array|aot) _toml_full "$file" || return $? ;;
+    esac
+    _toml_text "$_tl_node"
 }
 
 #[pub]
@@ -239,10 +327,21 @@ toml_array() {
     local -n _arr="${3:-_toml_array_result}"
     _arr=()
     [[ -n "$__toml_file" && -n "$__toml_key" ]] || return 1
-    _toml_open "$__toml_file" || return $?
+    _toml_open_values "$__toml_file" || return $?
     _toml_path_split "$__toml_key" || return 1
     _toml_lookup || return 1
     local __toml_n __toml_i
+    # From the JSON only for scalars, alone or in an array, as `toml_get`.
+    case "${_TOML_T[$_tl_node]}" in
+        table|aot) _toml_full "$__toml_file" || return $? ;;
+        array)
+            __toml_n="${_TOML_N[$_tl_node]}"
+            for (( __toml_i = 0; __toml_i < __toml_n; __toml_i++ )); do
+                case "${_TOML_T[$_tl_node$_TOML_US$__toml_i]}" in
+                    table|array|aot) _toml_full "$__toml_file" || return $?; break ;;
+                esac
+            done ;;
+    esac
     if [[ "${_TOML_T[$_tl_node]}" == array ]]; then
         __toml_n="${_TOML_N[$_tl_node]}"
         for (( __toml_i = 0; __toml_i < __toml_n; __toml_i++ )); do
@@ -322,9 +421,8 @@ toml_tables() {
 # Check if a TOML value is true (handles various boolean representations)
 # Usage: toml_is_true "file.toml" "key" -> returns 0 (true) or 1 (false)
 toml_is_true() {
-    local file="${1:-}" key="${2:-}" value
-    value="$(toml_get "$file" "$key")" || return 1
-    is_truthy "$value"
+    _toml_value "${1:-}" "${2:-}" || return 1
+    is_truthy "$_tx_out"
 }
 
 #[pub]

@@ -53,6 +53,17 @@ types	do	1979-05-27T00:32:00.999-07:00'
 # 4.44.3 panics on `array_of_tables.toml`.
 _TB_TOOL_FAILS='yq array_of_tables'
 
+# Files that are not TOML 1.0, each refused with rc 2 whoever reads: a key and a
+# table defined twice, and integers one past the 64-bit range, which taplo
+# 0.10.0 reads as 0 or as the wrapped value unless the floor is asked. yq
+# 4.44.3 reads the first two, ticket 1d1168da9656, so they are not asserted
+# for it.
+_TB_BAD='dup_key	a = 1\na = 2\n
+table_twice	[t]\nx = 1\n[t]\ny = 2\n
+wide_neg	b = -9223372036854775809\n
+wide_hex	c = 0x8000000000000000\n'
+_TB_LAX='yq dup_key yq table_twice'
+
 # A tool that answers `--version` with a line, logs every other call, and fails
 # it, so it can serve no file.
 _tb_fake() {
@@ -69,22 +80,31 @@ _tb_fake() {
 # `[deps.paths]` names those two, and prints what it printed
 _tb_run() {
     local d="$1"
-    mkdir -p "$d/sub"
+    local n body
+    mkdir -p "$d/sub" "$d/bad"
+    while IFS=$'\t' read -r n body; do printf "$body" > "$d/bad/$n.toml"; done <<< "$_TB_BAD"
     printf '[deps.paths]\nyq = "%s"\ntaplo = "%s"\n' "$2" "$3" > "$d/nut.toml"
     cat > "$d/sub/s.sh" <<'EOF'
 use toml toml::json
-fix="$1"
+fix="$1" tmp="$(mktemp)"
 for f in "$fix"/*.toml; do
     n="${f##*/}"; n="${n%.toml}"
-    printf 'json\t%s\t%s\n' "$n" "$(toml_to_json "$f")"
+    toml_to_json "$f" > "$tmp" 2>&1 || true
+    printf 'json\t%s\t%s\n' "$n" "$(cat "$tmp")"
     printf 'from\t%s\t%s\n' "$n" "$_TOML_FROM"
 done
 while IFS=$'\t' read -r n p _; do
-    printf 'get\t%s\t%s\t%s\n' "$n" "$p" "$(toml_get "$fix/$n.toml" "$p")"
+    toml_get "$fix/$n.toml" "$p" > "$tmp" 2>&1 || true
+    printf 'get\t%s\t%s\t%s\n' "$n" "$p" "$(cat "$tmp")"
 done <<< "$2"
+for f in "$3"/*.toml; do
+    n="${f##*/}"; rc=0
+    toml_get "$f" a > /dev/null 2>&1 || rc=$?
+    printf 'bad\t%s\t%s\n' "${n%.toml}" "$rc"
+done
 printf 'backend\t%s\n' "$_TOML_BACKEND"
 EOF
-    ( cd / && "${NUTSHELL_ROOT}/bin/nutshell" "$d/sub/s.sh" "$FIX" "$_TB_GET" 2>&1 )
+    ( cd / && "${NUTSHELL_ROOT}/bin/nutshell" "$d/sub/s.sh" "$FIX" "$_TB_GET" "$d/bad" 2>&1 )
 }
 
 # _tb_check <backend> <output> -> asserts the backend ran and read every fixture
@@ -101,6 +121,10 @@ _tb_check() {
     while IFS=$'\t' read -r n p v; do
         assert_contains "$out" "get	${n}	${p}	${v}"
     done <<< "$_TB_GET"
+    while IFS=$'\t' read -r n _; do
+        [[ " ${_TB_LAX} " == *" ${be} ${n} "* ]] && continue
+        assert_contains "$out" "bad	${n}	2"
+    done <<< "$_TB_BAD"
 }
 
 #[test]

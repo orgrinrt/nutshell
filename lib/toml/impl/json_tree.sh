@@ -23,7 +23,7 @@
 [ -n "${_NUTSHELL_TOML_IMPL_JSON_TREE_SH:-}" ] && return 0
 _NUTSHELL_TOML_IMPL_JSON_TREE_SH=1
 
-use super::toml::impl::bash
+use super::toml::impl::bash super::toml::impl::bash_lex
 
 _TOML_RE_JLIT='^(true|false|null|-?[0-9][0-9.eE+-]*)'
 _TOML_RE_JINT='^-?[0-9]+$'
@@ -55,7 +55,8 @@ _toml_json_tree() {
 # States: v a value, V a value or `]`, K a key or `}`, k a key, : the colon,
 # c a comma or the closer of the open container, e the end.
 _tj_token() {
-    local c="${_tp_s:0:1}" top="${_tj_stack[-1]-}"
+    local c="${_tp_s:0:1}" top="" d=${#_tj_stack[@]}
+    (( d )) && top="${_tj_stack[d-1]}"
     case "$_tj_st$c" in
         [vV]'{'|[vV]'[')
             _tj_place || return 2
@@ -71,13 +72,13 @@ _tj_token() {
             [[ "$c" == '}' && "${_TOML_T[$top]}" == table || "$c" == ']' && "${_TOML_T[$top]}" == array ]] \
                 || { _tp_err "json: ${c} closes the wrong container"; return 2; }
             _tp_s="${_tp_s:1}"
-            unset '_tj_stack[-1]'
+            unset "_tj_stack[d-1]"
             _tj_st=c
             (( ${#_tj_stack[@]} )) || _tj_st=e ;;
         c,)
             _tp_s="${_tp_s:1}"
             _tj_st=v
-            [[ "${_TOML_T[$top]}" == table ]] && _tj_st=k ;;
+            [[ "${_TOML_T[$top]}" != table ]] || _tj_st=k ;;
         :':')
             _tp_s="${_tp_s:1}"
             _tj_st=v ;;
@@ -88,7 +89,11 @@ _tj_token() {
                     _tp_err "json: a key holding a unit or record separator is not read"
                     return 2 ;;
             esac
-            _tj_key="$_tv_out" _tj_st=: ;;
+            _tj_key="$_tv_out" _tj_st=:
+            # The colon is all that may follow, so it is taken here.
+            if [[ "$_tp_s" =~ ^[[:space:]]*:[[:space:]]* ]]; then
+                _tp_s="${_tp_s:${#BASH_REMATCH[0]}}" _tj_st=v
+            fi ;;
         [vV]'"')
             _tj_place || return 2
             _tj_string || return 2
@@ -113,7 +118,8 @@ _tj_token() {
 # _tj_place -> `_tj_node`, where the next value goes: the root, the next key of
 # the open table or the next element of the open array
 _tj_place() {
-    local top="${_tj_stack[-1]-}"
+    local top="" d=${#_tj_stack[@]}
+    (( d )) && top="${_tj_stack[d-1]}"
     if [[ -z "$top" ]]; then
         [[ "$_tp_s" == '{'* ]] || { _tp_err "json: the document is not a table"; return 2; }
         _tj_node=R

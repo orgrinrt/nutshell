@@ -101,8 +101,9 @@ _deps_sync_config() {
 # _deps_toml_get <file> <table> <key> -> the value, 1 when absent, 2 when the
 # table is there in a form this cannot read
 #
-# Not the toml module. deps lowers to a POSIX shell and toml does not, so a
-# `use toml` here takes every closure that holds deps off the POSIX floor.
+# FIXME(a199af8c5f27): a second TOML reader beside the toml module. deps lowers
+# to a POSIX shell and the toml reader is bash, so a `use toml` here takes every
+# closure that holds deps off the POSIX floor.
 #
 # A key is matched by its whole dotted path, the table it sits under joined to
 # its own dotted name, so `[deps.paths]` with `sed = ...`, `[deps]` with

@@ -6,10 +6,14 @@
 #
 # Layer 0 (Core): Depends on validate.sh
 #
-# The TOML API. `use toml` and call it; nothing outside this module reads a
-# TOML file by hand. Every reader here answers from the tree the bash floor
-# builds in `lib/toml/impl/bash.sh`, which reads TOML 1.0 in full or refuses
-# the file.
+# FIXME(67897977fc7b): every reader answers from the bash floor alone; the
+# backend layer that picks mikefarah yq or taplo through `deps` is not here yet.
+# FIXME(a199af8c5f27): `deps` reads `[deps.paths]` and `bin/nutshell` reads its
+# pin by hand, outside this module.
+#
+# The TOML API. `use toml` and call it. Every reader here answers from the tree
+# the bash floor builds in `lib/toml/impl/bash.sh`, which reads TOML 1.0 in
+# full or refuses the file.
 #
 # One path language for every function that takes one, the same as json's:
 # `a.b.0.c`, where a dot separates segments, a numeric segment indexes an

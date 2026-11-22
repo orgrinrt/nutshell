@@ -52,6 +52,7 @@ use attr log fs list
 
 _TEST_PASSED=0
 _TEST_FAILED=0
+_TEST_SKIPPED=0
 # A `list` rather than an indexed array, which is bash's. It only ever grows by
 # one and is read once at the end, which is what `list` is for.
 list_new _TEST_FAILURES
@@ -170,6 +171,17 @@ fail() {
     _test_asserted
     _test_failed "$@"
     return 1
+}
+
+#[pub]
+# Skip a test that cannot run on this machine, saying why. The test reports
+# SKIP with the reason rather than a pass, and an assertion that failed before
+# it still fails the test. Return after it.
+# Usage: skip "taplo absent here" -> prints the reason
+skip() {
+    _test_mark s
+    printf 'skipped: %s\n' "$*"
+    return 0
 }
 
 #[pub]
@@ -383,7 +395,7 @@ EOF
         ran=$(( ran + 1 ))
         # Its own file, so nothing a previous test left behind, and nothing a
         # previous test is still doing, can be read as this one's.
-        _TEST_MARK="${_TEST_MARK_DIR}/$(( _TEST_PASSED + _TEST_FAILED )).${name}"
+        _TEST_MARK="${_TEST_MARK_DIR}/$(( _TEST_PASSED + _TEST_FAILED + _TEST_SKIPPED )).${name}"
         : > "$_TEST_MARK"
 
         # A subshell per test. Bash has one global namespace, so without this a
@@ -461,6 +473,8 @@ EOF
             fi
         elif case "$tally" in *f*) true ;; *) false ;; esac; then
             rc=1
+        elif case "$tally" in *s*) true ;; *) false ;; esac; then
+            rc=3
         elif case "$tally" in *a*) false ;; *) true ;; esac; then
             # Worse than a weak test: it occupies the place a real one would be
             # noticed missing from, and it counts toward a number people quote.
@@ -485,6 +499,12 @@ EOF
         if [ $rc -eq 0 ]; then
             _TEST_PASSED=$(( _TEST_PASSED + 1 ))
             log_tagged "PASS" green "$name${took}"
+        elif [ $rc -eq 3 ]; then
+            _TEST_SKIPPED=$(( _TEST_SKIPPED + 1 ))
+            log_tagged "SKIP" yellow "$name${took}"
+            [ -n "$output" ] && printf '%s\n' "$output" | while IFS= read -r l; do
+                log_substep "$l"
+            done
         else
             _TEST_FAILED=$(( _TEST_FAILED + 1 ))
             list_push _TEST_FAILURES "${file##*/}: ${name}"
@@ -527,6 +547,8 @@ test_run_dir() {
 # every subshell exit as well, and there is exactly one place the run is over.
 test_summary() {
     [ -n "${_TEST_MARK_DIR:-}" ] && rm -rf "$_TEST_MARK_DIR"
+    local _ts_skip=""
+    [ "$_TEST_SKIPPED" -gt 0 ] && _ts_skip=", ${_TEST_SKIPPED} skipped"
     printf '\n'
     if [ "$_TEST_FAILED" -gt 0 ]; then
         local f _tf_i=0 _tf_n
@@ -536,9 +558,9 @@ test_summary() {
             log_tagged "FAILED" red "$f"
             _tf_i=$(( _tf_i + 1 ))
         done
-        log_error "${_TEST_FAILED} failed, ${_TEST_PASSED} passed"
+        log_error "${_TEST_FAILED} failed, ${_TEST_PASSED} passed${_ts_skip}"
         return 1
     fi
-    log_success "${_TEST_PASSED} passed"
+    log_success "${_TEST_PASSED} passed${_ts_skip}"
     return 0
 }

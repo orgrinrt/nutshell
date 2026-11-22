@@ -228,7 +228,8 @@ _jb_parse() {
 }
 
 # _jb_load <text> -> 0 parsed, 1 not JSON. The last document is kept.
-#[pub(super)]
+# The toml module reads its tools' JSON with it, so it is the library's.
+#[pub(lib)]
 _jb_load() {
     local LC_ALL=C
     [[ "$_JB_TEXT" == "$1" && -n "$1" ]] && return "$_JB_RC"

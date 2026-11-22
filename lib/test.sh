@@ -349,13 +349,18 @@ test_run() {
     # It is not hypothetical. Renaming `attr_find` breaks the discovery this
     # very loop uses, so every file in the suite yields nothing and the run
     # reports green over a library that no longer loads.
-    local found=0 _tf_names
+    local found=0 wanted=0 ran=0 _tf_names
     # Gathered first. The body counts into `found`, which the code after it
     # reads, so on the right of a pipe the count would be made in a subshell
     # and read back as zero here: every file would report no tests.
     _tf_names="$(attr_find "$file" test)"
     while IFS= read -r name; do
-        [ -n "$name" ] && found=$(( found + 1 ))
+        [ -n "$name" ] || continue
+        found=$(( found + 1 ))
+        if [ -n "${TEST_FILTER:-}" ]; then
+            case "$name" in *"$TEST_FILTER"*) ;; *) continue ;; esac
+        fi
+        wanted=$(( wanted + 1 ))
     done <<EOF
 $_tf_names
 EOF
@@ -376,6 +381,7 @@ EOF
             case "$name" in *"$TEST_FILTER"*) ;; *) continue ;; esac
         fi
 
+        ran=$(( ran + 1 ))
         # Its own file, so nothing a previous test left behind, and nothing a
         # previous test is still doing, can be read as this one's.
         _TEST_MARK="${_TEST_MARK_DIR}/$(( _TEST_PASSED + _TEST_FAILED )).${name}"
@@ -412,7 +418,12 @@ EOF
                 printf '%s\n' "the file sourced but defines no ${name}:"
                 head -5 "${_TEST_MARK}.src" 2>/dev/null
             else
-                "$name" 2>&1
+                # Stdin closed. This loop reads the remaining names from its
+                # own stdin, and a test running something that reads its
+                # stdin to the end took the rest of them, ending the run
+                # after that test with no error: a suite declaring 98 ran
+                # 66 and reported them all as passing.
+                "$name" 2>&1 </dev/null
                 _test_mark z
             fi )"
         end_us="$(_test_now_us)"
@@ -485,6 +496,17 @@ EOF
     done <<EOF
 $_tf_names
 EOF
+
+    # The count the loop above should have reached. Anything that ends it
+    # early, whatever the cause, reads as a clean run of fewer tests unless it
+    # is compared against what the file declared.
+    if [ "$ran" -lt "$wanted" ]; then
+        _TEST_FAILED=$(( _TEST_FAILED + 1 ))
+        list_push _TEST_FAILURES "${file##*/}: ran ${ran} of the ${wanted} tests it declares"
+        log_tagged "FAIL" red "${file##*/}"
+        log_substep "ran ${ran} of the ${wanted} tests it declares; the loop over them ended early"
+        return 1
+    fi
 }
 
 #[pub]

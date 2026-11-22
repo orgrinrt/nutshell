@@ -7,7 +7,13 @@
 # own whose `[deps.paths]` points `yq` and `taplo` at the tool under test or at
 # a fake that cannot serve. The expected JSON is taplo's output on each fixture
 # put through `jq -c`, written in here, the byte order mark cut first for
-# `bom.toml`, since neither tool reads one.
+# `bom.toml`, since neither tool reads one. For `floats.toml` and
+# `datetimes.toml` it is the canonical text `lib/toml.sh` names: a float as
+# mikefarah yq's `to_string` gives it, which is the file's spelling, with the
+# underscores and a leading `+` cut; a date-time as the file wrote it with the
+# separator a `T` and `t` and `z` upper case, RFC 3339's spelling. taplo would
+# give `1e3` as `1000.0`, `1.50` as `1.5` and `+00:00` as `Z`, and yq `3.0` as
+# `3`, which is what these two fixtures are here to catch.
 
 use deps test toml
 
@@ -17,7 +23,9 @@ FIX="${NUTSHELL_ROOT}/tests/fixtures/toml"
 _TB_JSON='aot_twice	{"p":[{"name":"a"},{"name":"b"}]}
 array_of_tables	{"products":[{"name":"Hammer","sku":738594937},{},{"name":"Nail","sku":284758393}],"servers":[{"name":"alpha","opts":{"fast":true}},{"name":"beta"}]}
 bom	{"title":"bom","next":2}
+datetimes	{"sp":"1979-05-27T07:32:00Z","lt":"1979-05-27T07:32:00Z","of":"1979-05-27T07:32:00+00:00","fr":"1979-05-27T07:32:00.500Z","ld":"1979-05-27","lo":"07:32:00","ldt":"1979-05-27T07:32:00","s":"1979-05-27 07:32:00z"}
 dotted_keys	{"fruit":{"apple":{"color":"red","size":3},"banana":"yellow"},"server":{"net":{"port":80,"host":"localhost"}}}
+floats	{"a":3.0,"b":1e3,"d":1.50,"n":-0.0,"u":1000.5,"p":1.5,"e":6.626E-34,"q":[1.0,2],"i":3}
 inline_table	{"i":{"x":1,"y":"two"},"n":{"a":{"b":1},"c":{"d":"e"}},"empty":{},"pts":[{"x":1},{"x":2}]}
 ml_array	{"a":[1,2,3],"nested":[["x","y"],["z"]],"z":3}
 ml_fold	{"folded":"The quick brown fox.","kept":"a\\\nb"}
@@ -33,8 +41,21 @@ _TB_GET='aot_twice	p.1.name	b
 array_of_tables	products.2.sku	284758393
 array_of_tables	servers.0.opts.fast	true
 bom	title	bom
+datetimes	sp	1979-05-27T07:32:00Z
+datetimes	lt	1979-05-27T07:32:00Z
+datetimes	of	1979-05-27T07:32:00+00:00
+datetimes	fr	1979-05-27T07:32:00.500Z
+datetimes	s	1979-05-27 07:32:00z
 dotted_keys	fruit.apple.color	red
 dotted_keys	server.net.port	80
+floats	a	3.0
+floats	b	1e3
+floats	d	1.50
+floats	n	-0.0
+floats	u	1000.5
+floats	p	1.5
+floats	q.0	1.0
+floats	i	3
 inline_table	n.c.d	e
 inline_table	pts.1.x	2
 ml_array	nested.0.1	y
@@ -49,9 +70,11 @@ types	h	255
 types	fu	1000.5
 types	do	1979-05-27T00:32:00.999-07:00'
 
-# Fixtures a tool fails on, so the bash floor answers for it: mikefarah yq
-# 4.44.3 panics on `array_of_tables.toml`.
-_TB_TOOL_FAILS='yq array_of_tables'
+# Fixtures the bash floor answers for a tool: mikefarah yq 4.44.3 panics on
+# `array_of_tables.toml` and refuses a local date, a local time and a
+# date-time joined by a space or a lower case `t`; taplo 0.10.0 rewrites every
+# float and date-time, so `toml_to_json` takes a file holding one from the floor.
+_TB_TOOL_FAILS='yq array_of_tables yq datetimes taplo datetimes taplo floats taplo types'
 
 # Files that are not TOML 1.0, each refused with rc 2 whoever reads: a key and a
 # table defined twice, and integers one past the 64-bit range, which taplo

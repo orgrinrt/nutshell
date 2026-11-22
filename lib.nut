@@ -4,6 +4,7 @@
 # Read before any module is loaded, so it stays a format that needs
 # no parser: the TOML one is itself a module.
 
+api                      lib/api.sh
 array                    lib/array.sh
 attr                     lib/attr.sh
 bench                    lib/bench.sh

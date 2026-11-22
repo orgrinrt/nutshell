@@ -16,6 +16,7 @@
 #
 #   nutshell <script>       run a script with the nutshell environment
 #   nutshell -c <command>   run a command string, as any shell does
+#   nutshell api [<module>] list a library's public functions
 #   nutshell --version      print the version
 #   nutshell --help         what is here
 #
@@ -333,6 +334,7 @@ nutshell - Everything you need, in a nutshell.
 Usage:
   nutshell <script>       Run a script with nutshell environment
   nutshell -c <command>   Run a command string, as any shell does
+  nutshell api [<module>] List the public functions of a library (--help)
   nutshell --version      Show version
   nutshell --help         Show this help
 
@@ -384,6 +386,15 @@ case "${1:-}" in
         rm -f "$_tmp"
         _SCRIPT="/dev/fd/${_cfd}"
         _IS_COMMAND=1
+        ;;
+    api)
+        # A command of nutshell's own, which lists a library's public functions
+        # and so has to work from any directory: `test` and `check` are scripts
+        # in a project's root, found by the path rule below, and this is not
+        # one of those. A script called `api` in the working directory is run
+        # as `nutshell ./api`.
+        shift
+        _SCRIPT="${_NUTSHELL_HOME}/bin/nut-api"
         ;;
     -*)
         # An unknown option is a mistake, not a file. Treating it as one

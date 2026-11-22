@@ -8,6 +8,9 @@ _nut_resolve() {
     _nr_root="${2:-$NUTSHELL_ROOT}"
     _nr_reach="${3:-any}"
     case "$1" in
+        api)
+            { printf '%s' "$_nr_root/lib/api.sh"; return 0; }
+            ;;
         array)
             { printf '%s' "$_nr_root/lib/array.sh"; return 0; }
             ;;

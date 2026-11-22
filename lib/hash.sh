@@ -28,15 +28,15 @@
 [ -n "${_NUTSHELL_HASH_SH:-}" ] && return 0
 _NUTSHELL_HASH_SH=1
 
-use log
+use log deps
 
 #[pub]
 # Which tool this machine hashes with, or nothing.
 # Usage: hash_impl -> "sha256sum" | "shasum" | "openssl" | ""
 hash_impl() {
-    if   command -v sha256sum >/dev/null 2>&1; then printf 'sha256sum'
-    elif command -v shasum    >/dev/null 2>&1; then printf 'shasum'
-    elif command -v openssl   >/dev/null 2>&1; then printf 'openssl'
+    if   deps_has sha256sum; then printf 'sha256sum'
+    elif deps_has shasum;    then printf 'shasum'
+    elif deps_has openssl;   then printf 'openssl'
     fi
 }
 
@@ -56,9 +56,9 @@ hash_sha256() {
 
     impl="$(hash_impl)"
     case "$impl" in
-        sha256sum) out="$(sha256sum -- "$path" 2>/dev/null)" ;;
-        shasum)    out="$(shasum -a 256 -- "$path" 2>/dev/null)" ;;
-        openssl)   out="$(openssl dgst -sha256 -- "$path" 2>/dev/null)"
+        sha256sum) out="$(deps_run sha256sum -- "$path" 2>/dev/null)" ;;
+        shasum)    out="$(deps_run shasum -a 256 -- "$path" 2>/dev/null)" ;;
+        openssl)   out="$(deps_run openssl dgst -sha256 -- "$path" 2>/dev/null)"
                    # `openssl dgst` writes `SHA256(path)= <digest>`, so the
                    # digest is the last field rather than the first.
                    out="${out##* }" ;;

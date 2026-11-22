@@ -37,7 +37,7 @@
 [ -n "${_NUTSHELL_PRIV_SH:-}" ] && return 0
 _NUTSHELL_PRIV_SH=1
 
-use log
+use log deps
 
 # Who this actually is, worked out once and before anything elevates.
 #
@@ -75,7 +75,7 @@ _priv_home_of() {
     # running under `set -u` gets an error rather than an empty string.
     local u="$1" line=""
     [ -n "$u" ] || return 1
-    if command -v getent >/dev/null 2>&1; then
+    if deps_has getent; then
         line="$(getent passwd "$u" 2>/dev/null)" || line=""
     fi
     if [ -z "$line" ] && [ -r /etc/passwd ]; then
@@ -100,7 +100,7 @@ _priv_home_of() {
         [ -n "$home" ] && { printf '%s' "$home"; return 0; }
     fi
     # A mac keeps its users elsewhere, and `dscl` is how you ask.
-    if command -v dscl >/dev/null 2>&1; then
+    if deps_has dscl; then
         local h; h="$(dscl . -read "/Users/${u}" NFSHomeDirectory 2>/dev/null)" || h=""
         h="${h#*: }"
         [ -n "$h" ] && { printf '%s' "$h"; return 0; }
@@ -186,7 +186,7 @@ priv_as_user() {
     # installs carry doas and none of the other three.
     local c
     for c in runuser sudo doas su; do
-        command -v "$c" >/dev/null 2>&1 || continue
+        deps_has "$c" || continue
         case "$c" in
             # runuser is the one built for this: root to another user, no
             # password, no login shell in the way.
@@ -226,7 +226,7 @@ priv_how() {
     priv_is_root && { printf 'already'; return 0; }
     local c
     for c in sudo doas; do
-        command -v "$c" >/dev/null 2>&1 && { printf '%s' "$c"; return 0; }
+        deps_has "$c" && { printf '%s' "$c"; return 0; }
     done
     return 1
 }

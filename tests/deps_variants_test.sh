@@ -192,7 +192,7 @@ it_forgets_everything_without_arguments() {
     deps_forget
     assert_eq "${_TOOL_PATH_sed:-}" ""
     assert_eq "${_TOOL_PATH_awk:-}" ""
-    assert_eq "$(deps_available | wc -w | tr -d ' ')" "$(deps_available | wc -w | tr -d ' ')"
+    assert_eq "${_TOOLS_AVAILABLE:-}" ""
     # Capabilities are derived from tools, so they are asked of the tools again.
     assert_ok deps_has sed
     assert_ok deps_can sed_extended
@@ -201,12 +201,13 @@ it_forgets_everything_without_arguments() {
 #[test]
 it_resolves_a_cold_tool_when_asked_whether_it_is_gnu() {
     # The first question in the process is `deps_is_gnu`, so nothing has
-    # resolved `stat` for it. The fake says GNU, so the answer is yes only if
-    # the tool was found and probed first.
+    # resolved `find` for it. The pinned `find` does not say it is GNU, which
+    # the real one on this machine does, so "not" is the answer only if the
+    # pinned tool was found and probed before the question was answered.
     local t; t="$(mktemp -d)"
-    _dv_fake "$t/stat" 'stat (GNU coreutils) 9.4'
-    _dv_unit "$t/u" "stat = \"$t/stat\"" 'deps_is_gnu stat && echo gnu || echo not'
-    assert_eq "$(_dv_out "$t/u/sub/s.sh")" "gnu"
+    _dv_fake "$t/find" BROKEN
+    _dv_unit "$t/u" "find = \"$t/find\"" 'deps_is_gnu find && echo gnu || echo not'
+    assert_eq "$(_dv_out "$t/u/sub/s.sh")" "not"
     rm -rf "$t"
 }
 

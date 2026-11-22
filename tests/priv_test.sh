@@ -70,14 +70,17 @@ it_says_how_it_would_ask() {
 
 #[test]
 it_says_it_cannot_ask_when_neither_asker_is_there() {
+    # `priv` asks `deps` for its tools, so the machine is made to lack them there.
+    local real; real="$(declare -f deps_has)"
     priv_is_root() { return 1; }
-    command() {
-        case "$2" in sudo|doas) return 1 ;; esac
-        builtin command "$@"
+    deps_has() {
+        case "$1" in sudo|doas) return 1 ;; esac
+        return 0
     }
     local rc=0
     priv_how >/dev/null 2>&1 || rc=$?
-    unset -f priv_is_root command
+    unset -f priv_is_root deps_has
+    eval "$real"
     assert_ne "$rc" "0"
 }
 
@@ -85,13 +88,12 @@ it_says_it_cannot_ask_when_neither_asker_is_there() {
 it_prefers_sudo_where_both_are_present() {
     # Not a preference anybody should care about, but it has to be one thing
     # rather than whichever the loop reached first on that machine.
+    local real; real="$(declare -f deps_has)"
     priv_is_root() { return 1; }
-    command() {
-        case "$2" in sudo|doas) return 0 ;; esac
-        builtin command "$@"
-    }
+    deps_has() { return 0; }
     local how; how="$(priv_how)"
-    unset -f priv_is_root command
+    unset -f priv_is_root deps_has
+    eval "$real"
     assert_eq "$how" "sudo"
 }
 
@@ -405,6 +407,24 @@ it_ignores_a_path_that_is_not_there() {
 # three different ways of handing arguments to them, which is where it can be
 # wrong, so the three are stubbed and asked what they were given.
 
+# `deps` finds a tool on PATH and then in the usual places, and remembers what
+# it found, so a stub directory as the whole of PATH no longer hides the host's
+# own `sudo`. The lookup is narrowed to PATH while the stubs are in place, and
+# everything deps knew is forgotten on the way in and on the way out.
+_PRIV_FIND_SRC=""
+_priv_only_path() {
+    _PRIV_FIND_SRC="$(declare -f _deps_find_tool)"
+    _deps_find_tool() {
+        local d i="$IFS"; IFS=:
+        for d in $PATH; do
+            if [ -x "$d/$1" ]; then IFS="$i"; printf '%s\n' "$d/$1"; return 0; fi
+        done
+        IFS="$i"; return 1
+    }
+    deps_forget
+}
+_priv_all_paths() { [ -z "$_PRIV_FIND_SRC" ] || eval "$_PRIV_FIND_SRC"; deps_forget; }
+
 # A directory holding stubs for the step-down commands, first on PATH. Each one
 # records that it ran and repeats its arguments one per line, so a test can see
 # both which command was picked and what survived the trip.
@@ -426,6 +446,7 @@ _priv_stubs() {
     # out, so the two tests about falling past `sudo` would have been answered
     # by the host's own sudo failing rather than by the fallback working.
     export PATH="$_PRIV_STUB_DIR"
+    _priv_only_path
 }
 # Write one stub, from lines of bash handed in as arguments. `printf` is a
 # builtin and the interpreter and `chmod` are absolute, so this works with the
@@ -440,6 +461,7 @@ _priv_stub_put() {
 
 _priv_stubs_end() {
     export PATH="${_PRIV_PATH_KEEP:-$PATH}"
+    _priv_all_paths
     [[ -n "${_PRIV_STUB_DIR:-}" ]] && rm -rf "$_PRIV_STUB_DIR"
     unset _PRIV_STUB_DIR _PRIV_PATH_KEEP
 }

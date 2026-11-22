@@ -7,8 +7,8 @@
 # The backend `lib/toml.sh` picks where there is no taplo and `deps` finds
 # mikefarah yq reading TOML. Only the Go yq: the python one is a jq wrapper
 # that reads none. It turns the file's text into JSON, and
-# `lib/toml/impl/json_tree.sh` makes the tree of that. The path is `_TOML_TOOL`,
-# which `lib/toml.sh` asked `deps` for when it picked this backend.
+# `lib/toml/impl/from_json.sh` makes the tree of that. The path is
+# `_TOML_TOOL`, which `lib/toml.sh` asked `deps` for when it picked this backend.
 
 [ -n "${_NUTSHELL_TOML_IMPL_YQ_SH:-}" ] && return 0
 _NUTSHELL_TOML_IMPL_YQ_SH=1

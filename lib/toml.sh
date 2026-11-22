@@ -46,7 +46,7 @@ _NUTSHELL_TOML_SH=1
 # dependency would be real and unrecorded at once.
 use validate
 use deps
-use super::toml::impl::bash super::toml::impl::bash_path super::toml::impl::json_tree
+use super::toml::impl::bash super::toml::impl::bash_path super::toml::impl::from_json
 
 _TOML_BACKEND=""
 _TOML_FROM=""

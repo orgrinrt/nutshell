@@ -74,7 +74,7 @@ toml                     lib/toml.sh
 toml::impl::bash         lib/toml/impl/bash.sh        internal
 toml::impl::bash_lex     lib/toml/impl/bash_lex.sh    internal
 toml::impl::bash_path    lib/toml/impl/bash_path.sh   internal
-toml::impl::json_tree    lib/toml/impl/json_tree.sh   internal
+toml::impl::from_json    lib/toml/impl/from_json.sh   internal
 toml::impl::taplo        lib/toml/impl/taplo.sh       internal
 toml::impl::yq           lib/toml/impl/yq.sh          internal
 toml::json               lib/toml/json.sh

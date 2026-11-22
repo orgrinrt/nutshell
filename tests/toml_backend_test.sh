@@ -184,3 +184,19 @@ it_reads_a_file_again_once_it_changed() {
     assert_eq "$(cat "$d/o1")/$(cat "$d/o2")" "1/2"
     rm -rf "$d"
 }
+
+#[test]
+it_reads_a_tools_json_through_the_json_parser() {
+    # The tool's JSON is read by json's parser, so an escape JSON has and TOML
+    # has not, `\/` or a surrogate pair, is a value rather than a refusal. The
+    # expected text is jq's decoding of the same string.
+    _toml_json_tree t '{"a":{"s":"x\/y 😀","n":[1,2.5]}}'
+    assert_eq "$?" "0"
+    assert_eq "${_TOML_V[R${_TOML_US}a${_TOML_US}s]}" "x/y 😀"
+    assert_eq "${_TOML_T[R${_TOML_US}a${_TOML_US}n${_TOML_US}0]}" "int"
+    assert_eq "${_TOML_T[R${_TOML_US}a${_TOML_US}n${_TOML_US}1]}" "float"
+    _toml_json_tree t '{"a":null}'
+    assert_eq "$?" "2" "null has no TOML spelling"
+    _toml_json_tree t '[1]'
+    assert_eq "$?" "2" "a document that is not a table"
+}

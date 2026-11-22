@@ -6,9 +6,9 @@
 #
 # The backend `lib/toml.sh` picks first, where `deps` finds a taplo that
 # prints TOML as JSON, since it refuses a file that is not TOML 1.0. It turns
-# the file's text into JSON, and `lib/toml/impl/json_tree.sh` makes the tree
-# of that. The path is `_TOML_TOOL`, which `lib/toml.sh` asked `deps` for
-# when it picked this backend.
+# the file's text into JSON, and `lib/toml/impl/from_json.sh` makes
+# the tree of that. The path is `_TOML_TOOL`, which `lib/toml.sh` asked
+# `deps` for when it picked this backend.
 
 [ -n "${_NUTSHELL_TOML_IMPL_TAPLO_SH:-}" ] && return 0
 _NUTSHELL_TOML_IMPL_TAPLO_SH=1

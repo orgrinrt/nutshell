@@ -5,9 +5,11 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Layer 0: shells out to whatever hashing tool the machine has.
+# Layer 0: shells out to the hashing tool the machine has, and refuses with
+# status 2 where there is none.
 #
-# Generating a digest and reading one out of a file, and nothing else. Deciding
+# Generating a digest (sha256 through whatever the machine has, BLAKE3 through
+# `b3sum`) and reading one out of a file, and nothing else. Deciding
 # whether a digest is *acceptable* is a policy question, and policy is not what
 # this library is for: a caller comparing two strings knows what it wants to
 # happen when they differ, and this does not.
@@ -67,6 +69,27 @@ hash_sha256() {
 
     out="${out%% *}"
     [ -n "$out" ] || { log_error "hash: ${impl} produced nothing for ${path}"; return 1; }
+    printf '%s' "$out"
+}
+
+#[pub]
+# The BLAKE3 digest of a file, through `b3sum`.
+#
+# There is no fallback: no base image carries a second BLAKE3 tool, and a digest
+# from a different algorithm would be a wrong answer rather than a slower one.
+# The exit codes are `hash_sha256`'s: 0 with the digest on stdout, 2 where
+# `b3sum` is absent, which is a fact about the machine, and 1 when the file
+# cannot be read.
+# Usage: hash_blake3 <path> -> a lowercase hex digest
+hash_blake3() {
+    local path="${1:-}" out
+    [ -n "$path" ] || return 1
+    [ -r "$path" ] || { log_error "hash: nothing readable at ${path}"; return 1; }
+    deps_has b3sum || { log_warn "hash: no b3sum here, so no BLAKE3 digest"; return 2; }
+
+    out="$(deps_run b3sum -- "$path" 2>/dev/null)"
+    out="${out%% *}"
+    [ -n "$out" ] || { log_error "hash: b3sum produced nothing for ${path}"; return 1; }
     printf '%s' "$out"
 }
 

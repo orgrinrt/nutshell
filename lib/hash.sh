@@ -78,8 +78,8 @@ hash_sha256() {
 # There is no fallback: no base image carries a second BLAKE3 tool, and a digest
 # from a different algorithm would be a wrong answer rather than a slower one.
 # The exit codes are `hash_sha256`'s: 0 with the digest on stdout, 2 where
-# `b3sum` is absent, which is a fact about the machine, and 1 when the file
-# cannot be read.
+# `b3sum` is absent or gives no digest, which is a fact about the machine, and
+# 1 when the file cannot be read.
 # Usage: hash_blake3 <path> -> a lowercase hex digest
 hash_blake3() {
     local path="${1:-}" out
@@ -89,7 +89,12 @@ hash_blake3() {
 
     out="$(deps_run b3sum -- "$path" 2>/dev/null)"
     out="${out%% *}"
-    [ -n "$out" ] || { log_error "hash: b3sum produced nothing for ${path}"; return 1; }
+    # A b3sum that ran and gave no digest, a stand-in or a broken install, is
+    # no BLAKE3 here, the same fact as no b3sum at all.
+    case "$out" in
+        ''|*[!0-9a-f]*) log_warn "hash: b3sum gave no digest for ${path}"; return 2 ;;
+    esac
+    [ "${#out}" -eq 64 ] || { log_warn "hash: b3sum gave no digest for ${path}"; return 2; }
     printf '%s' "$out"
 }
 

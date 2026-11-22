@@ -11,9 +11,9 @@
 #
 # This is bash, because the reader is, and `deps` does not load it: a POSIX
 # shell refuses it at parse time, and a `use` of it from `deps` would take every
-# closure that holds `deps` off the POSIX floor. The entry point loads it and
-# it hands `deps` its two functions by name, so where it is not loaded no tool
-# is pinned and `deps` resolves each one from PATH.
+# closure that holds `deps` off the POSIX floor. `init` loads it on the first
+# pin `deps` asks for, and it hands `deps` its two functions by name. Where
+# `deps.sh` is sourced bare no tool is pinned and each is resolved from PATH.
 
 [ -n "${_NUTSHELL_DEPS_PINS_SH:-}" ] && return 0
 _NUTSHELL_DEPS_PINS_SH=1

@@ -130,11 +130,13 @@ _toml_tool_json() {
     # FIXME(63ac7b74f97a): the variant stands in for `deps_can toml_json_taplo`
     # and `deps_can toml_read`, which scan every tool first, 200 ms on the first
     # read; a tool that then fails on a file sends it to the floor all the same.
-    if [[ "$(deps_variant taplo)" == taplo ]]; then
+    # `deps_has` first, in this shell, so deps reads its manifest here and not
+    # in the subshell, where a fault in it would be said again.
+    if deps_has taplo >/dev/null && [[ "$(deps_variant taplo)" == taplo ]]; then
         _TOML_TOOL="$(deps_path taplo)"
         nut_reload super::toml::impl::taplo
         _TOML_BACKEND=taplo
-    elif [[ "$(deps_variant yq)" == mikefarah ]]; then
+    elif deps_has yq >/dev/null && [[ "$(deps_variant yq)" == mikefarah ]]; then
         # FIXME(1d1168da9656): mikefarah yq 4.44.3 reads a key or a table
         # defined twice instead of refusing the file, so where it is the only
         # tool an invalid file reads; taplo goes first for that.
@@ -171,7 +173,8 @@ _toml_open_values() {
     [[ "$c" =~ $_TOML_RE_WIDE ]] && { _TOML_FROM=bash; _toml_open "$f"; return; }
     _TOML_ID=""
     if _toml_tool_json "${c#$'\xef\xbb\xbf'}" && _toml_json_tree "$f" "$_tt_json"; then
-        _TOML_ID="json$_TOML_US$f" _TOML_SRC="$c" _TOML_RC=0
+        # Set again: the pick may have had deps read its pins through the floor.
+        _TOML_ID="json$_TOML_US$f" _TOML_SRC="$c" _TOML_RC=0 _TOML_FROM=json
         return 0
     fi
     _TOML_FROM=bash

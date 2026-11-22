@@ -72,11 +72,6 @@ source "${_NUTSHELL_HOME}/init" || {
 # in the pinned case, since the exec re-runs it in the pinned copy.
 use extern log
 
-# `deps` reads `[deps.paths]` through the toml reader, which a POSIX shell cannot
-# parse, so the reader is loaded here and not by `deps` itself. A script run by
-# nutshell has its pins read whatever it `use`s.
-use deps::pins
-
 
 # =============================================================================
 # The engine pin

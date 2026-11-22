@@ -99,12 +99,13 @@ _deps_find_tool() {
     return 1
 }
 
-# Which functions answer `[deps.paths]`, by name, set by `deps::pins` when it is
-# loaded. That file is bash and reads the manifest through the toml API; a POSIX
-# shell refuses it at parse time, and a `use` of it from `deps` would take every
-# closure that holds `deps` off the POSIX floor. So the entry point loads it, a
-# script run by `nutshell` has its pins read, and where it is not loaded no tool
-# is pinned and each is resolved from PATH.
+# Which functions answer `[deps.paths]`, by name. That is `deps::pins`, which is
+# bash and reads the manifest through the toml API; a POSIX shell refuses it at
+# parse time, and a `use` of it from `deps` would take every closure that holds
+# `deps` off the POSIX floor. So `init` names two functions that load it on the
+# first pin asked for, and every script that loads nutshell has its pins read.
+# `deps.sh` sourced bare has none: no tool is pinned and each is resolved from
+# PATH.
 : "${_DEPS_PIN_GET:=}"
 : "${_DEPS_PIN_CHECK:=}"
 _DEPS_PIN=""

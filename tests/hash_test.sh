@@ -315,14 +315,29 @@ it_says_b3sum_cannot_serve_when_it_prints_no_digest() {
 }
 
 #[test]
+it_says_the_input_failed_when_b3sum_refuses_it() {
+    # b3sum failing on the input, a directory say, is a fact about the input:
+    # rc 1, as `hash_sha256` gives, never 2, which `verify_digest` reads as
+    # "this machine cannot hash".
+    _h_setup
+    mkdir -p "$HROOT/bin"
+    printf '#!/bin/sh\necho "b3sum: Is a directory" >&2\nexit 1\n' > "$HROOT/bin/b3sum"
+    chmod +x "$HROOT/bin/b3sum"
+    PATH="$HROOT/bin:$PATH"; deps_forget
+    hash_blake3 "$HROOT/f" >/dev/null 2>&1; assert_eq "$?" "1" "b3sum refused the input"
+    _h_end
+}
+
+#[test]
 it_matches_the_published_blake3_digest_of_nothing() {
     # The BLAKE3 digest of empty input, from the reference test vectors, written
     # here rather than taken from the tool under test. Where no b3sum gives a
     # digest, rc 2, there is nothing to check.
     _h_setup
-    : > "$HROOT/empty"
+    # A fresh name: `_h_setup` already holds a directory called `empty`.
+    : > "$HROOT/nothing"
     local out rc=0
-    out="$(hash_blake3 "$HROOT/empty" 2>/dev/null)" || rc=$?
+    out="$(hash_blake3 "$HROOT/nothing" 2>/dev/null)" || rc=$?
     if [ "$rc" -eq 2 ]; then
         _h_end
         skip "no b3sum that gives a digest on this machine"

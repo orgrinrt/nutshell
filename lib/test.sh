@@ -52,6 +52,7 @@ use attr log fs list
 
 _TEST_PASSED=0
 _TEST_FAILED=0
+_TEST_SKIPPED=0
 # A `list` rather than an indexed array, which is bash's. It only ever grows by
 # one and is read once at the end, which is what `list` is for.
 list_new _TEST_FAILURES
@@ -108,6 +109,18 @@ _test_mark() {
 
 # _test_asserted -> record that an assertion happened, whatever its outcome
 _test_asserted() { _test_mark a; }
+
+#[pub]
+# A test that cannot run on this machine says so, and why, and the run counts it
+# as skipped. Returning early instead passes having asserted nothing, which the
+# runner fails. A failure recorded in the same test still fails it: a skip is
+# not a verdict.
+# Usage: test_skip "jq is not on this machine" ; return 0
+test_skip() {
+    _test_mark s
+    printf 'skipped: %s\n' "${1:-no reason given}"
+    return 0
+}
 
 #[pub]
 # Usage: assert_eq "$got" "$want" ["what this is about"] -> 0 or 1
@@ -383,7 +396,7 @@ EOF
         ran=$(( ran + 1 ))
         # Its own file, so nothing a previous test left behind, and nothing a
         # previous test is still doing, can be read as this one's.
-        _TEST_MARK="${_TEST_MARK_DIR}/$(( _TEST_PASSED + _TEST_FAILED )).${name}"
+        _TEST_MARK="${_TEST_MARK_DIR}/$(( _TEST_PASSED + _TEST_FAILED + _TEST_SKIPPED )).${name}"
         : > "$_TEST_MARK"
 
         # A subshell per test. Bash has one global namespace, so without this a
@@ -434,7 +447,7 @@ EOF
         # happened to return non-zero used to fail with every assertion in it
         # passing, which contradicted the note above and made the verdict
         # depend on which line a test ended with.
-        local tally why=""
+        local tally why="" skipped=0
         tally="$(cat "$_TEST_MARK" 2>/dev/null)"
         rc=0
         local _has_z=0; case "$tally" in *z*) _has_z=1 ;; esac
@@ -461,6 +474,9 @@ EOF
             fi
         elif case "$tally" in *f*) true ;; *) false ;; esac; then
             rc=1
+        elif case "$tally" in *s*) true ;; *) false ;; esac; then
+            # Skipped: said so, with its reason, and neither passed nor failed.
+            skipped=1
         elif case "$tally" in *a*) false ;; *) true ;; esac; then
             # Worse than a weak test: it occupies the place a real one would be
             # noticed missing from, and it counts toward a number people quote.
@@ -482,7 +498,13 @@ EOF
         fi
         [ -n "$why" ] && output="${output}${output:+$_TEST_NL}${why}"
 
-        if [ $rc -eq 0 ]; then
+        if [ "$skipped" -eq 1 ]; then
+            _TEST_SKIPPED=$(( _TEST_SKIPPED + 1 ))
+            log_tagged "SKIP" yellow "$name${took}"
+            [ -n "$output" ] && printf '%s\n' "$output" | while IFS= read -r l; do
+                log_substep "$l"
+            done
+        elif [ $rc -eq 0 ]; then
             _TEST_PASSED=$(( _TEST_PASSED + 1 ))
             log_tagged "PASS" green "$name${took}"
         else
@@ -526,6 +548,8 @@ test_run_dir() {
 # Also the end of the run, so the mark file goes here. A trap would fire on
 # every subshell exit as well, and there is exactly one place the run is over.
 test_summary() {
+    local _ts_note=""
+    [ "$_TEST_SKIPPED" -gt 0 ] && _ts_note=", ${_TEST_SKIPPED} skipped"
     [ -n "${_TEST_MARK_DIR:-}" ] && rm -rf "$_TEST_MARK_DIR"
     printf '\n'
     if [ "$_TEST_FAILED" -gt 0 ]; then
@@ -536,9 +560,9 @@ test_summary() {
             log_tagged "FAILED" red "$f"
             _tf_i=$(( _tf_i + 1 ))
         done
-        log_error "${_TEST_FAILED} failed, ${_TEST_PASSED} passed"
+        log_error "${_TEST_FAILED} failed, ${_TEST_PASSED} passed${_ts_note}"
         return 1
     fi
-    log_success "${_TEST_PASSED} passed"
+    log_success "${_TEST_PASSED} passed${_ts_note}"
     return 0
 }

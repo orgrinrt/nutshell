@@ -32,6 +32,9 @@ _nut_resolve() {
         deps)
             { printf '%s' "$_nr_root/lib/deps.sh"; return 0; }
             ;;
+        deps::pins)
+            { printf '%s' "$_nr_root/lib/deps/pins.sh"; return 0; }
+            ;;
         extern)
             { printf '%s' "$_nr_root/lib/extern.sh"; return 0; }
             ;;

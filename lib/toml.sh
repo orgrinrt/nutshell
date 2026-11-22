@@ -8,8 +8,6 @@
 #
 # FIXME(67897977fc7b): every reader answers from the bash floor alone; the
 # backend layer that picks mikefarah yq or taplo through `deps` is not here yet.
-# FIXME(a199af8c5f27): `deps` reads `[deps.paths]` and `bin/nutshell` reads its
-# pin by hand, outside this module.
 #
 # The TOML API. `use toml` and call it. Every reader here answers from the tree
 # the bash floor builds in `lib/toml/impl/bash.sh`, which reads TOML 1.0 in

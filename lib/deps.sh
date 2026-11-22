@@ -6,7 +6,7 @@
 # https://github.com/orgrinrt/nutshell
 #
 #[allow(loc = 450)]
-# Layer -1 (Foundation): Depends only on os.sh
+# Layer -1 (Foundation): Depends only on os.sh and key.sh
 #
 # This module detects what external tools are available and collects
 # information about them (paths, variants, capabilities). It does NOT
@@ -42,6 +42,14 @@ _NUTSHELL_DEPS_SH=1
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
 use os key
+
+# No tool is pinned until `deps::pins` replaces these, and that file is bash: a
+# POSIX shell refuses it at parse time, and a `use` of it here would take every
+# closure that holds `deps` off the POSIX floor. The entry point loads it, so
+# a script run by `nutshell` has its pins read and a lowered artifact, which is
+# run without the interpreter, has none. Either way `deps` resolves every tool.
+command -v _deps_pin_get >/dev/null 2>&1 || _deps_pin_get() { _DEPS_PIN=""; return 1; }
+command -v _deps_pin_check >/dev/null 2>&1 || _deps_pin_check() { return 0; }
 
 # -----------------------------------------------------------------------------
 # Configuration file location
@@ -88,81 +96,14 @@ _deps_sync_config() {
     [ "$_DEPS_CONFIG" != "$old" ] || return 0
     for _k in $_DEPS_SEEN; do eval "unset _TOOL_MISSING_${_k}"; done
     [ -n "$_DEPS_CONFIG" ] || return 0
+    _deps_pin_check "$_DEPS_CONFIG"
     local list="$_TOOLS_AVAILABLE"
     for t in $list; do
-        _rc=0; _deps_toml_get "$_DEPS_CONFIG" "deps.paths" "$t" >/dev/null 2>&1 || _rc=$?
+        _rc=0; _deps_pin_get "$_DEPS_CONFIG" "$t" >/dev/null 2>&1 || _rc=$?
         [ "$_rc" -eq 1 ] && continue
         _deps_unlearn "$t"
         deps_has "$t" >/dev/null 2>&1 || true
         _deps_drop_caps
-    done
-}
-
-# _deps_toml_get <file> <table> <key> -> the value, 1 when absent, 2 when the
-# table is there in a form this cannot read
-#
-# FIXME(a199af8c5f27): a second TOML reader beside the toml module. deps lowers
-# to a POSIX shell and the toml reader is bash, so a `use toml` here takes every
-# closure that holds deps off the POSIX floor.
-#
-# A key is matched by its whole dotted path, the table it sits under joined to
-# its own dotted name, so `[deps.paths]` with `sed = ...`, `[deps]` with
-# `paths.sed = ...` and a root `deps.paths.sed = ...` are one key. A key whose
-# path is the table itself is an inline table, which this does not read, and
-# that is refused rather than read as no pin at all.
-_deps_toml_get() {
-    local file="$1" want="$2.$3" table="$2"
-    [ -f "$file" ] || return 1
-
-    local cur="" line t k v full
-
-    while IFS= read -r line || [ -n "$line" ]; do
-        # Matched by shape rather than by `[[ =~ ]]`. A regex match is the one
-        # bashism a POSIX shell cannot even parse past, so a file carrying one
-        # is unreadable there whatever the rest of it does.
-        t="${line#"${line%%[![:space:]]*}"}"
-        case "$t" in ''|'#'*) continue ;; esac
-
-        case "$t" in
-            '[['*)
-                cur="//"; continue ;;
-            '['*']'*)
-                cur="${t#\[}"; cur="${cur%%]*}"
-                _deps_dotted "$cur"; cur="$_DD"
-                continue ;;
-        esac
-        [ "$cur" = "//" ] && continue
-        [ "${t#*=}" != "$t" ] || continue
-
-        _deps_dotted "${t%%=*}"; k="$_DD"
-        full="${cur:+${cur}.}${k}"
-        v="${t#*=}"
-        v="${v#"${v%%[![:space:]]*}"}"
-        v="${v%"${v##*[![:space:]]}"}"
-
-        case "$want" in
-            "${full}".*)
-                printf '[ERROR] deps: %s in %s holds %s as an inline table; write it as [%s]\n' \
-                    "$full" "$file" "$want" "$table" >&2
-                return 2 ;;
-        esac
-        [ "$full" = "$want" ] || continue
-        v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
-        printf '%s\n' "$v"
-        return 0
-    done < "$file"
-    return 1
-}
-
-# A key or header with its blanks taken out, so `a . b` is `a.b`, into `_DD`.
-# Parameter expansion and no fork: this runs for every line of the manifest.
-_deps_dotted() {
-    _DD="$1"
-    while :; do
-        case "$_DD" in
-            *[[:blank:]]*) _DD="${_DD%%[[:blank:]]*}${_DD#*[[:blank:]]}" ;;
-            *) return 0 ;;
-        esac
     done
 }
 
@@ -290,9 +231,10 @@ _deps_find_tool() {
     # 1. Check user config first
     if [ -n "$config_file" ]; then
         local user_path rc=0
-        user_path="$(_deps_toml_get "$config_file" "deps.paths" "$tool")" || rc=$?
+        _deps_pin_get "$config_file" "$tool" || rc=$?
         [ "$rc" -eq 2 ] && return 2
         if [ "$rc" -eq 0 ]; then
+            user_path="$_DEPS_PIN"
             if [ -f "$user_path" ] && [ -x "$user_path" ]; then
                 echo "$user_path"
                 return 0

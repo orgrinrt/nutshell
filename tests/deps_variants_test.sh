@@ -230,7 +230,7 @@ it_says_once_that_the_manifest_is_not_toml_and_pins_nothing() {
     assert_contains "$out" "SED-OK"
     assert_contains "$out" "AWK-OK"
     assert_contains "$err" "nut.toml"
-    assert_eq "$(printf '%s\n' "$err" | grep -c 'nut.toml')" "1" "said once, not once per tool"
+    assert_eq "$(printf '%s\n' "$err" | grep -c '^\[ERROR\] deps:')" "1" "said once, not once per tool"
     rm -rf "$t"
 }
 

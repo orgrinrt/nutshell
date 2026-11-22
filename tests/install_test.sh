@@ -346,6 +346,9 @@ it_says_so_rather_than_reporting_success_when_the_user_link_will_not_come_out() 
     local d; d="$(mktemp -d)"
     ln -sfn "$TARGET" "${d}/nutshell"
     chmod 555 "$d"
+    # root writes through a 555 directory, so the refusal is planted as well:
+    # the link has to stay whoever runs the suite.
+    rm() { [[ "$*" == *"${d}/nutshell"* ]] && return 1; command rm "$@"; }
     sudo() { printf 'secure_path: %s\n' "$(mktemp -d)"; }
     _user_dirs() { printf '%s\n' "$d"; }
     # elevation refused, which is the case where the link genuinely stays
@@ -356,7 +359,7 @@ it_says_so_rather_than_reporting_success_when_the_user_link_will_not_come_out() 
     assert_not_contains "$out" "removed ${d}/nutshell"
     assert_ok test -L "${d}/nutshell"
 
-    unset -f sudo _user_dirs priv_run
+    unset -f sudo _user_dirs priv_run rm
     chmod 755 "$d"; rm -rf "$d"
 }
 
@@ -369,6 +372,9 @@ it_says_the_same_when_the_system_link_will_not_come_out() {
     local d; d="$(mktemp -d)"
     ln -sfn "$TARGET" "${d}/nutshell"
     chmod 555 "$d"
+    # root writes through a 555 directory, so the refusal is planted as well:
+    # the link has to stay whoever runs the suite.
+    rm() { [[ "$*" == *"${d}/nutshell"* ]] && return 1; command rm "$@"; }
     sudo() { printf 'secure_path: %s\n' "$d"; }
     _user_dirs() { printf '%s\n' "$(mktemp -d)"; }
     priv_run() { return 1; }
@@ -378,7 +384,7 @@ it_says_the_same_when_the_system_link_will_not_come_out() {
     assert_not_contains "$out" "removed ${d}/nutshell"
     assert_ok test -L "${d}/nutshell"
 
-    unset -f sudo _user_dirs priv_run
+    unset -f sudo _user_dirs priv_run rm
     chmod 755 "$d"; rm -rf "$d"
 }
 

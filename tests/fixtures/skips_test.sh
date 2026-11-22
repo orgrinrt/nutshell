@@ -11,9 +11,21 @@ it_skips_for_a_named_reason() {
 }
 
 #[test]
+it_skips_for_want_of_a_tool() {
+    skip "no frobnicator on this machine"
+    return 0
+}
+
+#[test]
 it_fails_after_a_skip_and_stays_failed() {
     test_skip "skipped, and then something broke"
     assert_eq "a" "b"
+}
+
+#[test]
+it_fails_before_it_skips() {
+    assert_eq "a" "b"
+    skip "this must not hide the failure"
 }
 
 #[test]

@@ -186,6 +186,17 @@ fail() {
 }
 
 #[pub]
+# Skip a test that cannot run on this machine, saying why. The test reports
+# SKIP with the reason rather than a pass, and an assertion that failed before
+# it still fails the test. Return after it.
+# Usage: skip "taplo absent here" -> prints the reason
+skip() {
+    _test_mark s
+    printf 'skipped: %s\n' "$*"
+    return 0
+}
+
+#[pub]
 # Usage: assert_empty "$value" ["about"] -> 0 or 1
 assert_empty() {
     _test_asserted

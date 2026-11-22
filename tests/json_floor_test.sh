@@ -169,3 +169,37 @@ it_prefers_gojq_to_jaq_and_jq_to_both() {
     assert_eq "$(json_query '.' '{}')" "jaq ran"
     rm -rf "$t"
 }
+
+#[test]
+it_reads_a_document_and_a_string_longer_than_its_buffer() {
+    # The reader works through a buffer of a few KB, so what sits across a
+    # refill is where it would be wrong: an escape split by the end of the
+    # buffer, a number, a literal. The padding walks the escape over every
+    # offset near the boundary.
+    _jf_bare
+    local pad x doc n want got
+    for n in 4070 4080 4085 4088 4090 4092 4094 4096 4098 4100 8190 8200; do
+        pad="$(printf '%*s' "$n" '' | tr ' ' x)"
+        doc="{\"a\":\"${pad}\\u00e9\\ud83d\\ude00z\",\"b\":[12345,true,null,false],\"c\":${n}}"
+        want="${pad}é😀z"
+        got="$(json_get "$doc" a)"
+        assert_eq "$got" "$want" "string, pad $n"
+        assert_eq "$(json_get "$doc" b)" '[12345,true,null,false]' "array, pad $n"
+        assert_eq "$(json_get "$doc" c)" "$n" "number, pad $n"
+    done
+    doc="[$(printf '%s,' $(seq 1 3000))0]"
+    assert_eq "$(json_length "$doc")" "3001"
+    assert_eq "$(json_get "$doc" 2999)" "3000"
+}
+
+#[test]
+it_refuses_a_document_nested_past_its_limit_instead_of_overflowing() {
+    _jf_bare
+    local open close i
+    open=""; close=""
+    for i in $(seq 1 500); do open+="["; close+="]"; done
+    assert_fails json_valid "${open}${close}"
+    open=""; close=""
+    for i in $(seq 1 100); do open+="["; close+="]"; done
+    assert_ok json_valid "${open}${close}"
+}

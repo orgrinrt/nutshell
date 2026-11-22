@@ -65,6 +65,15 @@ _nut_resolve() {
         json)
             { printf '%s' "$_nr_root/lib/json.sh"; return 0; }
             ;;
+        json::build)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'json::build' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/json/build.sh"; return 0; }
+            ;;
+        json::impl::bash)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'json::impl::bash' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/json/impl/bash.sh"; return 0; }
+            ;;
+        json::impl::bash_parse)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'json::impl::bash_parse' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/json/impl/bash_parse.sh"; return 0; }
+            ;;
         json::impl::jq)
             { [ "$_nr_reach" = public ] && { echo "nutshell: 'json::impl::jq' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/json/impl/jq.sh"; return 0; }
             ;;

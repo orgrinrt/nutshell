@@ -56,13 +56,13 @@ _json_pl() {
 
         my ($op, @args) = @ARGV;
 
-        # Walk a dotted path. Returns (found, value) so an absent key is told
+        # Walk a path, its segments joined by the unit separator. Returns (found, value) so an absent key is told
         # apart from one present and holding null, which the caller turns into
         # a status. Answering "null" for both is what the other two backends
         # were made to stop doing.
         sub walk {
             my ($data, $path) = @_;
-            for my $part (grep { $_ ne "" } split /\./, $path) {
+            for my $part (grep { $_ ne "" } split /\x1f/, $path) {
                 if (ref($data) eq "ARRAY") {
                     return (0, undef) unless $part =~ /^\d+$/ && $part < scalar(@$data);
                     $data = $data->[$part];
@@ -132,7 +132,7 @@ _json_pl() {
         } elsif ($op eq "compact") {
             print $coder->encode($data), "\n";
         } elsif ($op eq "set" || $op eq "delete") {
-            my @parts = grep { $_ ne "" } split /\./, $path;
+            my @parts = grep { $_ ne "" } split /\x1f/, $path;
             exit 1 unless @parts;
             my $last = pop @parts;
             my $current = $data;

@@ -235,6 +235,46 @@ it_says_once_that_the_manifest_is_not_toml_and_pins_nothing() {
 }
 
 #[test]
+it_says_once_that_a_manifest_defining_a_pin_twice_pins_nothing() {
+    # A key set twice is not TOML 1.0. The floor refuses the file, so no pin in
+    # it is honoured and sed comes from PATH, and that is said once.
+    local t; t="$(mktemp -d)"
+    _dv_unit "$t/u" "sed = \"/nonexistent/sed\"
+sed = \"/nonexistent/sed2\"" 'deps_has sed && echo SED-OK'
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_contains "$out" "SED-OK"
+    assert_eq "$(printf '%s\n' "$err" | grep -cxF "[ERROR] deps: no [deps.paths] pin in ${t}/u/nut.toml is read")" "1"
+    # And once where a toml read asked deps first, which it does in a subshell.
+    printf 'a = 1\n' > "$t/f.toml"
+    printf 'use deps toml\ntoml_get "%s" a\n%s\n' "$t/f.toml" 'deps_has sed && echo SED-OK' > "$t/u/sub/s.sh"
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_contains "$out" "SED-OK"
+    assert_eq "$(printf '%s\n' "$err" | grep -cxF "[ERROR] deps: no [deps.paths] pin in ${t}/u/nut.toml is read")" "1" \
+        "said once after a toml read"
+    rm -rf "$t"
+}
+
+#[test]
+it_refuses_a_pin_to_a_missing_file_in_a_script_loaded_through_init() {
+    # A script that sources `init` itself, not run by `bin/nutshell`, has its
+    # pins read all the same.
+    local t; t="$(mktemp -d)"
+    _dv_unit "$t/u" 'sed = "/nonexistent/sed"' 'true'
+    printf 'source "%s/init" || exit 1\nuse deps\n%s\n' "$NUTSHELL_ROOT" \
+        'deps_has sed && echo FOUND; deps_path sed; echo "rc=$?"' > "$t/u/sub/s.sh"
+    local out err
+    out="$( cd "$t/u/sub" && bash s.sh 2>/dev/null )"
+    err="$( cd "$t/u/sub" && bash s.sh 2>&1 >/dev/null )"
+    assert_not_contains "$out" "FOUND"
+    assert_contains "$out" "rc=1"
+    assert_contains "$err" '[ERROR] deps: [deps.paths] sed = "/nonexistent/sed" is not an executable file'
+    rm -rf "$t"
+}
+
+#[test]
 it_refuses_a_deps_paths_entry_that_is_empty() {
     local t; t="$(mktemp -d)"
     _dv_unit "$t/u" 'sed = ""' 'deps_has sed && echo FOUND; echo done'

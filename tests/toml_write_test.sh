@@ -496,16 +496,10 @@ it_encodes_every_escape_the_reader_decodes() {
 }
 
 #[test]
-# Nothing here has `local`, so every variable it uses is the caller's too
-# unless the name is its own.
-#
-# The floor convention is a prefix rather than `local`, which is not POSIX.
-# Getting that wrong is silent and awful: this module walks lines with `line`,
-# `file`, `n` and `key`, which are the four names a caller is most likely to
-# be holding, and it would overwrite them mid-loop with no error anywhere.
-#
-# So the test is a caller that holds all of them across a write and checks
-# they survived.
+# The writer walks lines and keys under names a caller is likely to be
+# holding, `line`, `file`, `n` and `key` among them. Each is local to it, and
+# this is a caller that holds all of them across a write and checks they
+# survived.
 it_does_not_write_into_the_callers_variables() {
     local d; d="$(mktemp -d)"
     printf '[ui]\ntheme = "dark"\n' > "$d/t.toml"
@@ -524,22 +518,6 @@ it_does_not_write_into_the_callers_variables() {
             "toml_set or toml_unset overwrote the caller's '${name}'"
     done
     rm -rf "$d"
-}
-
-#[test]
-# The floor is the point of the rewrite, so it is asserted rather than assumed.
-#
-# `dash -n` parses without running, and it is the shell the posix_floor check
-# reaches for first. A construct that only bash accepts creeps back in as an
-# ordinary-looking edit otherwise, and nothing else in this file would notice.
-it_parses_under_a_posix_shell() {
-    local sh
-    for sh in dash ash busybox-sh; do
-        command -v "$sh" >/dev/null 2>&1 || continue
-        assert_ok "$sh" -n "${BASH_SOURCE[0]%/*}/../lib/toml/write.sh"
-        return 0
-    done
-    skip "no strict POSIX shell on this machine to check against"
 }
 
 # The writer edits one line, so it refuses what one line cannot change without

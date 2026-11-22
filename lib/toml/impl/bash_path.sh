@@ -43,7 +43,7 @@ _toml_trim_into() {
 }
 
 # _toml_seg_show <segment> -> `_ts_out`, the segment as a path would spell it
-#[pub(super)]
+#[pub(lib)]
 _toml_seg_show() {
     if [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]]; then
         _ts_out="$1"
@@ -54,7 +54,7 @@ _toml_seg_show() {
 }
 
 # _toml_path_split <path> -> `_tp_pseg`; rc 2 when a quote never closes
-#[pub(super)]
+#[pub(lib)]
 _toml_path_split() {
     local s="$1" seg="" c i n=${#1} q=0 quoted=0
     _tp_pseg=()

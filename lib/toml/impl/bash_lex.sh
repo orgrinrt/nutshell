@@ -258,7 +258,7 @@ _tv_scalar() {
         _TOML_T[$p]=bool
         _TOML_V[$p]="$tok"
     elif [[ "$tok" =~ $_TOML_RE_DEC ]]; then
-        (( ${#v} <= 19 )) || { _tp_err "integer ${tok} is out of range"; return 2; }
+        _tv_in_range "$v" || { _tp_err "integer ${tok} is out of range"; return 2; }
         _TOML_T[$p]=int
         _TOML_V[$p]="${v#+}"
     elif [[ "$tok" =~ $_TOML_RE_HEX ]]; then
@@ -280,6 +280,17 @@ _tv_scalar() {
         _tp_err "invalid value: ${tok}"
         return 2
     fi
+}
+
+# _tv_in_range <decimal> -> whether it fits a signed 64-bit integer
+# Nineteen digits can be either side of the end, so those are compared as text:
+# at equal length the order of the digits is the order of the numbers.
+_tv_in_range() {
+    local d="${1#[+-]}" max=9223372036854775807
+    [[ "$1" == -* ]] && max=9223372036854775808
+    (( ${#d} < 19 )) && return 0
+    (( ${#d} == 19 )) || return 1
+    [[ ! "$d" > "$max" ]]
 }
 
 # _tv_radix <node> <token> <base> <digits> <most digits> -> an integer in decimal

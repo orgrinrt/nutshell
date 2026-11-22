@@ -24,6 +24,17 @@
 #   _TOML_F  how a table came to be: h header, i implicit, d dotted, X inline
 #
 # `_TOML_HDR` lists the tables named by a header, in the order first seen.
+#
+# Where each thing sits in the file, for the writer, which edits by line and
+# finds the line here rather than with a scanner of its own. Line numbers
+# count from 0.
+#
+#   _TOML_W  for a key set by `key = value` outside an inline table: its first
+#            line, its last, and how many segments the key was written with
+#   _TOML_P  the same key's first line up to its value, indent and key and `=`
+#   _TOML_C  what follows the value on its last line, the comment with its gap
+#   _TOML_E  for the root and each table a header opens, the last line of its
+#            part of the file that holds a header or a key, -1 for none
 
 # A guard of its own rather than `nut_once`, for the same reason as every file
 # that can be sourced before the module system exists.
@@ -47,6 +58,7 @@ _TOML_RE_BLANK='^[[:blank:]]*(#.*)?$'
 _TOML_RE_BARE='^[A-Za-z0-9_-]+'
 
 declare -gA _TOML_T=() _TOML_V=() _TOML_R=() _TOML_K=() _TOML_N=() _TOML_F=()
+declare -gA _TOML_W=() _TOML_P=() _TOML_C=() _TOML_E=()
 declare -ga _TOML_HDR=() _tp_kseg=()
 _TOML_ID=""
 _TOML_SRC=""
@@ -78,8 +90,10 @@ _toml_parse_text() {
     _tp_id="$1"
     _TOML_T=() _TOML_V=() _TOML_R=() _TOML_K=() _TOML_N=() _TOML_F=()
     _TOML_HDR=() _TOML_ERR=""
+    _TOML_W=() _TOML_P=() _TOML_C=() _TOML_E=()
     _TOML_T[R]=table
     _TOML_K[R]=""
+    _TOML_E[R]=-1
     mapfile -t _TL <<< "$2"
     _TL[0]="${_TL[0]#$'\xef\xbb\xbf'}"
     _TL=("${_TL[@]%$'\r'}")
@@ -212,6 +226,7 @@ _tp_header() {
         _TOML_K[$child$_TOML_US$n]=""
         _TOML_N[$child]=$(( n + 1 ))
         _tp_cur="$child$_TOML_US$n"
+        _TOML_E[$_tp_cur]=$_tp_ln
         return 0
     fi
     case "$t" in
@@ -233,16 +248,18 @@ _tp_header() {
             return 2 ;;
     esac
     _tp_cur="$child"
+    _TOML_E[$child]=$_tp_ln
 }
 
 # _tp_keyval <table> <X inside an inline table, else empty> -> one `key = value`
 _tp_keyval() {
-    local tbl="$1" inl="$2" node i last child t f
+    local tbl="$1" inl="$2" node i last child t f from=$_tp_ln pre
     _tp_key || return 2
     _tp_skip_ws
     [[ "$_tp_s" == '='* ]] || { _tp_err "expected = after the key"; return 2; }
     _tp_s="${_tp_s:1}"
     _tp_skip_ws
+    pre="${_TL[from]:0:${#_TL[from]}-${#_tp_s}}"
     _tp_kname "${#_tp_kseg[@]}"
     node="$tbl"
     last=$(( ${#_tp_kseg[@]} - 1 ))
@@ -271,7 +288,12 @@ _tp_keyval() {
     child="$node$_TOML_US${_tp_kseg[last]}"
     [[ -z "${_TOML_T[$child]-}" ]] || { _tp_err "key ${_tp_kn} defined twice"; return 2; }
     _TOML_K[$node]+="$_TOML_RS${_tp_kseg[last]}"
-    _tv_value "$child"
+    _tv_value "$child" || return 2
+    [[ -z "$inl" ]] || return 0
+    _TOML_W[$child]="$from $_tp_ln $(( last + 1 ))"
+    _TOML_P[$child]="$pre"
+    _TOML_C[$child]="$_tp_s"
+    _TOML_E[$tbl]=$_tp_ln
 }
 
 # _tv_value <node> -> the value at the cursor, typed and stored under <node>

@@ -113,3 +113,20 @@ it_does_not_call_a_filtered_run_empty() {
     out="$(TEST_FILTER=zzz_matches_nothing _harness_run "${FIXTURES}/first_assertion_fails_test.sh")"
     assert_eq "${out#*FAIL}" "$out"
 }
+
+#[test]
+it_runs_every_test_when_the_file_reads_stdin_as_it_is_sourced() {
+    local out
+    out="$(_harness_run "${FIXTURES}/reads_stdin_at_top_level_test.sh" </dev/null)"
+    assert_contains "$out" "[PASS] it_is_the_third_of_three"
+    assert_not_contains "$out" "ran 1 of the 3"
+    assert_not_contains "$out" "FAIL"
+}
+
+#[test]
+it_runs_every_test_when_a_test_reads_stdin() {
+    local out
+    out="$(_harness_run "${FIXTURES}/reads_stdin_in_a_test_test.sh" </dev/null)"
+    assert_contains "$out" "[PASS] it_runs_last"
+    assert_not_contains "$out" "FAIL"
+}

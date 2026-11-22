@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# =============================================================================
 # nutshell/toml/json.sh - TOML as JSON
-# =============================================================================
-# Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
 # Converting to another format is a job of its own, and it is the only part of
 # the toml module that has to know what JSON looks like.
-# =============================================================================
 
 # A guard of its own rather than `nut_once`, which reads `BASH_SOURCE`
 # and so needs bash. Under a POSIX shell it is not found, the
@@ -17,230 +13,100 @@
 _NUTSHELL_TOML_JSON_SH=1
 
 use super::toml
-use string
-
 
 #[pub]
-# Convert a TOML file to JSON.
+# Convert a TOML file to JSON, compact, keys in the order the file gives them.
 #
-# Sections nest the way TOML says they do: `[a.b]` after `[a]` is `b` inside
-# `a`, not a second `a` beside it. That second `a` was what this produced, and
-# a JSON object with the same key twice loses whichever half the reader's
-# parser discards.
+# It writes the tree the reader built, so it is right on everything the reader
+# reads: tables nest however the file reaches them, an array of tables is an
+# array of objects, an inline table is an object, a dotted key is the nesting
+# it spells, and every string is the decoded value escaped once for JSON.
+# Integers come out in decimal and a date or a time as a string, as yq gives
+# them.
 #
-# Sections are read in file order and a closed one is not reopened. A file that
-# leaves a section and comes back to it, or that writes `[b]` before `[a.c]`
-# when `[a]` is already behind it, cannot be converted in one pass without
-# building the whole tree first, so it is refused by name rather than converted
-# into an object with a repeated key.
-#
-# A quoted key or section name is refused the same way. Nothing else in this
-# library supports one: `toml_keys` leaves it out, `toml_section_pairs` hands it
-# back with its quotes still on, and `toml_get` cannot address it. Converting it
-# anyway produced valid JSON naming a key that is not the key, and a quoted
-# section holding a dot came out as two nested objects for a section with one
-# level. Wrong and quiet is worse than refused.
-#
-# Beyond those two, this is a one-pass reader and not a validator: a key
-# repeated inside one section comes out repeated, an integer with a leading zero
-# comes out as written, and an array holding a comma inside a quoted element or
-# another array is split on the wrong comma.
-# Usage: toml_to_json "file.toml" -> prints JSON, fails on a key it cannot name
+# A file the reader refuses is refused here, rc 2 with its reason. So is an
+# infinity or a NaN, which TOML has and JSON has no spelling for.
+# Usage: toml_to_json "file.toml" -> prints JSON
 toml_to_json() {
-    local file="${1:-}"
-    [[ ! -f "$file" ]] && return 1
+    local file="${1:-}" rc=0
+    [[ -n "$file" ]] || return 1
+    _toml_open "$file" || return $?
+    _tj_out=""
+    _tj_emit R || rc=$?
+    if (( rc != 0 )); then
+        printf 'toml: %s: %s\n' "$file" "$_tj_err" >&2
+        return 2
+    fi
+    printf '%s\n' "$_tj_out"
+}
 
-    local json="{"
-    local need_comma=0
-    local line clean_line
-    local -a stack=()
-    local -a seen=()
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        _toml_clean_into clean_line "$line"
-        [[ -z "$clean_line" ]] && continue
-
-        # Section header [section] or [section.subsection]
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
-            local new_section="${BASH_REMATCH[1]}"
-            if [[ "$new_section" == \"* || "$new_section" == \'* ]]; then
-                printf 'toml_to_json: %s: [%s] is a quoted section name, which nothing here can address\n' \
-                    "$file" "$new_section" >&2
-                return 1
-            fi
-            local -a parts=()
-            IFS='.' read -ra parts <<< "$new_section"
-
-            # How much of the path we are already inside. Only what differs
-            # gets closed, so a child section stays within its parent.
-            local common=0
-            while (( common < ${#stack[@]} && common < ${#parts[@]} )) \
-                  && [[ "${stack[$common]}" == "${parts[$common]}" ]]; do
-                common=$(( common + 1 ))
+# _tj_emit <node> -> the node appended to `_tj_out` as JSON
+_tj_emit() {
+    local node="$1" k i n first=1
+    case "${_TOML_T[$node]}" in
+        table)
+            _tj_out+="$_TOML_LB"
+            _toml_children "$node"
+            local -a keys=("${_tc_keys[@]}")
+            for k in "${keys[@]}"; do
+                (( first )) || _tj_out+=","
+                first=0
+                _json_string_into _tj_s "$k"
+                _tj_out+="${_tj_s}:"
+                _tj_emit "$node$_TOML_US$k" || return 1
             done
-
-            local i
-            for (( i = ${#stack[@]}; i > common; i-- )); do
-                json+="}"
-                unset 'stack[-1]'
-                need_comma=1
+            _tj_out+="$_TOML_RB" ;;
+        array|aot)
+            _tj_out+="["
+            n="${_TOML_N[$node]}"
+            for (( i = 0; i < n; i++ )); do
+                (( i )) && _tj_out+=","
+                _tj_emit "$node$_TOML_US$i" || return 1
             done
+            _tj_out+="]" ;;
+        str|dt)
+            _json_string_into _tj_s "${_TOML_V[$node]}"
+            _tj_out+="$_tj_s" ;;
+        int|float|bool)
+            _tj_out+="${_TOML_V[$node]}" ;;
+        inf)
+            _toml_node_show "$node"
+            _tj_err="${_tn_out} is ${_TOML_V[$node]}, and JSON has no inf or nan"
+            return 1 ;;
+        *)
+            _toml_node_show "$node"
+            _tj_err="${_tn_out} has no type JSON can take"
+            return 1 ;;
+    esac
+}
 
-            local path="" p
-            for (( i = 0; i < common; i++ )); do
-                path+="${path:+.}${stack[$i]}"
-            done
-            for (( i = common; i < ${#parts[@]}; i++ )); do
-                p="${parts[$i]}"
-                path+="${path:+.}${p}"
-                for prev in ${seen[@]+"${seen[@]}"}; do
-                    if [[ "$prev" == "$path" ]]; then
-                        printf 'toml_to_json: %s: section [%s] comes back to a part of the file already written\n' \
-                            "$file" "$new_section" >&2
-                        return 1
-                    fi
-                done
-                seen+=("$path")
-                [[ $need_comma -eq 1 ]] && json+=","
-                json+="$(_json_string "$p"):{"
-                need_comma=0
-                stack+=("$p")
-            done
-            continue
-        fi
-
-        # Key = value
-        if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
-            local key val
-            key="$(str_trim "${BASH_REMATCH[1]}")"
-            val="$(str_trim "${BASH_REMATCH[2]}")"
-
-            if [[ "$key" == \"* || "$key" == \'* ]]; then
-                printf 'toml_to_json: %s: %s is a quoted key, which nothing here can address\n' \
-                    "$file" "$key" >&2
-                return 1
-            fi
-
-            [[ $need_comma -eq 1 ]] && json+=","
-            need_comma=1
-
-            # Through the string writer, because a key is a string: a quoted
-            # key, or one with a quote in it, went in raw and the document was
-            # not JSON at all.
-            json+="$(_json_string "$key"):"
-            json+="$(_toml_value_to_json "$val")"
-        fi
-    done < "$file"
-
-    local i
-    for (( i = ${#stack[@]}; i > 0; i-- )); do
-        json+="}"
+# _json_string_into <name> <text> -> the text as a JSON string, written to <name>
+# Every control character is escaped, so the result is a JSON string whatever
+# the TOML string held.
+_json_string_into() {
+    local __js_s="$2" __js_c __js_o="" __js_hex
+    __js_s="${__js_s//\\/\\\\}"
+    __js_s="${__js_s//\"/\\\"}"
+    __js_s="${__js_s//$'\n'/\\n}"
+    __js_s="${__js_s//$'\r'/\\r}"
+    __js_s="${__js_s//$'\t'/\\t}"
+    __js_s="${__js_s//$'\b'/\\b}"
+    __js_s="${__js_s//$'\f'/\\f}"
+    local LC_ALL=C
+    while [[ "$__js_s" == *[$'\x01'-$'\x1f']* ]]; do
+        __js_o+="${__js_s%%[$'\x01'-$'\x1f']*}"
+        __js_s="${__js_s#"${__js_s%%[$'\x01'-$'\x1f']*}"}"
+        __js_c="${__js_s:0:1}"
+        printf -v __js_hex '\\u%04x' "'$__js_c"
+        __js_o+="$__js_hex"
+        __js_s="${__js_s:1}"
     done
-
-    json+="}"
-    echo "$json"
+    printf -v "$1" '"%s"' "$__js_o$__js_s"
 }
 
-# Internal: a string as JSON writes it, quotes included.
-#
-# JSON has its own escapes and they are not TOML's. A tab is a real tab by the
-# time it gets here and JSON will not take one raw inside a string.
+# _json_string <text> -> prints the text as a JSON string
 _json_string() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\n'/\\n}"
-    s="${s//$'\r'/\\r}"
-    s="${s//$'\t'/\\t}"
-    printf '"%s"' "$s"
-}
-
-# Internal: Convert a TOML value to JSON
-_toml_value_to_json() {
-    local val="$1"
-    
-    # Boolean
-    if [[ "$val" == "true" ]]; then
-        echo "true"
-        return
-    fi
-    if [[ "$val" == "false" ]]; then
-        echo "false"
-        return
-    fi
-    
-    # Integer
-    if [[ "$val" =~ ^-?[0-9]+$ ]]; then
-        echo "$val"
-        return
-    fi
-    
-    # Float
-    if [[ "$val" =~ ^-?[0-9]+\.[0-9]+$ ]]; then
-        echo "$val"
-        return
-    fi
-    
-    # Array
-    if [[ "$val" =~ ^\[.*\]$ ]]; then
-        local content="${val#\[}"
-        content="${content%]}"
-        content="$(str_trim "$content")"
-        
-        local json_arr="["
-        local first=1
-        local in_quotes=0
-        local item=""
-        local i char
-        
-        for ((i=0; i<${#content}; i++)); do
-            char="${content:$i:1}"
-            
-            if [[ "$char" == '"' ]]; then
-                ((in_quotes = 1 - in_quotes))
-                item+="$char"
-            elif [[ "$char" == ',' && $in_quotes -eq 0 ]]; then
-                item="$(str_trim "$item")"
-                if [[ -n "$item" ]]; then
-                    [[ $first -eq 0 ]] && json_arr+=","
-                    first=0
-                    json_arr+="$(_toml_value_to_json "$item")"
-                fi
-                item=""
-            else
-                item+="$char"
-            fi
-        done
-        
-        # Last item
-        item="$(str_trim "$item")"
-        if [[ -n "$item" ]]; then
-            [[ $first -eq 0 ]] && json_arr+=","
-            json_arr+="$(_toml_value_to_json "$item")"
-        fi
-        
-        json_arr+="]"
-        echo "$json_arr"
-        return
-    fi
-    
-    # Basic string. Its TOML escapes are decoded first: escaping the raw text
-    # again wrote `\"` as `\\\"`, so a value with a quote or a backslash in it
-    # came out of the conversion with the backslashes doubled.
-    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
-        _json_string "$(_toml_unescape "${BASH_REMATCH[1]}")"
-        printf '\n'
-        return
-    fi
-    
-    # Literal string, which has no escapes to decode.
-    if [[ "$val" =~ ^\'(.*)\'$ ]]; then
-        _json_string "${BASH_REMATCH[1]}"
-        printf '\n'
-        return
-    fi
-    
-    # Unquoted - treat as string
-    _json_string "$val"
-    printf '\n'
+    local s
+    _json_string_into s "$1"
+    printf '%s' "$s"
 }

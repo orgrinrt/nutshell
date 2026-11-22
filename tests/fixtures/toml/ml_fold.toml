@@ -1,0 +1,8 @@
+folded = """
+The quick \
+    brown \
+
+
+    fox."""
+kept = """a\\
+b"""

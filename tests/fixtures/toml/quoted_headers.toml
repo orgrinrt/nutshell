@@ -1,0 +1,8 @@
+[ "quoted sect" ]
+k = 1
+
+[a."b.c".d]
+k = 3
+
+[ 'lit sect' ]
+k = 4

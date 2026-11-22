@@ -1,126 +1,123 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # =============================================================================
 # nutshell/toml/write.sh - Changing a TOML file without rewriting it
 # =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Reading TOML and editing TOML are different jobs and they live apart. The
-# reader parses; this one leaves the file alone except for the line it came
-# for.
+# Reading TOML and editing TOML are different jobs and they live apart, but
+# there is one grammar. The writer asks the reader's tree where a key sits, in
+# lines, and edits those lines and nothing else. Where the tree cannot vouch
+# for a key being on lines of its own, the edit is refused with rc 2.
 # =============================================================================
 
-# A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and uses
-# `printf -v`. A file on the floor cannot depend on a bash-only function to
-# decide whether it has been loaded: under a POSIX shell `nut_once` is not
-# found, the `|| return 0` returns from the whole file, and the module then
-# defines nothing while reporting success.
+# A guard of its own rather than `nut_once`, for the same reason as every file
+# of the module.
 [ -n "${_NUTSHELL_TOML_WRITE_SH:-}" ] && return 0
 _NUTSHELL_TOML_WRITE_SH=1
 
 # `str_replace` with an out-name, for the escaping below. This file carried its
 # own copy of that loop, as did `json.sh` and `extern.sh`; one of the three then
 # diverged and shipped an injection hole that the other two did not have.
-use string
+use string super::toml super::toml::impl::bash_path
 
-# The control characters a basic string escapes, as themselves. Built once,
-# because there is no `$'\n'` here to write one inline with. The trailing `.`
-# is because command substitution strips trailing newlines and the newline is
-# the one that matters most.
-_TW_NL="$(printf '\n.')"; _TW_NL="${_TW_NL%.}"
-_TW_CR="$(printf '\r.')"; _TW_CR="${_TW_CR%.}"
-_TW_TAB="$(printf '\t.')"; _TW_TAB="${_TW_TAB%.}"
-_TW_BS="$(printf '\b.')"; _TW_BS="${_TW_BS%.}"
-_TW_FF="$(printf '\f.')"; _TW_FF="${_TW_FF%.}"
+# The control characters a basic string escapes, as themselves.
+_TW_NL=$'\n'
+_TW_CR=$'\r'
+_TW_TAB=$'\t'
+_TW_BS=$'\b'
+_TW_FF=$'\f'
 
-# Leading, then trailing, whitespace off a string, into `_tw_s`.
+# _tw_place <file> <key> <verb> -> where the key goes, or rc 2 and why
 #
-# One character at a time because POSIX parameter expansion has no repetition
-# and there is no `[[:space:]]*` to anchor against. Both `[[ ]]` regexes this
-# replaced trimmed spaces and tabs only, which is what this trims.
-_tw_trim() {
-    _tw_s="$1"
-    while :; do
-        case "$_tw_s" in
-            " "*|"${_TW_TAB}"*) _tw_s="${_tw_s#?}" ;;
-            *) break ;;
+# Reads the file through the reader and walks the key's path in its tree. Sets
+# `_tw_node`, the key's node, `_tw_parent`, the table it goes in, `_tw_leaf`,
+# its last segment as TOML spells it, and `_tw_head`, the header to open when
+# the table has no part of the file to add to. The key is not there when
+# `_tw_node` is empty. rc 1 for a key the path language cannot
+# read.
+#
+# Refused, because one line cannot change it without breaking the file:
+#   a key inside an array of tables, where a header names every element at
+#     once and a line names one;
+#   a key inside an inline table, which is one value on one line;
+#   a key a dotted key made, or one in a table a dotted key made, which is not
+#     on a line of its own and whose table a header would define twice;
+#   a key whose path runs into a value or an array.
+_tw_place() {
+    local file="$1" key="$2" verb="$3" node=R seg t i last shown="" whole=""
+    _toml_open "$file" || return $?
+    _toml_path_split "$key" || return 1
+    last=$(( ${#_tp_pseg[@]} - 1 ))
+    for (( i = 0; i < last; i++ )); do
+        _toml_seg_show "${_tp_pseg[i]}"; whole+="${whole:+.}${_ts_out}"
+    done
+    # Down the tree as far as it goes. Where it stops, the rest is new.
+    for (( i = 0; i < last; i++ )); do
+        seg="$node$_TOML_US${_tp_pseg[i]}"
+        t="${_TOML_T[$seg]-}"
+        [[ -n "$t" ]] || break
+        _toml_seg_show "${_tp_pseg[i]}"; shown+="${shown:+.}${_ts_out}"
+        case "$t" in
+            table) node="$seg" ;;
+            aot)   _tw_deny "it is inside the array of tables [[$shown]]"; return 2 ;;
+            *)     _tw_deny "$shown is a value, not a table"; return 2 ;;
         esac
     done
-    while :; do
-        case "$_tw_s" in
-            *" "|*"${_TW_TAB}") _tw_s="${_tw_s%?}" ;;
-            *) break ;;
-        esac
-    done
-}
-
-# The name inside a `[section]` header, into the named variable. Fails when the
-# line is not one.
-#
-# The regex this replaced was `^[[:space:]]*\[(.+)\][[:space:]]*$`, and `.+` is
-# greedy: `[a][b]` captured `a][b`. Taking everything between the first `[` and
-# the last `]` keeps that, which matters because the reader does the same and
-# the two have to agree about what a header is.
-_tw_header_of() {
-    _tw_trim "$1"
-    case "$_tw_s" in
-        "["*"]") ;;
-        *) return 1 ;;
+    if [[ "${_TOML_F[$node]-}" == *X* ]]; then
+        _tw_deny "it is inside the inline table $shown"; return 2
+    fi
+    _tw_head="" _tw_parent="$node"
+    _toml_seg_show "${_tp_pseg[last]}"; _tw_leaf="$_ts_out"
+    _tw_node=""
+    if (( i < last )); then
+        _tw_head="$whole"
+        return 0
+    fi
+    if [[ "$node" != R && "${_TOML_F[$node]}" != *[hi]* ]]; then
+        _tw_deny "a dotted key, $shown, defines it or a table above it"; return 2
+    fi
+    [[ "$node" == R || -n "${_TOML_E[$node]+x}" ]] || _tw_head="$whole"
+    seg="$node$_TOML_US${_tp_pseg[last]}"
+    [[ -n "${_TOML_T[$seg]-}" ]] || return 0
+    case "${_TOML_W[$seg]-}" in
+        '')    _tw_deny "it is a table, not a value"; return 2 ;;
+        *' '1) _tw_node="$seg" ;;
+        *)     _tw_deny "a dotted key defines it, not a line of its own"; return 2 ;;
     esac
-    _tw_s="${_tw_s#"["}"
-    _tw_s="${_tw_s%"]"}"
-    # `.+` needs at least one character, so `[]` is not a header.
-    [ -n "$_tw_s" ] || return 1
-    eval "$2=\$_tw_s"
-    return 0
 }
 
-# Whether a line assigns the given leaf key: optional indent, the name,
-# optional space, `=`.
-_tw_is_key() {
-    _tw_trim "$1"
-    case "$_tw_s" in
-        "$2"*) ;;
-        *) return 1 ;;
-    esac
-    _tw_s="${_tw_s#"$2"}"
-    while :; do
-        case "$_tw_s" in
-            " "*|"${_TW_TAB}"*) _tw_s="${_tw_s#?}" ;;
-            *) break ;;
-        esac
-    done
-    case "$_tw_s" in "="*) return 0 ;; esac
-    return 1
+_tw_deny() {
+    printf 'toml: %s: cannot %s %s: %s\n' "$file" "$verb" "$key" "$1" >&2
 }
 
-# Whether a line carries anything that is not a space.
+# _tw_out <file> -> `_tw_lines` written to the file, through a rename
 #
-# `[[ -n "${line// }" ]]` stripped spaces only, so a line of tabs counted as
-# carrying something. This keeps that rather than tidying it, because the
-# position an appended key lands at depends on it.
-_tw_has_content() {
-    case "$1" in *[!" "]*) return 0 ;; esac
-    return 1
+# Renamed into place, so a reader never sees a half-written file and a crash
+# partway leaves the original intact.
+_tw_out() {
+    local tmp
+    tmp="$(mktemp "$1.XXXXXX")" || return 1
+    if (( ${#_tw_lines[@]} )); then
+        printf '%s\n' "${_tw_lines[@]}" > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    mv -f "$tmp" "$1" || { rm -f "$tmp"; return 1; }
 }
 
-# A run of digits, with an optional leading minus, and at least one digit.
-_tw_is_int() {
-    _tw_v="${1#-}"
-    [ -n "$_tw_v" ] || return 1
-    case "$_tw_v" in *[!0-9]*) return 1 ;; esac
-    return 0
-}
-
-# The same with exactly one dot, and digits on both sides of it.
-_tw_is_float() {
-    _tw_v="${1#-}"
-    case "$_tw_v" in *.*) ;; *) return 1 ;; esac
-    _tw_i="${_tw_v%%.*}"; _tw_f="${_tw_v#*.}"
-    [ -n "$_tw_i" ] && [ -n "$_tw_f" ] || return 1
-    case "$_tw_f" in *.*) return 1 ;; esac
-    case "${_tw_i}${_tw_f}" in *[!0-9]*) return 1 ;; esac
-    return 0
+# _tw_edit <first> <last> [line] -> `_tw_lines` with lines <first> to <last>
+# swapped for the line, or dropped without one; <last> one before <first> puts
+# the line in between. The new line ends in `\r` where the one before it does,
+# and the file's BOM stays at the head of the file.
+_tw_edit() {
+    local a="$1" b="$2" new=("${@:3}") bom=$'\xef\xbb\xbf'
+    if (( ${#new[@]} && b >= 0 )); then
+        [[ "${_tw_lines[b]}" == *$'\r' ]] && new[0]+=$'\r'
+    fi
+    if (( a == 0 && ${#new[@]} )) && [[ "${_tw_lines[0]-}" == "$bom"* ]]; then
+        _tw_lines[0]="${_tw_lines[0]#"$bom"}"
+        new[0]="$bom${new[0]}"
+    fi
+    _tw_lines=("${_tw_lines[@]:0:a}" "${new[@]}" "${_tw_lines[@]:b+1}")
 }
 
 #[pub]
@@ -132,126 +129,31 @@ _tw_is_float() {
 # away the first time anything saves. So: find the line, change the line, and
 # touch nothing else.
 #
-# A key with no section is a key before the first `[header]`, and only there. A
-# key in a section that does not exist yet gets the section appended. A key that
-# is not there gets appended inside its own section, after the last line that
-# belongs to it, rather than at the end of the file where it would land in
-# somebody else's.
+# The key is a path, the same as `toml_get` takes. A key that is there has its
+# value replaced, over every line the value spans, and keeps its indent, its
+# spelling and its comment. A key that is not there goes in after the last line
+# of its table's part of the file, so a root key lands above the first header;
+# a table with no part of its own gets a header at the end.
 #
-# Usage: toml_set "file.toml" "section.key" "value"
+# Usage: toml_set "file.toml" "section.key" "value" -> returns 2 for a shape one line cannot change
 toml_set() {
-    _tws_file="$1"; _tws_key="$2"; _tws_value="$3"
-    [ -n "$_tws_file" ] && [ -n "$_tws_key" ] || return 1
-
-    _tws_section=""; _tws_leaf="$_tws_key"
-    case "$_tws_key" in
-        *.*) _tws_section="${_tws_key%.*}"; _tws_leaf="${_tws_key##*.}" ;;
-    esac
-
-    _tws_written="$(_toml_write_value "$_tws_value")"
-
-    [ -f "$_tws_file" ] || { printf '' > "$_tws_file" 2>/dev/null || return 1; }
-
-    _tws_tmp="$(mktemp)" || return 1
-    _tws_in_section=0; _tws_done_it=0; _tws_last_in_section=0; _tws_line=""; _tws_n=0; _tws_seen_section=0
-    _tws_hdr=""
-
-    # One pass to find where the key's own part of the file ends, so an appended
-    # key lands inside it rather than at the end of the file. A section with
-    # nothing in it ends at its own header, which is why the header line counts.
-    #
-    # Root is a part of the file like any other: it runs from the first line to
-    # the line before the first header. `last_in_section` of 0 means it is empty,
-    # which for root means the file opens with a header and the new key goes
-    # above it.
-    if [ -n "$_tws_section" ]; then
-        while IFS= read -r _tws_line || [ -n "$_tws_line" ]; do
-            _tws_n=$(( _tws_n + 1 ))
-            if _tw_header_of "$_tws_line" _tws_hdr; then
-                if [ "$_tws_hdr" = "$_tws_section" ]; then
-                    _tws_in_section=1; _tws_seen_section=1; _tws_last_in_section="$_tws_n"
-                else
-                    _tws_in_section=0
-                fi
-                continue
-            fi
-            if [ "$_tws_in_section" -eq 1 ] && _tw_has_content "$_tws_line"; then
-                _tws_last_in_section="$_tws_n"
-            fi
-        done < "$_tws_file"
+    local file="${1:-}" key="${2:-}" value="${3-}" verb=set written span e
+    [[ -n "$file" && -n "$key" ]] || return 1
+    [[ -f "$file" ]] || { : > "$file" 2>/dev/null || return 1; }
+    _tw_place "$file" "$key" set || return $?
+    written="$(_toml_write_value "$value")"
+    mapfile -t _tw_lines < "$file"
+    if [[ -n "$_tw_node" ]]; then
+        read -r -a span <<< "${_TOML_W[$_tw_node]}"
+        _tw_edit "${span[0]}" "${span[1]}" "${_TOML_P[$_tw_node]}${written}${_TOML_C[$_tw_node]}"
+    elif [[ -z "$_tw_head" ]]; then
+        e="${_TOML_E[$_tw_parent]}"
+        _tw_edit $(( e + 1 )) "$e" "${_tw_leaf} = ${written}"
     else
-        _tws_seen_section=1
-        while IFS= read -r _tws_line || [ -n "$_tws_line" ]; do
-            _tws_n=$(( _tws_n + 1 ))
-            _tw_header_of "$_tws_line" _tws_hdr && break
-            _tw_has_content "$_tws_line" && _tws_last_in_section="$_tws_n"
-        done < "$_tws_file"
+        (( ${#_tw_lines[@]} )) && _tw_lines+=("")
+        _tw_lines+=("[${_tw_head}]" "${_tw_leaf} = ${written}")
     fi
-
-    # Root is a place, not the absence of one: everything before the first
-    # header. Reading it as "no section is open" made a root key match the first
-    # section that happened to have a key by that name, so `toml_set f name x`
-    # rewrote `[a] name` and `toml_get f name` then found nothing.
-    _tws_at_root=1
-    _tws_in_section=0; _tws_n=0
-
-    # The file opens with a header and the key belongs above it.
-    if [ "$_tws_done_it" -eq 0 ] && [ -z "$_tws_section" ] && [ "$_tws_last_in_section" -eq 0 ]; then
-        printf '%s = %s\n' "$_tws_leaf" "$_tws_written" >> "$_tws_tmp"
-        _tws_done_it=1
-    fi
-
-    while IFS= read -r _tws_line || [ -n "$_tws_line" ]; do
-        _tws_n=$(( _tws_n + 1 ))
-        if _tw_header_of "$_tws_line" _tws_hdr; then
-            _tws_at_root=0
-            _tws_in_section=0
-            [ "$_tws_hdr" = "$_tws_section" ] && _tws_in_section=1
-            printf '%s\n' "$_tws_line" >> "$_tws_tmp"
-            # An empty section ends at its header, so the append has to be
-            # possible here too.
-            if [ "$_tws_done_it" -eq 0 ] && [ -n "$_tws_section" ] && [ "$_tws_n" -eq "$_tws_last_in_section" ]; then
-                printf '%s = %s\n' "$_tws_leaf" "$_tws_written" >> "$_tws_tmp"
-                _tws_done_it=1
-            fi
-            continue
-        fi
-
-        # The key itself, in the right place, replaced so its comment and its
-        # neighbours survive.
-        _tw_here=0
-        if [ -z "$_tws_section" ] && [ "$_tws_at_root" -eq 1 ]; then
-            _tw_here=1
-        elif [ "$_tws_in_section" -eq 1 ]; then
-            _tw_here=1
-        fi
-        if [ "$_tws_done_it" -eq 0 ] && [ "$_tw_here" -eq 1 ] && _tw_is_key "$_tws_line" "$_tws_leaf"; then
-            printf '%s = %s\n' "$_tws_leaf" "$_tws_written" >> "$_tws_tmp"
-            _tws_done_it=1
-            continue
-        fi
-
-        printf '%s\n' "$_tws_line" >> "$_tws_tmp"
-
-        # Not there, but its part of the file is: append where that part ends.
-        if [ "$_tws_done_it" -eq 0 ] && [ "$_tws_n" -eq "$_tws_last_in_section" ]; then
-            printf '%s = %s\n' "$_tws_leaf" "$_tws_written" >> "$_tws_tmp"
-            _tws_done_it=1
-        fi
-    done < "$_tws_file"
-
-    if [ "$_tws_done_it" -eq 0 ]; then
-        if [ -n "$_tws_section" ] && [ "$_tws_seen_section" -eq 0 ]; then
-            [ -s "$_tws_tmp" ] && printf '\n' >> "$_tws_tmp"
-            printf '[%s]\n' "$_tws_section" >> "$_tws_tmp"
-        fi
-        printf '%s = %s\n' "$_tws_leaf" "$_tws_written" >> "$_tws_tmp"
-    fi
-
-    # Renamed into place, so a reader never sees a half-written file and a
-    # crash partway leaves the original intact.
-    mv -f "$_tws_tmp" "$_tws_file" || { rm -f "$_tws_tmp"; return 1; }
-    return 0
+    _tw_out "$file"
 }
 
 # A value as TOML writes it.
@@ -262,61 +164,38 @@ toml_set() {
 # longer parses at all, which loses every other key in it rather than the one
 # being written.
 _toml_write_value() {
-    _twv="$1"
-    if _tw_is_int "$_twv" || _tw_is_float "$_twv"; then
-        printf '%s' "$_twv"; return 0
+    local v="$1" esc
+    if [[ "$v" =~ ^-?[0-9]+$ || "$v" =~ ^-?[0-9]+\.[0-9]+$ ]]; then
+        printf '%s' "$v"; return 0
     fi
-    case "$_twv" in
-        true|false) printf '%s' "$_twv"; return 0 ;;
-        "["*"]")    printf '%s' "$_twv"; return 0 ;;
+    case "$v" in
+        true|false) printf '%s' "$v"; return 0 ;;
+        "["*"]")    printf '%s' "$v"; return 0 ;;
     esac
     # Backslash first. Any other order escapes the backslashes this step adds.
-    str_replace "$_twv" '\' '\\' _twv_esc
-    str_replace "$_twv_esc" '"' '\"' _twv_esc
-    str_replace "$_twv_esc" "$_TW_NL" '\n' _twv_esc
-    str_replace "$_twv_esc" "$_TW_CR" '\r' _twv_esc
-    str_replace "$_twv_esc" "$_TW_TAB" '\t' _twv_esc
-    str_replace "$_twv_esc" "$_TW_BS" '\b' _twv_esc
-    str_replace "$_twv_esc" "$_TW_FF" '\f' _twv_esc
-    printf '"%s"' "$_twv_esc"
+    str_replace "$v" '\' '\\' esc
+    str_replace "$esc" '"' '\"' esc
+    str_replace "$esc" "$_TW_NL" '\n' esc
+    str_replace "$esc" "$_TW_CR" '\r' esc
+    str_replace "$esc" "$_TW_TAB" '\t' esc
+    str_replace "$esc" "$_TW_BS" '\b' esc
+    str_replace "$esc" "$_TW_FF" '\f' esc
+    printf '"%s"' "$esc"
 }
 
 #[pub]
 # Remove a key, leaving everything else alone.
 #
-# A key with no section means one before the first `[header]`. Reading that as
-# "no section is open" deleted the key from every section in the file.
-# Usage: toml_unset "file.toml" "section.key"
+# The key is a path, as for `toml_set`. Every line its value spans goes, and
+# nothing else. A key that is not there leaves the file as it was.
+# Usage: toml_unset "file.toml" "section.key" -> returns 2 for a shape one line cannot change
 toml_unset() {
-    _twu_file="$1"; _twu_key="$2"
-    [ -f "$_twu_file" ] && [ -n "$_twu_key" ] || return 1
-
-    _twu_section=""; _twu_leaf="$_twu_key"
-    case "$_twu_key" in
-        *.*) _twu_section="${_twu_key%.*}"; _twu_leaf="${_twu_key##*.}" ;;
-    esac
-
-    _twu_tmp="$(mktemp)" || return 1
-    _twu_in_section=0; _twu_at_root=1; _twu_line=""; _twu_hdr=""
-    while IFS= read -r _twu_line || [ -n "$_twu_line" ]; do
-        if _tw_header_of "$_twu_line" _twu_hdr; then
-            _twu_at_root=0
-            _twu_in_section=0
-            [ "$_twu_hdr" = "$_twu_section" ] && _twu_in_section=1
-            printf '%s\n' "$_twu_line" >> "$_twu_tmp"; continue
-        fi
-        _tw_here=0
-        if [ -z "$_twu_section" ] && [ "$_twu_at_root" -eq 1 ]; then
-            _tw_here=1
-        elif [ "$_twu_in_section" -eq 1 ]; then
-            _tw_here=1
-        fi
-        if [ "$_tw_here" -eq 1 ] && _tw_is_key "$_twu_line" "$_twu_leaf"; then
-            continue
-        fi
-        printf '%s\n' "$_twu_line" >> "$_twu_tmp"
-    done < "$_twu_file"
-
-    mv -f "$_twu_tmp" "$_twu_file" || { rm -f "$_twu_tmp"; return 1; }
-    return 0
+    local file="${1:-}" key="${2:-}" verb=unset span
+    [[ -f "$file" && -n "$key" ]] || return 1
+    _tw_place "$file" "$key" unset || return $?
+    [[ -n "$_tw_node" ]] || return 0
+    mapfile -t _tw_lines < "$file"
+    read -r -a span <<< "${_TOML_W[$_tw_node]}"
+    _tw_edit "${span[0]}" "${span[1]}"
+    _tw_out "$file"
 }

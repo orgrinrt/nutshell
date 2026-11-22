@@ -32,8 +32,20 @@ _nut_resolve() {
         deps)
             { printf '%s' "$_nr_root/lib/deps.sh"; return 0; }
             ;;
+        deps::config)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'deps::config' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/deps/config.sh"; return 0; }
+            ;;
         deps::pins)
             { printf '%s' "$_nr_root/lib/deps/pins.sh"; return 0; }
+            ;;
+        deps::probe)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'deps::probe' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/deps/probe.sh"; return 0; }
+            ;;
+        deps::state)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'deps::state' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/deps/state.sh"; return 0; }
+            ;;
+        deps::variants)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'deps::variants' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/deps/variants.sh"; return 0; }
             ;;
         extern)
             { printf '%s' "$_nr_root/lib/extern.sh"; return 0; }

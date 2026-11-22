@@ -5,20 +5,17 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-#[allow(loc = 450)]
-# Layer -1 (Foundation): Depends only on os.sh and key.sh
+# Layer -1 (Foundation): Depends only on os.sh and key.sh. Its parts are
+# `lib/deps/`: the tables, the variants, the manifest and the capabilities, which
+# call nothing here; this file is the API.
 #
 # This module detects what external tools are available and collects
 # information about them (paths, variants, capabilities). It does NOT
 # decide which tool is "best" for any operation; that's the job of
 # the module that actually uses the tool.
 #
-# Detection runs once when this file is sourced. Results are cached
-# in readonly variables for fast access.
-#
-# Tools detected:
-#   sed, awk, grep, perl, stat, mktemp, find, sort, wc, tr,
-#   head, tail, dirname, basename, uname, cut, tee, xargs
+# A tool is looked for the first time it is asked about, and the answer is kept
+# in plain variables, one per entry.
 #
 # Configuration:
 #   Tool paths can be overridden in nut.toml under [deps.paths]:
@@ -43,42 +40,9 @@ _NUTSHELL_DEPS_SH=1
 # dependency was real and unrecorded at once.
 use os key
 
-# No tool is pinned until `deps::pins` replaces these, and that file is bash: a
-# POSIX shell refuses it at parse time, and a `use` of it here would take every
-# closure that holds `deps` off the POSIX floor. The entry point loads it, so
-# a script run by `nutshell` has its pins read and a lowered artifact, which is
-# run without the interpreter, has none. Either way `deps` resolves every tool.
-command -v _deps_pin_get >/dev/null 2>&1 || _deps_pin_get() { _DEPS_PIN=""; return 1; }
-command -v _deps_pin_check >/dev/null 2>&1 || _deps_pin_check() { return 0; }
-
-# -----------------------------------------------------------------------------
-# Configuration file location
-# -----------------------------------------------------------------------------
-
-# Find nut.toml, walking up from the unit that is running, the way `extern`
-# finds a script's manifest: the asking file, the entry point, then the working
-# directory, each searched upward. A script's tool paths belong to the script,
-# so one run against another repository still reads its own `[deps.paths]`.
-# Nutshell's own manifest is the last resort.
-_deps_find_config() {
-    local start dir
-    for start in "${_NUT_ASKING_FROM:-}" "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
-        [ -n "$start" ] || continue
-        dir="$start"
-        while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-            if [ -f "${dir}/nut.toml" ]; then
-                printf '%s\n' "${dir}/nut.toml"
-                return 0
-            fi
-            case "$dir" in */*) dir="${dir%/*}" ;; *) break ;; esac
-        done
-    done
-    if [ -n "${NUTSHELL_ROOT:-}" ] && [ -f "${NUTSHELL_ROOT}/nut.toml" ]; then
-        printf '%s\n' "${NUTSHELL_ROOT}/nut.toml"
-        return 0
-    fi
-    return 1
-}
+# The rest of the module, split by concern, loaded ahead of what this file runs
+# when it is sourced.
+use super::deps::state super::deps::variants super::deps::config super::deps::probe
 
 # The manifest follows the unit that is running, and the entry point is only
 # known once the interpreter has set it: a module loaded earlier than that sees
@@ -96,302 +60,16 @@ _deps_sync_config() {
     [ "$_DEPS_CONFIG" != "$old" ] || return 0
     for _k in $_DEPS_SEEN; do eval "unset _TOOL_MISSING_${_k}"; done
     [ -n "$_DEPS_CONFIG" ] || return 0
-    _deps_pin_check "$_DEPS_CONFIG"
+    _deps_pin_verify "$_DEPS_CONFIG"
     local list="$_TOOLS_AVAILABLE"
     for t in $list; do
-        _rc=0; _deps_pin_get "$_DEPS_CONFIG" "$t" >/dev/null 2>&1 || _rc=$?
+        _rc=0; _deps_pin "$_DEPS_CONFIG" "$t" >/dev/null 2>&1 || _rc=$?
         [ "$_rc" -eq 1 ] && continue
         _deps_unlearn "$t"
         deps_has "$t" >/dev/null 2>&1 || true
         _deps_drop_caps
     done
 }
-
-# -----------------------------------------------------------------------------
-# Global state - populated by _deps_init
-# -----------------------------------------------------------------------------
-
-# Space-separated list of available tools.
-_TOOLS_AVAILABLE=""
-
-# One variable per entry rather than four associative arrays.
-#
-# `_TOOL_PATH_sed` holds sed's path, `_TOOL_VARIANT_sed` its variant,
-# `_TOOL_CAN_sed_inplace` whether that capability is present, and
-# `_TOOL_MISSING_jq` marks a tool looked for and not found.
-#
-# Every read of these outside this module names the tool literally:
-# `${_TOOL_PATH_jq}`, `${_TOOL_PATH_curl}`. A literal name is a plain
-# expansion, so the fifteen modules reading them pay nothing at all for the
-# change, and four files' worth of array syntax leaves the floor.
-#
-# Writing needs an `eval`, once per tool at resolution and never on a read.
-# Names go through `_deps_name_ok` first, because `deps_has` takes whatever a
-# caller hands it and that value now reaches `eval`.
-#
-# Capability names are kept in a list because `deps_caps` has to report what is
-# set, and there is no `${!table[@]}` to ask any more.
-_TOOL_CAN_NAMES=""
-
-# The key encoder lives in `key.sh` now, because it was never about tools: it
-# turns any string into the tail of a variable name, and `use` needs the same
-# thing for its loaded table. `_deps_key` here is the old spelling, kept as one
-# line so the sixteen call sites below do not all have to change at once.
-_deps_key() { nut_key "$1" || return 1; _dk="$_nk"; return 0; }
-
-# _deps_set_variant <tool> <path>
-#
-# Which flavour of a tool this is, recorded where the dispatchers look. It was
-# inline in the eager scan and is a function because `deps_has` resolves a tool
-# too, and a tool resolved that way had no variant at all: `fs.sh` reads
-# `${_TOOL_VARIANT_stat:-unknown}` and takes a `uname` guess when it is empty,
-# so a lazily resolved `stat` silently took the fallback path.
-_deps_set_variant() {
-    case "$1" in
-        sed)  _deps_set VARIANT "$1" "$(_deps_detect_sed_variant "$2")" ;;
-        awk)  _deps_set VARIANT "$1" "$(_deps_detect_awk_variant "$2")" ;;
-        grep) _deps_set VARIANT "$1" "$(_deps_detect_grep_variant "$2")" ;;
-        stat) _deps_set VARIANT "$1" "$(_deps_detect_stat_variant "$2")" ;;
-        find) _deps_set VARIANT "$1" "$(_deps_detect_find_variant "$2")" ;;
-        yq)    _deps_set VARIANT "$1" "$(_deps_detect_yq_variant "$2")" ;;
-        taplo) _deps_set VARIANT "$1" "$(_deps_detect_taplo_variant "$2")" ;;
-        *)    _deps_set VARIANT "$1" standard ;;
-    esac
-}
-
-# _deps_get <destvar> <table> <name>
-#
-# Reads one entry into a variable rather than printing it, so a read costs no
-# subshell. Callers outside this module skip it entirely where the name is a
-# literal and expand `${_TOOL_PATH_jq}` directly.
-_deps_get() {
-    _deps_key "$3" || { eval "$1=''"; return 1; }
-    eval "$1=\"\${_TOOL_$2_${_dk}:-}\""
-}
-
-# _deps_set <table> <name> <value>
-_deps_set() {
-    _deps_key "$2" || return 1
-    eval "_TOOL_$1_${_dk}=\$3"
-    # Every tool asked about, found or not, so `deps_forget` can find them again.
-    case "$1" in PATH|MISSING)
-        case " $_DEPS_SEEN " in *" $_dk "*) : ;; *) _DEPS_SEEN="${_DEPS_SEEN} ${_dk}" ;; esac ;;
-    esac
-}
-
-# Encoded keys of every tool that has an entry, space separated.
-_DEPS_SEEN=""
-
-# _deps_can_set <capability> <0|1>
-#
-# Records the name as well as the value. A fixed list of every capability this
-# module knows would report the unset ones as zero, which is a different answer
-# than `deps_caps` used to give: it listed what had been set, and an absent
-# capability was absent rather than false.
-_deps_can_set() {
-    # A capability name has to be a variable name already, and every one this
-    # module has is an internal literal like `grep_pcre`. It is not encoded,
-    # because `_TOOL_CAN_NAMES` is a space-separated list and `deps_caps`
-    # splits it: an encoded name and a raw one in the same list disagree the
-    # moment either holds a space, and `deps_caps` then emits two rows with
-    # empty values. Tools are caller-supplied and get encoded; capabilities are
-    # ours and get refused.
-    case "${1:-}" in
-        "" | *[!A-Za-z0-9_]* | [0-9]* ) return 1 ;;
-    esac
-    _dk="$1"
-    case " $_TOOL_CAN_NAMES " in
-        *" $1 "*) : ;;
-        *) _TOOL_CAN_NAMES="${_TOOL_CAN_NAMES} $1" ;;
-    esac
-    eval "_TOOL_CAN_${_dk}=\$2"
-}
-
-# The config file and what it was derived from (see `_deps_sync_config`).
-_DEPS_CONFIG=""
-_DEPS_CONFIG_KEY=""
-
-# -----------------------------------------------------------------------------
-# Internal: Path resolution
-# -----------------------------------------------------------------------------
-
-# Find tool path using resolution order:
-# 1. User config (nut.toml [deps.paths])
-# 2. which (if available)
-# 3. Common locations, verified for executability
-#
-# Returns 1 for a tool that is not there and 2 for an entry in `[deps.paths]`
-# that names something which is not an executable file. The second is a fault
-# in the manifest, said once on stderr, and it never falls through to PATH: an
-# override that silently pins nothing is worse than having none.
-_deps_find_tool() {
-    local tool="$1"
-    local config_file="$2"
-
-    # 1. Check user config first
-    if [ -n "$config_file" ]; then
-        local user_path rc=0
-        _deps_pin_get "$config_file" "$tool" || rc=$?
-        [ "$rc" -eq 2 ] && return 2
-        if [ "$rc" -eq 0 ]; then
-            user_path="$_DEPS_PIN"
-            if [ -f "$user_path" ] && [ -x "$user_path" ]; then
-                echo "$user_path"
-                return 0
-            fi
-            printf '[ERROR] deps: [deps.paths] %s = "%s" is not an executable file (%s)\n' \
-                "$tool" "$user_path" "$config_file" >&2
-            return 2
-        fi
-    fi
-    
-    # 2. Try which if available (using command -v to check for which itself)
-    if command -v which >/dev/null 2>&1; then
-        local found
-        found="$(which "$tool" 2>/dev/null)"
-        if [ -n "$found" ] && [ -x "$found" ]; then
-            echo "$found"
-            return 0
-        fi
-    fi
-    
-    # 3. Check common locations
-    # The prefixes rather than the joined paths, so the list is words with no
-    # spaces in any of them and splitting it is safe. A tool name with a space
-    # in it is not a tool name.
-    local dir
-    for dir in /usr/bin /bin /usr/local/bin /opt/homebrew/bin; do
-        if [ -x "${dir}/${tool}" ]; then
-            echo "${dir}/${tool}"
-            return 0
-        fi
-    done
-    
-    # Not found
-    return 1
-}
-
-# -----------------------------------------------------------------------------
-# Internal: Variant detection
-# -----------------------------------------------------------------------------
-
-# A probe never reads stdin.
-#
-# Detection runs a tool with a flag it may not recognise, and a tool given an
-# unrecognised flag can fall back to reading a program or a file from standard
-# input. When standard input is a terminal, or a pipe nothing ever closes, the
-# probe waits there forever and the whole script appears to hang after having
-# already printed its output. Closing stdin costs nothing and removes the class.
-_deps_detect_sed_variant() {
-    local cmd="$1"
-    
-    # GNU sed has --version
-    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
-        echo "gnu"
-        return
-    fi
-    
-    # BSD sed errors on --version
-    if "$cmd" --version </dev/null 2>&1 | grep -qE "(illegal|invalid) option"; then
-        echo "bsd"
-        return
-    fi
-    
-    echo "unknown"
-}
-
-_deps_detect_awk_variant() {
-    local cmd="$1"
-    
-    # GNU awk (gawk)
-    if "$cmd" --version </dev/null 2>/dev/null | grep -qi "GNU Awk"; then
-        echo "gawk"
-        return
-    fi
-    
-    # mawk
-    if "$cmd" -W version </dev/null 2>/dev/null | grep -qi "mawk"; then
-        echo "mawk"
-        return
-    fi
-    
-    # nawk (check binary name as fallback)
-    if [ "$(basename "$cmd")" = "nawk" ]; then
-        echo "nawk"
-        return
-    fi
-    
-    # Assume BSD/POSIX awk
-    echo "bsd"
-}
-
-_deps_detect_grep_variant() {
-    local cmd="$1"
-    
-    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
-        echo "gnu"
-        return
-    fi
-    
-    echo "bsd"
-}
-
-_deps_detect_stat_variant() {
-    local cmd="$1"
-    
-    # GNU stat has --version
-    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
-        echo "gnu"
-        return
-    fi
-    
-    # BSD stat uses -f for format
-    if "$cmd" -f%z / </dev/null 2>/dev/null >/dev/null; then
-        echo "bsd"
-        return
-    fi
-    
-    echo "unknown"
-}
-
-_deps_detect_find_variant() {
-    local cmd="$1"
-    
-    if "$cmd" --version </dev/null 2>/dev/null | grep -q "GNU"; then
-        echo "gnu"
-        return
-    fi
-
-    echo "bsd"
-}
-
-# Two programs are called `yq`: mikefarah's, a Go binary that reads TOML, and the
-# python wrapper over jq, which does not. The name cannot tell them apart, so
-# the binary is asked. Only `mikefarah` counts for TOML.
-_deps_detect_yq_variant() {
-    local out
-    out="$("$1" --version </dev/null 2>&1)" || { echo "unknown"; return; }
-    case "$out" in
-        '')              echo "unknown" ;;
-        *mikefarah/yq*)  echo "mikefarah" ;;
-        *)               echo "python" ;;
-    esac
-}
-
-# `taplo` is taplo-cli when it says so, and anything else answering to the name
-# is not known.
-_deps_detect_taplo_variant() {
-    local out
-    out="$("$1" --version </dev/null 2>&1)" || { echo "unknown"; return; }
-    case "$out" in
-        taplo\ *) echo "taplo" ;;
-        *)        echo "unknown" ;;
-    esac
-}
-
-# -----------------------------------------------------------------------------
-# Internal: Lazy capability probes
-# -----------------------------------------------------------------------------
 
 # Capabilities that cost a run of an external program to learn. Unlike the ones
 # in `_deps_detect_capabilities` they are not part of the scan: the probe runs
@@ -400,195 +78,19 @@ _deps_detect_taplo_variant() {
 _deps_probe_cap() {
     case " $_TOOL_CAN_NAMES " in *" $1 "*) return 0 ;; esac
     case "$1" in
-        toml_read)        _deps_probe_toml "toml_read" yq "-p toml -o json ." mikefarah ;;
-        toml_json_taplo)  _deps_probe_toml "toml_json_taplo" taplo "get -o json" "" ;;
+        toml_read)        deps_has yq >/dev/null 2>&1 || true
+                          _deps_probe_toml "toml_read" yq "-p toml -o json ." mikefarah ;;
+        toml_json_taplo)  deps_has taplo >/dev/null 2>&1 || true
+                          _deps_probe_toml "toml_json_taplo" taplo "get -o json" "" ;;
     esac
     return 0
 }
 
-# _deps_probe_toml <capability> <tool> <arguments> <required variant or empty>
-#
-# Whether the tool turns `a=1` into the json `{"a": 1}`, which is what a
-# backend needs of it. The variant is checked first where it decides, so a
-# python `yq` is refused without being asked to parse anything.
-_deps_probe_toml() {
-    local _cap="$1" _tool="$2" _args="$3" _want="$4" _p _v _out
-    if deps_has "$_tool"; then
-        _deps_get _p PATH "$_tool"
-        _deps_get _v VARIANT "$_tool"
-        if [ -z "$_want" ] || [ "$_v" = "$_want" ]; then
-            # `$_args` is words of ours with no spaces inside any of them.
-            _out="$(printf 'a = 1\n' | "$_p" $_args 2>/dev/null)" || _out=""
-            _out="$(printf '%s' "$_out" | tr -d ' \t\r\n')"
-            if [ "$_out" = '{"a":1}' ]; then
-                _deps_can_set "$_cap" 1
-                return 0
-            fi
-        fi
-    fi
-    _deps_can_set "$_cap" 0
-}
-
-# -----------------------------------------------------------------------------
-# Internal: Capability detection
-# -----------------------------------------------------------------------------
-
-_deps_detect_capabilities() {
-    # sed capabilities
-    if [ -n "${_TOOL_PATH_sed:-}" ]; then
-        local sed_cmd="${_TOOL_PATH_sed}"
-        local variant="${_TOOL_VARIANT_sed:-unknown}"
-        
-        # In-place editing
-        # GNU: sed -i 'cmd' file
-        # BSD: sed -i '' 'cmd' file
-        _deps_can_set sed_inplace 1
-        
-        # Extended regex (-E)
-        # Both GNU and BSD support -E now
-        if "$sed_cmd" -E 's/a/b/' /dev/null 2>/dev/null; then
-            _deps_can_set sed_extended 1
-        else
-            _deps_can_set sed_extended 0
-        fi
-        
-        # GNU-specific -r (same as -E but older)
-        if [ "$variant" = "gnu" ]; then
-            _deps_can_set sed_regex_r 1
-        else
-            _deps_can_set sed_regex_r 0
-        fi
-    fi
-    
-    # grep capabilities
-    if [ -n "${_TOOL_PATH_grep:-}" ]; then
-        local grep_cmd="${_TOOL_PATH_grep}"
-        
-        # Extended regex (-E)
-        _deps_can_set grep_extended 1
-        
-        # PCRE (-P) - mainly GNU grep
-        if echo "test" | "$grep_cmd" -P "t.st" >/dev/null 2>&1; then
-            _deps_can_set grep_pcre 1
-        else
-            _deps_can_set grep_pcre 0
-        fi
-        
-        # --include/--exclude for recursive searches
-        if "$grep_cmd" --help 2>&1 | grep -q -- '--include'; then
-            _deps_can_set grep_include 1
-        else
-            _deps_can_set grep_include 0
-        fi
-        
-        # -o (only matching)
-        if echo "test" | "$grep_cmd" -o "es" >/dev/null 2>&1; then
-            _deps_can_set grep_only_matching 1
-        else
-            _deps_can_set grep_only_matching 0
-        fi
-    fi
-    
-    # awk capabilities
-    if [ -n "${_TOOL_PATH_awk:-}" ]; then
-        local awk_cmd="${_TOOL_PATH_awk}"
-        local variant="${_TOOL_VARIANT_awk:-unknown}"
-        
-        # Regex matching (all awks have this)
-        _deps_can_set awk_regex 1
-        
-        # gawk-specific features
-        if [ "$variant" = "gawk" ]; then
-            _deps_can_set awk_nextfile 1
-            _deps_can_set awk_strftime 1
-            _deps_can_set awk_gensub 1
-        else
-            _deps_can_set awk_nextfile 0
-            _deps_can_set awk_strftime 0
-            _deps_can_set awk_gensub 0
-        fi
-    fi
-    
-    # stat capabilities
-    if [ -n "${_TOOL_PATH_stat:-}" ]; then
-        local stat_cmd="${_TOOL_PATH_stat}"
-        local variant="${_TOOL_VARIANT_stat:-unknown}"
-        
-        # Format strings
-        if [ "$variant" = "gnu" ] || [ "$variant" = "bsd" ]; then
-            _deps_can_set stat_format 1
-        else
-            _deps_can_set stat_format 0
-        fi
-    fi
-    
-    # perl capabilities
-    if [ -n "${_TOOL_PATH_perl:-}" ]; then
-        local perl_cmd="${_TOOL_PATH_perl}"
-        
-        # Basic perl is always capable
-        _deps_can_set perl_regex 1
-        _deps_can_set perl_inplace 1
-        
-        # Check for common modules (optional)
-        if "$perl_cmd" -MJSON -e '1' 2>/dev/null; then
-            _deps_can_set perl_json 1
-        else
-            _deps_can_set perl_json 0
-        fi
-    fi
-    
-    # find capabilities
-    if [ -n "${_TOOL_PATH_find:-}" ]; then
-        local find_cmd="${_TOOL_PATH_find}"
-        local variant="${_TOOL_VARIANT_find:-unknown}"
-        
-        # -maxdepth (both have it now)
-        _deps_can_set find_maxdepth 1
-        
-        # -printf (GNU only)
-        if [ "$variant" = "gnu" ]; then
-            _deps_can_set find_printf 1
-        else
-            _deps_can_set find_printf 0
-        fi
-    fi
-}
-
-# -----------------------------------------------------------------------------
-# Initialization
-# -----------------------------------------------------------------------------
-
-_deps_init() {
-    # The manifest is not looked for here either; `_deps_sync_config` does it
-    # when the first tool is asked about.
-
-    # List of tools to detect
-    # A plain word list. Every entry is a tool name, so there is nothing here a
-    # space could split wrongly, and the accumulator below is the same string
-    # shape `_TOOLS_AVAILABLE` has always been.
-    local tools="sed awk grep perl stat mktemp find sort wc tr
-        head tail dirname basename uname cut tee xargs"
-
-    local available=""
-    local tool path variant
-
-    # The scan does not run here. It is `_deps_scan_all`, and it runs when
-    # somebody asks a question only a full scan can answer.
-    #
-    # Resolving all eighteen at load time cost 125ms of a 148ms module load, on
-    # a path every consumer of `fs` and `text` takes because they declare
-    # `use deps`. `deps_has` already resolves a tool it has not seen, records
-    # it, and remembers a miss, so the eager pass was a prefetch of answers
-    # most callers never ask for.
-    #
-    # `benches/startup` measured the same thing from the other end and its
-    # findings say so: almost none of the load cost is what a shaker can
-    # remove, because `use deps` alone was 209ms of a 225ms library load.
-    return 0
-}
-
-# Every tool, resolved. What the load used to do, now asked for.
+# Every tool, resolved. What the load used to do, now asked for: resolving all
+# eighteen at load cost 125ms of a 148ms module load, on a path every consumer
+# of `fs` and `text` takes because they declare `use deps`. `deps_has` resolves
+# a tool it has not seen and remembers a miss, so the eager pass was a prefetch
+# of answers most callers never ask for.
 #
 # Only two questions need it: what is available, and which capabilities are
 # present. Both are whole-table questions and neither is asked by a module
@@ -614,19 +116,6 @@ _deps_scan_all() {
     _deps_detect_capabilities
     return 0
 }
-
-# Run initialization immediately
-_deps_init
-
-# Not readonly, deliberately. It was, and that froze the answer rather than the
-# source of truth: init scans a fixed list of unix text tools, so a tool found
-# later by `deps_has` could never join the list of what is available. An
-# immutable cache is a bug wherever the cache is allowed to be incomplete, and
-# this one is incomplete by construction.
-#
-# The associative arrays beside it were never readonly either, since bash
-# cannot always make one so. They are written by this module and read by
-# everyone; treat them as read-only from outside.
 
 # -----------------------------------------------------------------------------
 # Public API - Availability checks
@@ -663,29 +152,6 @@ deps_has() {
     # every question.
     _deps_set MISSING "$tool" 1
     return 1
-}
-
-# Drop what is known about one tool, so it is looked for again when asked.
-_deps_unlearn() {
-    local _t="$1" _k _w _new
-    _deps_key "$_t" || return 1
-    _k="$_dk"
-    eval "unset _TOOL_PATH_${_k} _TOOL_VARIANT_${_k} _TOOL_MISSING_${_k}"
-    _new=""
-    for _w in $_DEPS_SEEN; do [ "$_w" = "$_k" ] || _new="${_new} ${_w}"; done
-    _DEPS_SEEN="$_new"
-    _new=""
-    for _w in $_TOOLS_AVAILABLE; do [ "$_w" = "$_t" ] || _new="${_new} ${_w}"; done
-    _TOOLS_AVAILABLE="$_new"
-}
-
-# Capabilities are derived from the tools, so they go when a tool does and are
-# worked out again when next asked.
-_deps_drop_caps() {
-    local _w
-    for _w in $_TOOL_CAN_NAMES; do eval "unset _TOOL_CAN_${_w}"; done
-    _TOOL_CAN_NAMES=""
-    _DEPS_SCANNED=0
 }
 
 #[pub]

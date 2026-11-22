@@ -335,7 +335,7 @@ it_leaves_command_v_to_deps_alone() {
     # found through `deps_has`, so `[deps.paths]` and the cache apply to it; a
     # function is asked about with `type`, which is not a tool lookup.
     local hits
-    hits="$(grep -rn 'command -v' "${NUTSHELL_ROOT}/lib" | grep -v '/lib/deps\.sh:' || true)"
+    hits="$(grep -rn 'command -v' "${NUTSHELL_ROOT}/lib" | grep -v -e '/lib/deps\.sh:' -e '/lib/deps/' || true)"
     assert_eq "$hits" ""
 }
 
@@ -406,4 +406,40 @@ it_probes_toml_json_taplo_by_what_taplo_emits() {
     assert_eq "$(_dv_out "$t/bad/sub/s.sh")" "0"
     assert_ok test -e "$t/log"
     rm -rf "$t"
+}
+
+# `deps_pinned` reads a manifest for the pin of a tool, whatever the spelling.
+# Each expected path is the literal written into the manifest of the test.
+_dv_pinned() {
+    local t body="$1" tool="${2:-sed}" out rc
+    t="$(mktemp -d)"; printf '%s\n' "$body" > "$t/nut.toml"
+    out="$( ( cd / && "${NUTSHELL_ROOT}/bin/nutshell" -c "use deps::pins; deps_pinned '$t/nut.toml' '$tool'; echo rc=\$?" ) 2>&1)"
+    rm -rf "$t"
+    printf '%s' "$out"
+}
+
+#[test]
+it_reads_a_pin_in_every_spelling_toml_allows() {
+    assert_eq "$(_dv_pinned $'[deps.paths]\nsed = "/opt/a/sed"')" $'/opt/a/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'[deps]\npaths.sed = "/opt/b/sed"')" $'/opt/b/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'deps.paths.sed = "/opt/c/sed"')" $'/opt/c/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'[deps.paths]\n"sed" = \'/opt/d/sed\'')" $'/opt/d/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'deps = { paths = { sed = "/opt/e/sed" } }')" $'/opt/e/sed\nrc=0'
+}
+
+#[test]
+it_reads_the_pin_of_a_tool_whose_name_holds_a_dot() {
+    assert_eq "$(_dv_pinned $'[deps.paths]\n"python3.11" = "/opt/py/python3.11"' python3.11)" $'/opt/py/python3.11\nrc=0'
+}
+
+#[test]
+it_reports_no_pin_for_a_tool_the_manifest_does_not_name() {
+    assert_eq "$(_dv_pinned $'[deps.paths]\nawk = "/opt/a/awk"')" "rc=1"
+}
+
+#[test]
+it_refuses_a_pin_that_is_a_table() {
+    local out; out="$(_dv_pinned $'[deps.paths.sed]\npath = "/opt/a/sed"')"
+    assert_contains "$out" "is a table"
+    assert_contains "$out" "rc=2"
 }

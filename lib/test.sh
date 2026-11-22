@@ -349,7 +349,7 @@ test_run() {
     # It is not hypothetical. Renaming `attr_find` breaks the discovery this
     # very loop uses, so every file in the suite yields nothing and the run
     # reports green over a library that no longer loads.
-    local found=0 wanted=0 ran=0 _tf_names
+    local found=0 wanted=0 ran=0 _tf_names _tf_want=""
     # Gathered first. The body counts into `found`, which the code after it
     # reads, so on the right of a pipe the count would be made in a subshell
     # and read back as zero here: every file would report no tests.
@@ -361,6 +361,8 @@ test_run() {
             case "$name" in *"$TEST_FILTER"*) ;; *) continue ;; esac
         fi
         wanted=$(( wanted + 1 ))
+        _tf_want="${_tf_want}${name}
+"
     done <<EOF
 $_tf_names
 EOF
@@ -374,13 +376,10 @@ EOF
     fi
 
     # Same here-document, same reason: the body counts passes and failures
-    # into variables the summary reads.
+    # into variables the summary reads. Over the names the filter kept above,
+    # so the filter is applied in one place.
     while IFS= read -r name; do
         [ -z "$name" ] && continue
-        if [ -n "${TEST_FILTER:-}" ]; then
-            case "$name" in *"$TEST_FILTER"*) ;; *) continue ;; esac
-        fi
-
         ran=$(( ran + 1 ))
         # Its own file, so nothing a previous test left behind, and nothing a
         # previous test is still doing, can be read as this one's.
@@ -408,7 +407,13 @@ EOF
         # throw the definitions away with it.
         local start_us end_us took=""
         start_us="$(_test_now_us)"
-        output="$( set +e
+        # Stdin closed for the whole subshell, the sourcing as well as the
+        # test. This loop reads the remaining names from its own stdin, and a
+        # test or a file's top level running something that reads its stdin
+        # to the end took the rest of them, ending the run with no error: a
+        # suite declaring 98 ran 66 and reported them all as passing.
+        output="$( exec </dev/null
+            set +e
             . "$file" >/dev/null 2>"${_TEST_MARK}.src"
             _src_rc=$?
             if [ "$_src_rc" -ne 0 ]; then
@@ -418,12 +423,7 @@ EOF
                 printf '%s\n' "the file sourced but defines no ${name}:"
                 head -5 "${_TEST_MARK}.src" 2>/dev/null
             else
-                # Stdin closed. This loop reads the remaining names from its
-                # own stdin, and a test running something that reads its
-                # stdin to the end took the rest of them, ending the run
-                # after that test with no error: a suite declaring 98 ran
-                # 66 and reported them all as passing.
-                "$name" 2>&1 </dev/null
+                "$name" 2>&1
                 _test_mark z
             fi )"
         end_us="$(_test_now_us)"
@@ -494,7 +494,7 @@ EOF
             done
         fi
     done <<EOF
-$_tf_names
+$_tf_want
 EOF
 
     # The count the loop above should have reached. Anything that ends it

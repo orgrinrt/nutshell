@@ -130,3 +130,12 @@ it_runs_every_test_when_a_test_reads_stdin() {
     assert_contains "$out" "[PASS] it_runs_last"
     assert_not_contains "$out" "FAIL"
 }
+
+#[test]
+it_runs_only_the_tests_the_filter_keeps() {
+    local out
+    out="$(TEST_FILTER=third _harness_run "${FIXTURES}/reads_stdin_at_top_level_test.sh" </dev/null)"
+    assert_contains "$out" "[PASS] it_is_the_third_of_three"
+    assert_not_contains "$out" "it_is_the_first_of_three"
+    assert_not_contains "$out" "it_is_the_second_of_three"
+}

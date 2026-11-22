@@ -11,6 +11,24 @@
 use test
 use hash
 
+
+# `deps` finds a tool on PATH and then in the usual places, and remembers what
+# it found, so setting PATH to an empty directory no longer makes a machine that
+# cannot hash. The lookup is narrowed to PATH for the length of a test and
+# everything deps knew is forgotten on the way in and on the way out.
+_h_find_src=""
+_h_only_path() {
+    _h_find_src="$(declare -f _deps_find_tool)"
+    _deps_find_tool() {
+        local d i="$IFS"; IFS=:
+        for d in $PATH; do
+            if [ -x "$d/$1" ]; then IFS="$i"; printf '%s\n' "$d/$1"; return 0; fi
+        done
+        IFS="$i"; return 1
+    }
+    deps_forget
+}
+_h_all_paths() { eval "$_h_find_src"; deps_forget; }
 _h_setup() { HROOT="$(mktemp -d)"; printf 'hello\n' > "$HROOT/f"; mkdir -p "$HROOT/empty"; }
 _h_end()   { rm -rf "$HROOT"; unset HROOT; }
 
@@ -45,8 +63,10 @@ it_separates_an_unreadable_file_from_a_machine_that_cannot_hash() {
     _h_setup
     hash_sha256 "$HROOT/nosuch" 2>/dev/null; assert_eq "$?" "1"
     local saved="$PATH"; PATH="$HROOT/empty"
+    _h_only_path
     hash_sha256 "$HROOT/f" 2>/dev/null; assert_eq "$?" "2"
     PATH="$saved"
+    _h_all_paths
     _h_end
 }
 
@@ -55,8 +75,10 @@ it_names_a_tool_when_there_is_one_and_none_when_there_is_not() {
     _h_setup
     assert_ne "$(hash_impl)" ""
     local saved="$PATH"; PATH="$HROOT/empty"
+    _h_only_path
     assert_eq "$(hash_impl)" ""
     PATH="$saved"
+    _h_all_paths
     _h_end
 }
 

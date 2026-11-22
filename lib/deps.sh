@@ -47,87 +47,122 @@ use os key
 # Configuration file location
 # -----------------------------------------------------------------------------
 
-# Find nut.toml - check current dir, then repo root, then nutshell dir
+# Find nut.toml, walking up from the unit that is running, the way `extern`
+# finds a script's manifest: the asking file, the entry point, then the working
+# directory, each searched upward. A script's tool paths belong to the script,
+# so one run against another repository still reads its own `[deps.paths]`.
+# Nutshell's own manifest is the last resort.
 _deps_find_config() {
-    # Positional parameters rather than a list in a variable, because both of
-    # these carry a directory somebody else chose and a space in it would split
-    # the word. An array would have held them; POSIX has one array and this is
-    # it.
-    local path
-    set -- "${PWD}/nut.toml" "${NUTSHELL_ROOT}/nut.toml"
-
-    for path in "$@"; do
-        if [ -f "$path" ]; then
-            echo "$path"
-            return 0
-        fi
+    local start dir
+    for start in "${_NUT_ASKING_FROM:-}" "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
+        [ -n "$start" ] || continue
+        dir="$start"
+        while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+            if [ -f "${dir}/nut.toml" ]; then
+                printf '%s\n' "${dir}/nut.toml"
+                return 0
+            fi
+            case "$dir" in */*) dir="${dir%/*}" ;; *) break ;; esac
+        done
     done
-    
+    if [ -n "${NUTSHELL_ROOT:-}" ] && [ -f "${NUTSHELL_ROOT}/nut.toml" ]; then
+        printf '%s\n' "${NUTSHELL_ROOT}/nut.toml"
+        return 0
+    fi
     return 1
 }
 
-# Simple TOML value extraction (no toml.sh dependency to avoid circular deps)
-# Only handles simple key = "value" or key = value cases
+# The manifest follows the unit that is running, and the entry point is only
+# known once the interpreter has set it: a module loaded earlier than that sees
+# the working directory's answer. So the answer is kept with what it was derived
+# from, and looked for again when any of that changes.
+#
+# When the manifest turns out to be a different file, a tool already resolved
+# under the old one that the new one pins is resolved again, and misses are
+# forgotten, so an entry in the script's own `[deps.paths]` takes effect
+# whatever got to the tool first.
+_deps_sync_config() {
+    local old="$_DEPS_CONFIG" t _k _rc
+    _DEPS_CONFIG_KEY="${_NUT_ASKING_FROM:-}|${NUTSHELL_SCRIPT_DIR:-}|${PWD}"
+    _DEPS_CONFIG="$(_deps_find_config)" || _DEPS_CONFIG=""
+    [ "$_DEPS_CONFIG" != "$old" ] || return 0
+    for _k in $_DEPS_SEEN; do eval "unset _TOOL_MISSING_${_k}"; done
+    [ -n "$_DEPS_CONFIG" ] || return 0
+    local list="$_TOOLS_AVAILABLE"
+    for t in $list; do
+        _rc=0; _deps_toml_get "$_DEPS_CONFIG" "deps.paths" "$t" >/dev/null 2>&1 || _rc=$?
+        [ "$_rc" -eq 1 ] && continue
+        _deps_unlearn "$t"
+        deps_has "$t" >/dev/null 2>&1 || true
+        _deps_drop_caps
+    done
+}
+
+# _deps_toml_get <file> <table> <key> -> the value, 1 when absent, 2 when the
+# table is there in a form this cannot read
+#
+# Not the toml module. deps lowers to a POSIX shell and toml does not, so a
+# `use toml` here takes every closure that holds deps off the POSIX floor.
+#
+# A key is matched by its whole dotted path, the table it sits under joined to
+# its own dotted name, so `[deps.paths]` with `sed = ...`, `[deps]` with
+# `paths.sed = ...` and a root `deps.paths.sed = ...` are one key. A key whose
+# path is the table itself is an inline table, which this does not read, and
+# that is refused rather than read as no pin at all.
 _deps_toml_get() {
-    local file="$1"
-    local section="$2"
-    local key="$3"
-    
+    local file="$1" want="$2.$3" table="$2"
     [ -f "$file" ] || return 1
 
-    local in_section=0
-    local current_section=""
-    local line t
+    local cur="" line t k v full
 
     while IFS= read -r line || [ -n "$line" ]; do
         # Matched by shape rather than by `[[ =~ ]]`. A regex match is the one
         # bashism a POSIX shell cannot even parse past, so a file carrying one
         # is unreadable there whatever the rest of it does.
         t="${line#"${line%%[![:space:]]*}"}"
-
-        # Comments and blank lines
         case "$t" in ''|'#'*) continue ;; esac
 
-        # Section header. `[^\]]+` was the old shape: at least one character
-        # and no `]` inside it.
         case "$t" in
-            '['*']')
-                current_section="${t#\[}"
-                current_section="${current_section%]}"
-                case "$current_section" in
-                    ''|*']'*)     in_section=0 ;;
-                    "$section")   in_section=1 ;;
-                    *)            in_section=0 ;;
-                esac
+            '[['*)
+                cur="//"; continue ;;
+            '['*']'*)
+                cur="${t#\[}"; cur="${cur%%]*}"
+                _deps_dotted "$cur"; cur="$_DD"
                 continue ;;
         esac
+        [ "$cur" = "//" ] && continue
+        [ "${t#*=}" != "$t" ] || continue
 
-        # Skip if not in the right section
-        [ "$in_section" -eq 0 ] && continue
+        _deps_dotted "${t%%=*}"; k="$_DD"
+        full="${cur:+${cur}.}${k}"
+        v="${t#*=}"
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
 
-        # Key = value
-        if [ "${t#*=}" != "$t" ]; then
-            local k="${t%%=*}"
-            local v="${t#*=}"
-            # Trim whitespace
-            k="${k#"${k%%[![:space:]]*}"}"
-            k="${k%"${k##*[![:space:]]}"}"
-            v="${v#"${v%%[![:space:]]*}"}"
-            v="${v%"${v##*[![:space:]]}"}"
-            # Remove quotes
-            v="${v#\"}"
-            v="${v%\"}"
-            v="${v#\'}"
-            v="${v%\'}"
-            
-            if [ "$k" = "$key" ]; then
-                echo "$v"
-                return 0
-            fi
-        fi
+        case "$want" in
+            "${full}".*)
+                printf '[ERROR] deps: %s in %s holds %s as an inline table; write it as [%s]\n' \
+                    "$full" "$file" "$want" "$table" >&2
+                return 2 ;;
+        esac
+        [ "$full" = "$want" ] || continue
+        v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
+        printf '%s\n' "$v"
+        return 0
     done < "$file"
-    
     return 1
+}
+
+# A key or header with its blanks taken out, so `a . b` is `a.b`, into `_DD`.
+# Parameter expansion and no fork: this runs for every line of the manifest.
+_deps_dotted() {
+    _DD="$1"
+    while :; do
+        case "$_DD" in
+            *[[:blank:]]*) _DD="${_DD%%[[:blank:]]*}${_DD#*[[:blank:]]}" ;;
+            *) return 0 ;;
+        esac
+    done
 }
 
 # -----------------------------------------------------------------------------
@@ -176,6 +211,8 @@ _deps_set_variant() {
         grep) _deps_set VARIANT "$1" "$(_deps_detect_grep_variant "$2")" ;;
         stat) _deps_set VARIANT "$1" "$(_deps_detect_stat_variant "$2")" ;;
         find) _deps_set VARIANT "$1" "$(_deps_detect_find_variant "$2")" ;;
+        yq)    _deps_set VARIANT "$1" "$(_deps_detect_yq_variant "$2")" ;;
+        taplo) _deps_set VARIANT "$1" "$(_deps_detect_taplo_variant "$2")" ;;
         *)    _deps_set VARIANT "$1" standard ;;
     esac
 }
@@ -194,7 +231,14 @@ _deps_get() {
 _deps_set() {
     _deps_key "$2" || return 1
     eval "_TOOL_$1_${_dk}=\$3"
+    # Every tool asked about, found or not, so `deps_forget` can find them again.
+    case "$1" in PATH|MISSING)
+        case " $_DEPS_SEEN " in *" $_dk "*) : ;; *) _DEPS_SEEN="${_DEPS_SEEN} ${_dk}" ;; esac ;;
+    esac
 }
+
+# Encoded keys of every tool that has an entry, space separated.
+_DEPS_SEEN=""
 
 # _deps_can_set <capability> <0|1>
 #
@@ -221,8 +265,9 @@ _deps_can_set() {
     eval "_TOOL_CAN_${_dk}=\$2"
 }
 
-# The config file, found once at init rather than on every lookup.
+# The config file and what it was derived from (see `_deps_sync_config`).
 _DEPS_CONFIG=""
+_DEPS_CONFIG_KEY=""
 
 # -----------------------------------------------------------------------------
 # Internal: Path resolution
@@ -232,17 +277,28 @@ _DEPS_CONFIG=""
 # 1. User config (nut.toml [deps.paths])
 # 2. which (if available)
 # 3. Common locations, verified for executability
+#
+# Returns 1 for a tool that is not there and 2 for an entry in `[deps.paths]`
+# that names something which is not an executable file. The second is a fault
+# in the manifest, said once on stderr, and it never falls through to PATH: an
+# override that silently pins nothing is worse than having none.
 _deps_find_tool() {
     local tool="$1"
     local config_file="$2"
-    
+
     # 1. Check user config first
     if [ -n "$config_file" ]; then
-        local user_path
-        user_path="$(_deps_toml_get "$config_file" "deps.paths" "$tool")"
-        if [ -n "$user_path" ] && [ -x "$user_path" ]; then
-            echo "$user_path"
-            return 0
+        local user_path rc=0
+        user_path="$(_deps_toml_get "$config_file" "deps.paths" "$tool")" || rc=$?
+        [ "$rc" -eq 2 ] && return 2
+        if [ "$rc" -eq 0 ]; then
+            if [ -f "$user_path" ] && [ -x "$user_path" ]; then
+                echo "$user_path"
+                return 0
+            fi
+            printf '[ERROR] deps: [deps.paths] %s = "%s" is not an executable file (%s)\n' \
+                "$tool" "$user_path" "$config_file" >&2
+            return 2
         fi
     fi
     
@@ -362,8 +418,72 @@ _deps_detect_find_variant() {
         echo "gnu"
         return
     fi
-    
+
     echo "bsd"
+}
+
+# Two programs are called `yq`: mikefarah's, a Go binary that reads TOML, and the
+# python wrapper over jq, which does not. The name cannot tell them apart, so
+# the binary is asked. Only `mikefarah` counts for TOML.
+_deps_detect_yq_variant() {
+    local out
+    out="$("$1" --version </dev/null 2>&1)" || { echo "unknown"; return; }
+    case "$out" in
+        '')              echo "unknown" ;;
+        *mikefarah/yq*)  echo "mikefarah" ;;
+        *)               echo "python" ;;
+    esac
+}
+
+# `taplo` is taplo-cli when it says so, and anything else answering to the name
+# is not known.
+_deps_detect_taplo_variant() {
+    local out
+    out="$("$1" --version </dev/null 2>&1)" || { echo "unknown"; return; }
+    case "$out" in
+        taplo\ *) echo "taplo" ;;
+        *)        echo "unknown" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Lazy capability probes
+# -----------------------------------------------------------------------------
+
+# Capabilities that cost a run of an external program to learn. Unlike the ones
+# in `_deps_detect_capabilities` they are not part of the scan: the probe runs
+# the first time the capability is asked for, and the answer is kept. They show
+# in `deps_caps` once asked.
+_deps_probe_cap() {
+    case " $_TOOL_CAN_NAMES " in *" $1 "*) return 0 ;; esac
+    case "$1" in
+        toml_read)        _deps_probe_toml "toml_read" yq "-p toml -o json ." mikefarah ;;
+        toml_json_taplo)  _deps_probe_toml "toml_json_taplo" taplo "get -o json" "" ;;
+    esac
+    return 0
+}
+
+# _deps_probe_toml <capability> <tool> <arguments> <required variant or empty>
+#
+# Whether the tool turns `a=1` into the json `{"a": 1}`, which is what a
+# backend needs of it. The variant is checked first where it decides, so a
+# python `yq` is refused without being asked to parse anything.
+_deps_probe_toml() {
+    local _cap="$1" _tool="$2" _args="$3" _want="$4" _p _v _out
+    if deps_has "$_tool"; then
+        _deps_get _p PATH "$_tool"
+        _deps_get _v VARIANT "$_tool"
+        if [ -z "$_want" ] || [ "$_v" = "$_want" ]; then
+            # `$_args` is words of ours with no spaces inside any of them.
+            _out="$(printf 'a = 1\n' | "$_p" $_args 2>/dev/null)" || _out=""
+            _out="$(printf '%s' "$_out" | tr -d ' \t\r\n')"
+            if [ "$_out" = '{"a":1}' ]; then
+                _deps_can_set "$_cap" 1
+                return 0
+            fi
+        fi
+    fi
+    _deps_can_set "$_cap" 0
 }
 
 # -----------------------------------------------------------------------------
@@ -497,10 +617,9 @@ _deps_detect_capabilities() {
 # -----------------------------------------------------------------------------
 
 _deps_init() {
-    local config_file
-    config_file="$(_deps_find_config)" || config_file=""
-    _DEPS_CONFIG="$config_file"
-    
+    # The manifest is not looked for here either; `_deps_sync_config` does it
+    # when the first tool is asked about.
+
     # List of tools to detect
     # A plain word list. Every entry is a tool name, so there is nothing here a
     # space could split wrongly, and the accumulator below is the same string
@@ -576,6 +695,7 @@ _deps_init
 deps_has() {
     local tool="${1:-}"
     [ -z "$tool" ] && return 1
+    [ "${_NUT_ASKING_FROM:-}|${NUTSHELL_SCRIPT_DIR:-}|${PWD}" = "$_DEPS_CONFIG_KEY" ] || _deps_sync_config
     local _hit
     _deps_get _hit PATH "$tool"    && [ -n "$_hit" ] && return 0
     _deps_get _hit MISSING "$tool" && [ -n "$_hit" ] && return 1
@@ -596,8 +716,55 @@ deps_has() {
         _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"
         return 0
     fi
+    # Remembered like any miss, so a bad manifest entry is said once and not on
+    # every question.
     _deps_set MISSING "$tool" 1
     return 1
+}
+
+# Drop what is known about one tool, so it is looked for again when asked.
+_deps_unlearn() {
+    local _t="$1" _k _w _new
+    _deps_key "$_t" || return 1
+    _k="$_dk"
+    eval "unset _TOOL_PATH_${_k} _TOOL_VARIANT_${_k} _TOOL_MISSING_${_k}"
+    _new=""
+    for _w in $_DEPS_SEEN; do [ "$_w" = "$_k" ] || _new="${_new} ${_w}"; done
+    _DEPS_SEEN="$_new"
+    _new=""
+    for _w in $_TOOLS_AVAILABLE; do [ "$_w" = "$_t" ] || _new="${_new} ${_w}"; done
+    _TOOLS_AVAILABLE="$_new"
+}
+
+# Capabilities are derived from the tools, so they go when a tool does and are
+# worked out again when next asked.
+_deps_drop_caps() {
+    local _w
+    for _w in $_TOOL_CAN_NAMES; do eval "unset _TOOL_CAN_${_w}"; done
+    _TOOL_CAN_NAMES=""
+    _DEPS_SCANNED=0
+}
+
+#[pub]
+# Forget what was learned about tools, so the next question looks again. A
+# miss is remembered for the life of the process, which is right until
+# something installs the tool. The manifest is read again as well.
+# Usage: deps_forget [tool...] -> forgets the named tools, or every one
+deps_forget() {
+    local _t _k
+    if [ "$#" -eq 0 ]; then
+        for _k in $_DEPS_SEEN; do
+            eval "unset _TOOL_PATH_${_k} _TOOL_VARIANT_${_k} _TOOL_MISSING_${_k}"
+        done
+        _DEPS_SEEN=""
+        _TOOLS_AVAILABLE=""
+    else
+        for _t in "$@"; do _deps_unlearn "$_t" || true; done
+    fi
+    _deps_drop_caps
+    _DEPS_CONFIG=""
+    _DEPS_CONFIG_KEY=""
+    return 0
 }
 
 #[pub]
@@ -698,6 +865,7 @@ deps_can() {
     # has to have happened. It is once per process.
     _deps_scan_all
     local cap="${1:-}"
+    _deps_probe_cap "$cap"
     local _c; _deps_get _c CAN "$cap"
     [ "${_c:-0}" = "1" ]
 }
@@ -712,6 +880,7 @@ deps_cap() {
     # went wrong.
     _deps_scan_all
     local cap="${1:-}"
+    _deps_probe_cap "$cap"
     local _c; _deps_get _c CAN "$cap"
     echo "${_c:-0}"
 }

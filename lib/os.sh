@@ -60,12 +60,19 @@ os_is_windows() {
     esac
 }
 
-#[allow(trivial_wrapper)]
-# Returns the CPU architecture: x86_64|arm64|i686|armv7l|...
+# Returns the CPU architecture, normalised: `uname -m` says `amd64` on some BSDs
+# and `aarch64` on Linux where macOS says `arm64`, and a caller choosing a
+# release asset needs one spelling for each. Others pass through unchanged.
 # Usage: os_arch -> "x86_64" | "arm64" | "i686" | "armv7l" | ...
 #[pub]
 os_arch() {
-    uname -m
+    local m
+    m="$(uname -m)"
+    case "$m" in
+        x86_64|amd64)   printf '%s\n' "x86_64" ;;
+        aarch64|arm64)  printf '%s\n' "arm64" ;;
+        *)              printf '%s\n' "$m" ;;
+    esac
 }
 
 #[pub]

@@ -51,7 +51,7 @@
 [ -n "${_NUTSHELL_CHECKCACHE_SH:-}" ] && return 0
 readonly _NUTSHELL_CHECKCACHE_SH=1
 
-if ! command -v use >/dev/null 2>&1; then
+if ! type use >/dev/null 2>&1; then
     printf 'nutshell: source nutshell first\n' >&2
     return 1
 fi
@@ -212,7 +212,7 @@ _nut_cache_root() {
         printf '%s' "${NUT_CACHE_DIR%/}"
         return 0
     fi
-    if command -v nutshell_store_root >/dev/null 2>&1; then
+    if type nutshell_store_root >/dev/null 2>&1; then
         printf '%s/checks' "$(nutshell_store_root)"
         return 0
     fi

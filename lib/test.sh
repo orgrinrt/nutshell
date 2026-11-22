@@ -229,7 +229,7 @@ assert_refused() {
     # missing-assertion guard catches part of it and cannot catch the rest: it
     # matches `assert_` at the head of the name, so a misspelled assertion is
     # seen and any other command is not.
-    if ! command -v "$1" >/dev/null 2>&1; then
+    if ! type "$1" >/dev/null 2>&1; then
         _test_failed "no such command [$1], so nothing was controlled"
         return 1
     fi
@@ -408,7 +408,7 @@ EOF
             if [ "$_src_rc" -ne 0 ]; then
                 printf '%s\n' "the test file would not source (status ${_src_rc}), so nothing in it ran:"
                 head -5 "${_TEST_MARK}.src" 2>/dev/null
-            elif ! command -v "$name" >/dev/null 2>&1; then
+            elif ! type "$name" >/dev/null 2>&1; then
                 printf '%s\n' "the file sourced but defines no ${name}:"
                 head -5 "${_TEST_MARK}.src" 2>/dev/null
             else

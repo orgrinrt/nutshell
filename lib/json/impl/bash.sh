@@ -117,12 +117,16 @@ _json_keys_bash() {
     esac
 }
 
-# A string's length is in characters, so this one runs in the caller's locale.
+# A string's length is in characters whatever the locale: under `C` every byte
+# but a UTF-8 continuation byte, 0x80 to 0xBF, starts one.
 _json_length_bash() {
+    local LC_ALL=C s
     _jb_at "$1" "${2:-}" || return 1
     case "${_JB_T[$_jb_node]}" in
         array|object) printf '%s\n' "${_JB_C[$_jb_node]}" ;;
-        string)       printf '%s\n' "${#_JB_V[$_jb_node]}" ;;
+        string)       s="${_JB_V[$_jb_node]}"
+                      s="${s//[$'\x80'-$'\xbf']/}"
+                      printf '%s\n' "${#s}" ;;
         null)         printf '0\n' ;;
         *)            return 1 ;;
     esac

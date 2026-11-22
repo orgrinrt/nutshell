@@ -178,6 +178,19 @@ it_says_when_a_test_asserted_nothing() {
 }
 
 #[test]
+it_reports_a_skip_with_its_reason_and_never_over_a_failure() {
+    # A test that cannot run here says so and why. Without `skip` the name was
+    # an unknown command, the body checked nothing, and the guard above failed
+    # it; a skip that also swallowed a failure would be worse than that.
+    local out
+    out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
+    assert_contains "$out" "SKIP"
+    assert_contains "$out" "no frobnicator on this machine"
+    assert_contains "$out" "it_fails_before_it_skips"
+    assert_contains "$out" "1 failed, 0 passed, 1 skipped"
+}
+
+#[test]
 # What the verdict says when a test stops without reaching its end.
 #
 # It said only "the test did not finish", which is not diagnosable, and this

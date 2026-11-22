@@ -466,3 +466,23 @@ it_counts_a_filtered_run_against_what_the_filter_selects() {
     assert_not_contains "$out" "tests it declares"
     assert_not_contains "$out" "it_skip_two"
 }
+
+#[test]
+it_reports_a_skip_with_its_reason_and_does_not_fail_the_run() {
+    # A test that cannot run here says so and why, instead of returning early
+    # and passing having asserted nothing. The fixture holds a skip, a skip
+    # followed by a failure, and a pass; only the failure may fail the run.
+    local out
+    out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
+    assert_contains "$out" "SKIP" "no skip line"
+    assert_contains "$out" "the thing it needs is not here" "the reason was not printed"
+    assert_contains "$out" "1 failed, 1 passed, 1 skipped" "the tally did not count the skip separately"
+}
+
+#[test]
+it_does_not_let_a_skip_hide_a_failure() {
+    local out
+    out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
+    assert_contains "$out" "it_fails_after_a_skip_and_stays_failed" "the failing test was not named"
+    assert_not_contains "$out" "SKIP  it_fails_after_a_skip_and_stays_failed"
+}

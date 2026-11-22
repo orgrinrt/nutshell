@@ -10,6 +10,7 @@
 
 use test
 use hash
+source "${BASH_SOURCE[0]%/*}/fixtures/hide_tools.sh"
 
 
 # `deps` finds a tool on PATH and then in the usual places, and remembers what
@@ -261,4 +262,55 @@ it_does_not_invent_a_digest_from_a_shape_no_arm_knows() {
     assert_ne "$out" "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
     assert_ne "${#out}" "64"
     PATH="$saved"; unset -f hash_impl; unset _H_STUB_IMPL; _h_end
+}
+
+#[test]
+it_refuses_blake3_with_status_two_where_b3sum_is_absent() {
+    # About the machine, like the sha256 case, and not "the file did not match".
+    _h_setup
+    _hide_tools b3sum
+    local out rc
+    out="$(hash_blake3 "$HROOT/f" 2>&1 >/dev/null)"; rc=$?
+    assert_eq "$rc" "2"
+    assert_contains "$out" "b3sum"
+    _h_end
+}
+
+#[test]
+it_separates_an_unreadable_file_from_a_machine_without_b3sum() {
+    _h_setup
+    hash_blake3 "$HROOT/nosuch" 2>/dev/null; assert_eq "$?" "1"
+    assert_fails hash_blake3 ""
+    _h_end
+}
+
+#[test]
+it_takes_the_digest_off_the_front_of_what_b3sum_prints() {
+    # The plumbing only: a stand-in that prints a digest, two spaces and the
+    # name, which is the shape b3sum writes. The digest it prints is what the
+    # next test checks against the real tool.
+    _h_setup
+    mkdir -p "$HROOT/bin"
+    printf '#!/bin/sh\nfor a; do f="$a"; done\nprintf "%%s  %%s\\n" af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262 "$f"\n' > "$HROOT/bin/b3sum"
+    chmod +x "$HROOT/bin/b3sum"
+    PATH="$HROOT/bin:$PATH"; deps_forget
+    assert_eq "$(hash_blake3 "$HROOT/f")" "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    _h_end
+}
+
+#[test]
+it_matches_the_published_blake3_digest_of_nothing() {
+    # The BLAKE3 digest of empty input, from the reference test vectors, written
+    # here rather than taken from the tool under test.
+    #
+    # LAZY_TOOL_ACTIVE makes this workspace's install-on-first-use shim answer
+    # at once instead of fetching, so an absent tool is seen as absent.
+    if ! LAZY_TOOL_ACTIVE=1 b3sum --version >/dev/null 2>&1; then
+        test_skip "b3sum is not installed on this machine"
+        return 0
+    fi
+    _h_setup
+    : > "$HROOT/empty"
+    assert_eq "$(hash_blake3 "$HROOT/empty")" "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    _h_end
 }

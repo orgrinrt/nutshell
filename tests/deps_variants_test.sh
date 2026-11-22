@@ -139,6 +139,34 @@ it_reads_a_deps_paths_entry_written_as_a_dotted_key() {
 }
 
 #[test]
+it_reads_a_deps_paths_entry_written_at_the_root_with_padded_dots() {
+    local t; t="$(mktemp -d)"
+    _dv_mikefarah "$t/yq-go"
+    mkdir -p "$t/u/sub"
+    printf 'deps . paths . yq = "%s"\n' "$t/yq-go" > "$t/u/nut.toml"
+    printf 'use deps\ndeps_path yq\n' > "$t/u/sub/s.sh"
+    assert_eq "$(_dv_out "$t/u/sub/s.sh")" "$t/yq-go"
+    rm -rf "$t"
+}
+
+#[test]
+it_refuses_deps_paths_written_as_an_inline_table() {
+    # Not read, so refused: a pin that is written and not honoured is the
+    # silent fall-through to PATH this exists to prevent.
+    local t; t="$(mktemp -d)"
+    mkdir -p "$t/u/sub"
+    printf '[deps]\npaths = { sed = "/nonexistent/sed" }\n' > "$t/u/nut.toml"
+    printf 'use deps\n%s\n' 'deps_has sed && echo FOUND; deps_path sed; echo "rc=$?"' > "$t/u/sub/s.sh"
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_not_contains "$out" "FOUND"
+    assert_contains "$out" "rc=1"
+    assert_contains "$err" "inline table"
+    rm -rf "$t"
+}
+
+#[test]
 it_refuses_a_deps_paths_entry_that_is_empty() {
     local t; t="$(mktemp -d)"
     _dv_unit "$t/u" 'sed = ""' 'deps_has sed && echo FOUND; echo done'

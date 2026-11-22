@@ -470,3 +470,15 @@ it_ignores_a_usage_marker_with_no_text() {
 it_finds_no_usage_for_a_function_the_file_does_not_define() {
     assert_fails attr_usage "$USAGE_FIXTURE" nowhere_to_be_found
 }
+
+#[test]
+it_prints_every_usage_line_of_a_file_as_name_tab_text() {
+    local tab want
+    tab="$(printf '\t')"
+    want="after_attr${tab}after_attr <a> -> usage written after the attribute
+before_attr${tab}before_attr <a> -> usage written before the attribute
+with_prose${tab}with_prose <a> -> prose sits above it
+two_forms${tab}two_forms <a> -> the first form
+two_forms${tab}two_forms <a> <b> -> the second form"
+    assert_eq "$(attr_usages "$USAGE_FIXTURE")" "$want"
+}

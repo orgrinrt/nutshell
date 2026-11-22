@@ -420,3 +420,10 @@ it_keys_the_cache_on_the_manifest() {
     after="$(_mg_cache_file "$d/lib")"
     assert_ne "$before" "$after"
 }
+
+#[test]
+it_lists_the_public_functions_of_a_module_in_definition_order() {
+    MODGRAPH_NOCACHE=1 modgraph_build "$FIXTURE"
+    assert_eq "$(modgraph_public alpha)" "alpha_public"
+    assert_empty "$(modgraph_public idle)"
+}

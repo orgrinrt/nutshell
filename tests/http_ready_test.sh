@@ -22,7 +22,7 @@ it_names_both_missing_tools_when_it_has_neither() {
 
 #[test]
 it_is_ready_and_silent_with_curl() {
-    deps_has curl || { test_skip "curl is not on this machine"; return 0; }
+    deps_has curl || { skip "curl is not on this machine"; return 0; }
     local out
     out="$(http_ready 2>&1)"
     assert_ok http_ready
@@ -32,7 +32,7 @@ it_is_ready_and_silent_with_curl() {
 
 #[test]
 it_falls_to_wget_when_curl_is_gone() {
-    deps_has wget || { test_skip "wget is not on this machine"; return 0; }
+    deps_has wget || { skip "wget is not on this machine"; return 0; }
     _hide_tools curl
     http_detect
     assert_ok http_ready

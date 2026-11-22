@@ -24,7 +24,7 @@ free_port() {
 # _need_nc -> 0 when there is a server to talk to, else the test is skipped
 _need_nc() {
     deps_has nc && return 0
-    test_skip "nc is not on this machine, so there is no loopback server to download from"
+    skip "nc is not on this machine, so there is no loopback server to download from"
     return 1
 }
 

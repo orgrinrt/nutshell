@@ -306,7 +306,7 @@ it_matches_the_published_blake3_digest_of_nothing() {
     # LAZY_TOOL_ACTIVE makes this workspace's install-on-first-use shim answer
     # at once instead of fetching, so an absent tool is seen as absent.
     if ! LAZY_TOOL_ACTIVE=1 b3sum --version >/dev/null 2>&1; then
-        test_skip "b3sum is not installed on this machine"
+        skip "b3sum is not installed on this machine"
         return 0
     fi
     _h_setup

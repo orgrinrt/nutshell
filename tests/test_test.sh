@@ -178,19 +178,6 @@ it_says_when_a_test_asserted_nothing() {
 }
 
 #[test]
-it_reports_a_skip_with_its_reason_and_never_over_a_failure() {
-    # A test that cannot run here says so and why. Without `skip` the name was
-    # an unknown command, the body checked nothing, and the guard above failed
-    # it; a skip that also swallowed a failure would be worse than that.
-    local out
-    out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
-    assert_contains "$out" "SKIP"
-    assert_contains "$out" "no frobnicator on this machine"
-    assert_contains "$out" "it_fails_before_it_skips"
-    assert_contains "$out" "2 failed, 1 passed, 2 skipped"
-}
-
-#[test]
 # What the verdict says when a test stops without reaching its end.
 #
 # It said only "the test did not finish", which is not diagnosable, and this
@@ -481,21 +468,23 @@ it_counts_a_filtered_run_against_what_the_filter_selects() {
 }
 
 #[test]
-it_reports_a_skip_with_its_reason_and_does_not_fail_the_run() {
+it_reports_a_skip_with_its_reason_and_counts_it_apart() {
     # A test that cannot run here says so and why, instead of returning early
-    # and passing having asserted nothing. The fixture holds a skip, a skip
-    # followed by a failure, and a pass; only the failure may fail the run.
+    # and passing having asserted nothing, and the summary counts it apart from
+    # passes and failures.
     local out
     out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
-    assert_contains "$out" "SKIP" "no skip line"
-    assert_contains "$out" "the thing it needs is not here" "the reason was not printed"
-    assert_contains "$out" "2 failed, 1 passed, 2 skipped" "the tally did not count the skip separately"
+    assert_contains "$out" "[SKIP] it_skips_for_want_of_a_tool" "no skip line"
+    assert_contains "$out" "no frobnicator on this machine" "the reason was not printed"
+    assert_contains "$out" "2 failed, 1 passed, 1 skipped" "the tally did not count the skip separately"
 }
 
 #[test]
-it_does_not_let_a_skip_hide_a_failure() {
+it_does_not_let_a_skip_hide_a_failure_before_or_after_it() {
     local out
     out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
-    assert_contains "$out" "it_fails_after_a_skip_and_stays_failed" "the failing test was not named"
-    assert_not_contains "$out" "SKIP  it_fails_after_a_skip_and_stays_failed"
+    assert_contains     "$out" "[FAIL] it_fails_before_it_skips"
+    assert_contains     "$out" "[FAIL] it_fails_after_a_skip_and_stays_failed"
+    assert_not_contains "$out" "[SKIP] it_fails_before_it_skips"
+    assert_not_contains "$out" "[SKIP] it_fails_after_a_skip_and_stays_failed"
 }

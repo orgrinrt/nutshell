@@ -141,7 +141,7 @@ it_refuses_a_query_with_no_jq_family_tool() {
 
 #[test]
 it_runs_a_query_through_jq_when_it_is_there() {
-    deps_has jq || { test_skip "jq is not on this machine"; return 0; }
+    deps_has jq || { skip "jq is not on this machine"; return 0; }
     assert_eq "$(json_query '.a | length' '{"a":[1,2,3]}')" "3"
     assert_eq "$(json_query '.a' '{"a":"x"}')" "x"
     assert_eq "$(json_query '[.a,.b]' '{"b":2,"a":1}')" "[1,2]"

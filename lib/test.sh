@@ -111,18 +111,6 @@ _test_mark() {
 _test_asserted() { _test_mark a; }
 
 #[pub]
-# A test that cannot run on this machine says so, and why, and the run counts it
-# as skipped. Returning early instead passes having asserted nothing, which the
-# runner fails. A failure recorded in the same test still fails it: a skip is
-# not a verdict.
-# Usage: test_skip "jq is not on this machine" ; return 0
-test_skip() {
-    _test_mark s
-    printf 'skipped: %s\n' "${1:-no reason given}"
-    return 0
-}
-
-#[pub]
 # Usage: assert_eq "$got" "$want" ["what this is about"] -> 0 or 1
 assert_eq() {
     _test_asserted
@@ -186,13 +174,16 @@ fail() {
 }
 
 #[pub]
-# Skip a test that cannot run on this machine, saying why. The test reports
-# SKIP with the reason rather than a pass, and an assertion that failed before
-# it still fails the test. Return after it.
-# Usage: skip "taplo absent here" -> prints the reason
+# A test that cannot run on this machine says so, and why, and the run counts it
+# as skipped, apart from passes and failures. Returning early instead passes
+# having asserted nothing, which the runner fails. A failure recorded in the
+# same test, before the skip or after it, still fails it: a skip is not a
+# verdict. Unprefixed like `fail` and the `assert_` family, since it is called
+# from a test body where they are.
+# Usage: skip "jq is not on this machine" ; return 0
 skip() {
     _test_mark s
-    printf 'skipped: %s\n' "$*"
+    printf 'skipped: %s\n' "${*:-no reason given}"
     return 0
 }
 

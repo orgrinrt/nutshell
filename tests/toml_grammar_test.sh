@@ -208,6 +208,26 @@ it_refuses_an_unterminated_string() {
 }
 
 #[test]
+it_refuses_an_integer_past_the_64_bit_range() {
+    # TOML 1.0: an integer that cannot be held losslessly is an error. Both
+    # are nineteen digits, one past each end of the range.
+    _tg_bad 'a = 9223372036854775808\n'
+    assert_eq "$_TG_RC" "2"
+    assert_contains "$_TG_ERR" "out of range"
+    _tg_bad 'a = -9223372036854775809\n'
+    assert_eq "$_TG_RC" "2"
+}
+
+#[test]
+it_reads_the_two_ends_of_the_64_bit_range() {
+    local d; d="$(mktemp -d)"
+    printf 'hi = 9223372036854775807\nlo = -9223372036854775808\n' > "$d/t.toml"
+    assert_eq "$(toml_get "$d/t.toml" hi)" "9223372036854775807"
+    assert_eq "$(toml_get "$d/t.toml" lo)" "-9223372036854775808"
+    rm -rf "$d"
+}
+
+#[test]
 it_refuses_a_bare_word_as_a_value() {
     _tg_bad 'a = hello\n'
     assert_eq "$_TG_RC" "2"

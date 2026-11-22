@@ -648,3 +648,107 @@ it_edits_a_key_under_a_padded_or_commented_header_in_place() {
     rm -rf "$d"
     assert_eq "$got" $'[ sp ]\nk = 2\n\n[b] # the b table\nk = 3'
 }
+
+# --- the line comes from the reader's tree -----------------------------------
+#
+# A quoted key holding a dot is one segment, and a line inside a multi-line
+# value is part of that value. A writer with a scanner of its own got both
+# wrong: it split `a."b.c"` at the dot inside the quotes, and it took a `[t]`
+# or a `k = 9` inside a string or an array for the header or the key.
+
+#[test]
+it_sets_a_quoted_key_holding_a_dot() {
+    local d; d="$(_tw_dir)"
+    printf '[a]\n"b.c" = 1\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" 'a."b.c"' 7
+    local got body; got="$(toml_get "$d/t.toml" 'a."b.c"')"; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" "7"
+    assert_eq "$body" $'[a]\n"b.c" = 7'
+}
+
+#[test]
+it_adds_a_quoted_key_holding_a_dot_to_its_table() {
+    local d; d="$(_tw_dir)"
+    printf '[a]\nx = 1\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" 'a."b.c"' 7
+    local got x; got="$(toml_get "$d/t.toml" 'a."b.c"')"; x="$(toml_get "$d/t.toml" a.x)"
+    rm -rf "$d"
+    assert_eq "$got" "7"
+    assert_eq "$x" "1"
+}
+
+#[test]
+it_unsets_a_quoted_key_holding_a_dot() {
+    local d; d="$(_tw_dir)"
+    printf '[a]\n"b.c" = 1\nx = 2\n' > "$d/t.toml"
+    assert_ok toml_unset "$d/t.toml" 'a."b.c"'
+    local body; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$body" $'[a]\nx = 2'
+}
+
+# The value of `s.doc` holds a header line and a key line. Setting `t.k` has
+# to change the real `[t]` at the end and leave the string as it was.
+_tw_ml_case() {
+    local d; d="$(_tw_dir)"
+    printf '%b' "$1" > "$d/t.toml"
+    cp "$d/t.toml" "$d/want.toml"
+    _TW_RC=0
+    toml_set "$d/t.toml" t.k 6 2>/dev/null || _TW_RC=$?
+    _TW_K="$(toml_get "$d/t.toml" t.k 2>&1)"
+    _TW_BODY="$(cat "$d/t.toml")"
+    rm -rf "$d"
+}
+
+#[test]
+it_sets_past_a_multi_line_basic_string_holding_a_header() {
+    _tw_ml_case '[s]\ndoc = """\n[t]\nk = 9\n"""\n\n[t]\nk = 5\n'
+    assert_eq "$_TW_RC" "0"
+    assert_eq "$_TW_K" "6"
+    assert_eq "$_TW_BODY" $'[s]\ndoc = """\n[t]\nk = 9\n"""\n\n[t]\nk = 6'
+}
+
+#[test]
+it_sets_past_a_multi_line_literal_string_holding_a_header() {
+    _tw_ml_case "[s]\ndoc = '''\n[t]\nk = 9\n'''\n\n[t]\nk = 5\n"
+    assert_eq "$_TW_RC" "0"
+    assert_eq "$_TW_K" "6"
+    assert_eq "$_TW_BODY" $'[s]\ndoc = \'\'\'\n[t]\nk = 9\n\'\'\'\n\n[t]\nk = 6'
+}
+
+#[test]
+it_sets_past_a_multi_line_array_holding_a_key_line() {
+    _tw_ml_case '[t]\nlist = [\n  "k = 9",\n]\nk = 5\n'
+    assert_eq "$_TW_RC" "0"
+    assert_eq "$_TW_K" "6"
+    assert_eq "$_TW_BODY" $'[t]\nlist = [\n  "k = 9",\n]\nk = 6'
+}
+
+#[test]
+it_replaces_a_multi_line_value_whole() {
+    local d; d="$(_tw_dir)"
+    printf '[t]\nk = """\nk = 1\n""" # note\nafter = 2\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" t.k v
+    local body; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$body" $'[t]\nk = "v" # note\nafter = 2'
+}
+
+#[test]
+it_unsets_past_a_multi_line_string_holding_the_same_key() {
+    local d; d="$(_tw_dir)"
+    printf '[s]\ndoc = """\nk = 9\n"""\nk = 5\n' > "$d/t.toml"
+    assert_ok toml_unset "$d/t.toml" s.k
+    local body; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$body" $'[s]\ndoc = """\nk = 9\n"""'
+}
+
+#[test]
+it_refuses_to_write_a_file_the_reader_refuses() {
+    _tw_refuse 'a = 1\na = 2\n' toml_set b 3
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "defined twice"
+    assert_eq "$_TW_SAME" "1"
+}

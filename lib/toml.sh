@@ -6,9 +6,6 @@
 #
 # Layer 0 (Core): Depends on validate.sh
 #
-# FIXME(a199af8c5f27): `deps` reads `[deps.paths]` and `bin/nutshell` reads its
-# pin by hand, outside this module.
-#
 # The TOML API. `use toml` and call it. The values come from the best reader
 # `deps` finds, picked at the first call: taplo where it prints TOML as JSON, else
 # mikefarah yq where it reads TOML, else the bash floor in

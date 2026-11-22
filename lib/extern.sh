@@ -150,8 +150,7 @@ extern_lock_write() {
         # Every other entry, carried across unchanged.
         if [ -f "$lock" ]; then
             local other others
-            others="$(grep -o '^\[deps\.[^]]*\]' "$lock" 2>/dev/null \
-                      | sed 's/^\[deps\.//; s/\]$//')"
+            others="$(toml_subsections "$lock" deps 2>/dev/null)"
             while IFS= read -r other; do
                 { [ -z "$other" ] || [ "$other" = "$name" ]; } && continue
                 existing="$(toml_get "$lock" "deps.${other}.commit" 2>/dev/null)" || continue

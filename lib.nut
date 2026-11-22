@@ -12,6 +12,11 @@ checkcache               lib/checkcache.sh
 cli                      lib/cli.sh
 color                    lib/color.sh
 deps                     lib/deps.sh
+deps::config             lib/deps/config.sh          internal
+deps::pins               lib/deps/pins.sh
+deps::probe              lib/deps/probe.sh           internal
+deps::state              lib/deps/state.sh           internal
+deps::variants           lib/deps/variants.sh        internal
 extern                   lib/extern.sh
 fs                       lib/fs.sh
 fs::impl::perl_stat      lib/fs/impl/perl_stat.sh     internal

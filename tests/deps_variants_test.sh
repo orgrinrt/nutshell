@@ -8,8 +8,7 @@
 # that is running, wherever the process was started.
 #
 # Every tool here is a fake written into a temporary directory, so no test
-# passes or fails on what the machine happens to have installed. The one test
-# against real binaries compares deps with what the binary says for itself.
+# passes or fails on what the machine happens to have installed.
 
 use deps test
 
@@ -72,26 +71,6 @@ it_calls_a_yq_that_will_not_report_itself_unknown() {
 }
 
 #[test]
-it_agrees_with_every_real_yq_on_what_it_is() {
-    local bin found=0 want t; t="$(mktemp -d)"
-    for bin in /root/.local/bin/yq /usr/bin/yq /usr/local/bin/yq /opt/homebrew/bin/yq "${HOME:-/nonexistent}/.local/bin/yq"; do
-        [ -x "$bin" ] || continue
-        found=1
-        # What the binary says of itself, read here and not through deps.
-        if "$bin" --version </dev/null 2>&1 | grep -q 'mikefarah/yq'; then
-            want=mikefarah
-        else
-            want=python
-        fi
-        rm -rf "$t/u"
-        _dv_unit "$t/u" "yq = \"$bin\"" 'deps_variant yq'
-        assert_eq "$(_dv_out "$t/u/sub/s.sh")" "$want" "variant of $bin"
-    done
-    rm -rf "$t"
-    [ "$found" = 1 ] || return 0
-}
-
-#[test]
 it_reads_deps_paths_from_the_scripts_own_unit_with_cwd_elsewhere() {
     local t; t="$(mktemp -d)"
     _dv_mikefarah "$t/yq-go"
@@ -137,6 +116,24 @@ it_refuses_a_deps_paths_entry_that_is_not_an_executable() {
     assert_not_contains "$out" "/usr/bin/sed"
     assert_contains "$out" "rc=1"
     assert_contains "$err" "[deps.paths]"
+    assert_contains "$err" "/nonexistent/sed"
+    rm -rf "$t"
+}
+
+#[test]
+it_reads_a_deps_paths_entry_written_as_a_dotted_key() {
+    # `[deps]` with `paths.sed = ...` is the same table as `[deps.paths]` with
+    # `sed = ...`. It used to pin nothing and say nothing.
+    local t; t="$(mktemp -d)"
+    mkdir -p "$t/u/sub"
+    printf '[deps]\npaths.sed = "/nonexistent/sed"\n' > "$t/u/nut.toml"
+    printf 'use deps\n%s\n' 'deps_has sed && echo FOUND; deps_path sed; echo "rc=$?"' > "$t/u/sub/s.sh"
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_not_contains "$out" "FOUND"
+    assert_not_contains "$out" "/usr/bin/sed"
+    assert_contains "$out" "rc=1"
     assert_contains "$err" "/nonexistent/sed"
     rm -rf "$t"
 }

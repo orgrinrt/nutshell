@@ -108,15 +108,30 @@ it_needs_no_password_when_it_is_already_root() {
 
 # --- running the one thing -----------------------------------------------------
 
+# `priv` runs `sudo` through `deps_run`, which runs the path deps resolved. A
+# test stubs `sudo` as a function, so while the stub is in place `deps_run`
+# runs the name, which reaches the function. Saved once, so a second call in
+# the same test cannot save the stand-in over the real one.
+_PRIV_DEPS_RUN=""
+_priv_by_name() {
+    [ -n "$_PRIV_DEPS_RUN" ] || _PRIV_DEPS_RUN="$(declare -f deps_run)"
+    deps_run() { "$@"; }
+}
+_priv_by_name_end() {
+    [ -z "$_PRIV_DEPS_RUN" ] || eval "$_PRIV_DEPS_RUN"
+    _PRIV_DEPS_RUN=""
+}
+
 #[test]
 it_runs_the_command_directly_when_already_root() {
     # No asking where nothing needs to be asked, or every step prompts for a
     # password that was never required.
     priv_is_root() { return 0; }
     local asked=0
+    _priv_by_name
     sudo() { asked=1; return 0; }
     local out; out="$(priv_run "a thing" printf 'ran')"
-    unset -f priv_is_root sudo
+    unset -f priv_is_root sudo; _priv_by_name_end
     assert_eq "$out" "ran"
     assert_eq "$asked" "0"
 }
@@ -148,9 +163,10 @@ it_asks_for_one_command_and_not_for_a_shell() {
     priv_how() { printf 'sudo'; }
     priv_needs_password() { return 1; }
     local got=""
+    _priv_by_name
     sudo() { got="$*"; }
     priv_run "mount the stick" mount /dev/sdz2 /mnt/stick
-    unset -f priv_is_root priv_how priv_needs_password sudo
+    unset -f priv_is_root priv_how priv_needs_password sudo; _priv_by_name_end
     assert_eq "$got" "-- mount /dev/sdz2 /mnt/stick"
     assert_fails grep -q ' -s\| bash\| sh ' <<<"$got"
 }
@@ -175,10 +191,11 @@ it_refuses_rather_than_hanging_on_a_prompt_nobody_can_answer() {
     priv_needs_password() { return 0; }
     _priv_can_prompt() { return 1; }
     local ran=0
+    _priv_by_name
     sudo() { ran=1; }
     local rc=0
     priv_run "a thing" true >/dev/null 2>&1 || rc=$?
-    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo
+    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo; _priv_by_name_end
     assert_eq "$rc" "2"
     assert_eq "$ran" "0"
 }
@@ -191,9 +208,10 @@ it_runs_when_there_is_a_terminal_to_ask_on() {
     priv_needs_password() { return 0; }
     _priv_can_prompt() { return 0; }
     local ran=0
+    _priv_by_name
     sudo() { ran=1; }
     priv_run "a thing" true >/dev/null 2>&1
-    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo
+    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo; _priv_by_name_end
     assert_eq "$ran" "1"
 }
 
@@ -205,9 +223,10 @@ it_says_what_it_is_asking_for_before_the_prompt_appears() {
     priv_how() { printf 'sudo'; }
     priv_needs_password() { return 0; }
     _priv_can_prompt() { return 0; }
+    _priv_by_name
     sudo() { return 0; }
     local out; out="$(priv_run "mount the stick" true 2>&1)"
-    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo
+    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo; _priv_by_name_end
     assert_contains "$out" "mount the stick"
 }
 
@@ -233,10 +252,11 @@ _priv_stub_asking() {
     priv_how() { printf 'sudo'; }
     priv_needs_password() { return 0; }
     _priv_can_prompt() { return 0; }
+    _priv_by_name
     sudo() { return 0; }
 }
 _priv_unstub_asking() {
-    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo
+    unset -f priv_is_root priv_how priv_needs_password _priv_can_prompt sudo; _priv_by_name_end
 }
 
 #[test]
@@ -277,6 +297,7 @@ it_says_nothing_on_stdout_so_a_captured_result_stays_clean() {
     # `x="$(priv_run ... some-command)"` would otherwise find the notice inside
     # `x`, and the failure is a wrong value rather than an error.
     _priv_stub_asking
+    _priv_by_name
     sudo() { printf 'the answer'; }
     local out; out="$(priv_run "a thing" true 2>/dev/null)"
     _priv_unstub_asking
@@ -505,6 +526,29 @@ it_carries_the_status_of_the_step_back_out() {
     assert_fails priv_as_user "failing" false
     assert_ok priv_as_user "working" true
     unset -f priv_is_root
+}
+
+#[test]
+it_runs_the_runuser_deps_resolved_and_not_the_bare_name() {
+    # A `[deps.paths]` pin decides what runs, not only whether it is there.
+    # The pinned one is outside PATH, so running by bare name finds nothing.
+    _priv_as_root
+    _priv_stubs sudo su
+    local pinned; pinned="$(mktemp -d "${TMPDIR:-/tmp}/nutshell-pin.XXXXXX")"
+    printf '#!%s\nprintf "pinned\\n"\n' "$_PRIV_STUB_BASH" > "$pinned/runuser"
+    "$_PRIV_STUB_CHMOD" +x "$pinned/runuser"
+    local only; only="$(declare -f _deps_find_tool)"
+    eval "_deps_find_only_path${only#_deps_find_tool}"
+    _deps_find_tool() {
+        [ "$1" = runuser ] && { printf '%s\n' "$_PIN_DIR/runuser"; return 0; }
+        _deps_find_only_path "$@"
+    }
+    _PIN_DIR="$pinned"; deps_forget
+    local out; out="$(priv_as_user "reading" git status)"
+    eval "$only"; unset -f _deps_find_only_path; unset _PIN_DIR
+    _priv_stubs_end; _priv_as_root_end
+    rm -rf "$pinned"
+    assert_eq "$out" "pinned"
 }
 
 #[test]

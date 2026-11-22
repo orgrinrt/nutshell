@@ -82,7 +82,7 @@ _deps_find_config() {
 # forgotten, so an entry in the script's own `[deps.paths]` takes effect
 # whatever got to the tool first.
 _deps_sync_config() {
-    local old="$_DEPS_CONFIG" t _k
+    local old="$_DEPS_CONFIG" t _k _rc
     _DEPS_CONFIG_KEY="${_NUT_ASKING_FROM:-}|${NUTSHELL_SCRIPT_DIR:-}|${PWD}"
     _DEPS_CONFIG="$(_deps_find_config)" || _DEPS_CONFIG=""
     [ "$_DEPS_CONFIG" != "$old" ] || return 0
@@ -90,75 +90,79 @@ _deps_sync_config() {
     [ -n "$_DEPS_CONFIG" ] || return 0
     local list="$_TOOLS_AVAILABLE"
     for t in $list; do
-        _deps_toml_get "$_DEPS_CONFIG" "deps.paths" "$t" >/dev/null || continue
+        _rc=0; _deps_toml_get "$_DEPS_CONFIG" "deps.paths" "$t" >/dev/null 2>&1 || _rc=$?
+        [ "$_rc" -eq 1 ] && continue
         _deps_unlearn "$t"
         deps_has "$t" >/dev/null 2>&1 || true
         _deps_drop_caps
     done
 }
 
-# Simple TOML value extraction (no toml.sh dependency to avoid circular deps)
-# Only handles simple key = "value" or key = value cases
+# _deps_toml_get <file> <table> <key> -> the value, 1 when absent, 2 when the
+# table is there in a form this cannot read
+#
+# Not the toml module. deps lowers to a POSIX shell and toml does not, so a
+# `use toml` here takes every closure that holds deps off the POSIX floor.
+#
+# A key is matched by its whole dotted path, the table it sits under joined to
+# its own dotted name, so `[deps.paths]` with `sed = ...`, `[deps]` with
+# `paths.sed = ...` and a root `deps.paths.sed = ...` are one key. A key whose
+# path is the table itself is an inline table, which this does not read, and
+# that is refused rather than read as no pin at all.
 _deps_toml_get() {
-    local file="$1"
-    local section="$2"
-    local key="$3"
-    
+    local file="$1" want="$2.$3" table="$2"
     [ -f "$file" ] || return 1
 
-    local in_section=0
-    local current_section=""
-    local line t
+    local cur="" line t k v full
 
     while IFS= read -r line || [ -n "$line" ]; do
         # Matched by shape rather than by `[[ =~ ]]`. A regex match is the one
         # bashism a POSIX shell cannot even parse past, so a file carrying one
         # is unreadable there whatever the rest of it does.
         t="${line#"${line%%[![:space:]]*}"}"
-
-        # Comments and blank lines
         case "$t" in ''|'#'*) continue ;; esac
 
-        # Section header. `[^\]]+` was the old shape: at least one character
-        # and no `]` inside it.
         case "$t" in
-            '['*']')
-                current_section="${t#\[}"
-                current_section="${current_section%]}"
-                case "$current_section" in
-                    ''|*']'*)     in_section=0 ;;
-                    "$section")   in_section=1 ;;
-                    *)            in_section=0 ;;
-                esac
+            '[['*)
+                cur="//"; continue ;;
+            '['*']'*)
+                cur="${t#\[}"; cur="${cur%%]*}"
+                _deps_dotted "$cur"; cur="$_DD"
                 continue ;;
         esac
+        [ "$cur" = "//" ] && continue
+        [ "${t#*=}" != "$t" ] || continue
 
-        # Skip if not in the right section
-        [ "$in_section" -eq 0 ] && continue
+        _deps_dotted "${t%%=*}"; k="$_DD"
+        full="${cur:+${cur}.}${k}"
+        v="${t#*=}"
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
 
-        # Key = value
-        if [ "${t#*=}" != "$t" ]; then
-            local k="${t%%=*}"
-            local v="${t#*=}"
-            # Trim whitespace
-            k="${k#"${k%%[![:space:]]*}"}"
-            k="${k%"${k##*[![:space:]]}"}"
-            v="${v#"${v%%[![:space:]]*}"}"
-            v="${v%"${v##*[![:space:]]}"}"
-            # Remove quotes
-            v="${v#\"}"
-            v="${v%\"}"
-            v="${v#\'}"
-            v="${v%\'}"
-            
-            if [ "$k" = "$key" ]; then
-                echo "$v"
-                return 0
-            fi
-        fi
+        case "$want" in
+            "${full}".*)
+                printf '[ERROR] deps: %s in %s holds %s as an inline table; write it as [%s]\n' \
+                    "$full" "$file" "$want" "$table" >&2
+                return 2 ;;
+        esac
+        [ "$full" = "$want" ] || continue
+        v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
+        printf '%s\n' "$v"
+        return 0
     done < "$file"
-    
     return 1
+}
+
+# A key or header with its blanks taken out, so `a . b` is `a.b`, into `_DD`.
+# Parameter expansion and no fork: this runs for every line of the manifest.
+_deps_dotted() {
+    _DD="$1"
+    while :; do
+        case "$_DD" in
+            *[[:blank:]]*) _DD="${_DD%%[[:blank:]]*}${_DD#*[[:blank:]]}" ;;
+            *) return 0 ;;
+        esac
+    done
 }
 
 # -----------------------------------------------------------------------------
@@ -284,8 +288,10 @@ _deps_find_tool() {
 
     # 1. Check user config first
     if [ -n "$config_file" ]; then
-        local user_path
-        if user_path="$(_deps_toml_get "$config_file" "deps.paths" "$tool")"; then
+        local user_path rc=0
+        user_path="$(_deps_toml_get "$config_file" "deps.paths" "$tool")" || rc=$?
+        [ "$rc" -eq 2 ] && return 2
+        if [ "$rc" -eq 0 ]; then
             if [ -f "$user_path" ] && [ -x "$user_path" ]; then
                 echo "$user_path"
                 return 0

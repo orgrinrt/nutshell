@@ -76,7 +76,7 @@ _priv_home_of() {
     local u="$1" line=""
     [ -n "$u" ] || return 1
     if deps_has getent; then
-        line="$(getent passwd "$u" 2>/dev/null)" || line=""
+        line="$(deps_run getent passwd "$u" 2>/dev/null)" || line=""
     fi
     if [ -z "$line" ] && [ -r /etc/passwd ]; then
         while IFS= read -r line; do
@@ -101,7 +101,7 @@ _priv_home_of() {
     fi
     # A mac keeps its users elsewhere, and `dscl` is how you ask.
     if deps_has dscl; then
-        local h; h="$(dscl . -read "/Users/${u}" NFSHomeDirectory 2>/dev/null)" || h=""
+        local h; h="$(deps_run dscl . -read "/Users/${u}" NFSHomeDirectory 2>/dev/null)" || h=""
         h="${h#*: }"
         [ -n "$h" ] && { printf '%s' "$h"; return 0; }
     fi
@@ -190,9 +190,9 @@ priv_as_user() {
         case "$c" in
             # runuser is the one built for this: root to another user, no
             # password, no login shell in the way.
-            runuser) runuser -u "$u" -- "$@"; return $? ;;
-            sudo)    sudo -n -u "$u" -- "$@"; return $? ;;
-            doas)    doas -u "$u" -- "$@"; return $? ;;
+            runuser) deps_run runuser -u "$u" -- "$@"; return $? ;;
+            sudo)    deps_run sudo -n -u "$u" -- "$@"; return $? ;;
+            doas)    deps_run doas -u "$u" -- "$@"; return $? ;;
             # Last, and through a shell, so the arguments have to be quoted
             # back into one string. Every other route avoids that.
             su)
@@ -201,7 +201,7 @@ priv_as_user() {
                 # No `-s`. That flag is util-linux; BSD and macOS `su` is
                 # `su [-] [-flm] [login [args]]` and refuses it, and this is
                 # the branch a busybox rescue console actually takes.
-                su "$u" -c "$q"
+                deps_run su "$u" -c "$q"
                 return $?
                 ;;
         esac
@@ -241,8 +241,8 @@ priv_needs_password() {
     priv_is_root && return 1
     local how; how="$(priv_how)" || return 0
     case "$how" in
-        sudo) sudo -n true 2>/dev/null && return 1 ;;
-        doas) doas -n true 2>/dev/null && return 1 ;;
+        sudo) deps_run sudo -n true 2>/dev/null && return 1 ;;
+        doas) deps_run doas -n true 2>/dev/null && return 1 ;;
     esac
     return 0
 }
@@ -312,8 +312,8 @@ priv_run() {
     _priv_say_command "$@"
 
     case "$how" in
-        sudo) sudo -- "$@" ;;
-        doas) doas -- "$@" ;;
+        sudo) deps_run sudo -- "$@" ;;
+        doas) deps_run doas -- "$@" ;;
         *)    "$@" ;;
     esac
 }

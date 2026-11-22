@@ -46,9 +46,9 @@ _NUTSHELL_ARRAY_SH=1
 # find its own path, and `$0` is the caller. So this refuses instead. `map.sh`
 # and `list.sh` both demonstrate that a floor file is cleanest with nothing to
 # resolve, and this one has a real dependency, so it says so.
-if command -v use >/dev/null 2>&1; then
+if type use >/dev/null 2>&1; then
     use list
-elif ! command -v list_new >/dev/null 2>&1; then
+elif ! type list_new >/dev/null 2>&1; then
     printf 'array: needs `list`. Source lib/list.sh before this file, or use\n' >&2
     printf '  nutshell, which resolves it.\n' >&2
     return 1

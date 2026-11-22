@@ -1,0 +1,4 @@
+"quoted key" = 1
+'lit key' = 2
+bare-key_1 = 3
+"escAped" = 4

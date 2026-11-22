@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
 # nutshell/core/toml.sh - TOML parsing
-# =============================================================================
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-#[allow(loc = 400)]
-# Layer 0 (Core): Depends on fs.sh, string.sh, validate.sh
+# Layer 0 (Core): Depends on validate.sh
 #
-# Pure TOML parsing functions. No caching, no config semantics.
-# Handles basic TOML: key = "value", [sections], arrays, booleans.
-# =============================================================================
+# FIXME(67897977fc7b): every reader answers from the bash floor alone; the
+# backend layer that picks mikefarah yq or taplo through `deps` is not here yet.
+# FIXME(a199af8c5f27): `deps` reads `[deps.paths]` and `bin/nutshell` reads its
+# pin by hand, outside this module.
+#
+# The TOML API. `use toml` and call it. Every reader here answers from the tree
+# the bash floor builds in `lib/toml/impl/bash.sh`, which reads TOML 1.0 in
+# full or refuses the file.
+#
+# One path language for every function that takes one, the same as json's:
+# `a.b.0.c`, where a dot separates segments, a numeric segment indexes an
+# array or an array of tables, and `"quoted.key"` in double quotes is one
+# segment.
+#
+# Return codes, everywhere: 0 found, 1 not there (no file, no such key), 2 the
+# file is not TOML this reader accepts, with the line and the construct on
+# stderr. A refusal is never reported as a miss.
 
 # Prevent multiple inclusion
 # A guard of its own rather than `nut_once`, which reads `BASH_SOURCE`
@@ -22,831 +34,314 @@ _NUTSHELL_TOML_SH=1
 
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
-# dependency was real and unrecorded at once. `_toml_clean_line` trims through
-# `str_trim`, and until this line existed a caller that had not already loaded
-# `string` got a toml module whose every read silently failed.
-use string validate
+# dependency would be real and unrecorded at once.
+use validate
+use super::toml::impl::bash super::toml::impl::bash_path
 
 # -----------------------------------------------------------------------------
 # Internal helpers
-# -----------------------------------------------------------------------------
 
-# Remove inline comments and trim whitespace from a line
-# Trim, without a subshell. `$(str_trim ...)` forks, and the reader calls it
-# once or twice for every line of every file: fifty-five lines cost a hundred
-# milliseconds, and something reading a manifest for seven keys paid it seven
-# times. Parameter expansion does the same job in the current shell.
-# The caller names the target, which makes two things the caller's business
-# and neither of them safe to assume.
-#
-# A name matching one of our own locals is shadowed by it, and the write lands
-# on the local instead: the caller's variable is untouched and nothing says so.
-# Prefixing the locals narrowed that to eight names rather than removing it, so
-# the reserved prefix is refused outright instead of hoped about.
-#
-# A name carrying an array subscript is EVALUATED by `printf -v`, so
-# `arr[$(...)]` runs the command inside it. Only a plain identifier is
-# accepted.
-_toml_valid_target() {
-    case "$1" in
-        __toml_*) return 1 ;;
+# _toml_node_show <node> -> `_tn_out`, the path that names a node
+_toml_node_show() {
+    local rest="${1#R}" seg
+    _tn_out=""
+    rest="${rest#"$_TOML_US"}"
+    [[ -n "$rest" ]] || return 0
+    while :; do
+        seg="${rest%%"$_TOML_US"*}"
+        _toml_seg_show "$seg"
+        _tn_out+="${_tn_out:+.}${_ts_out}"
+        [[ "$rest" == *"$_TOML_US"* ]] || return 0
+        rest="${rest#*"$_TOML_US"}"
+    done
+}
+
+# _toml_text <node> -> `_tx_out`, a value as text; rc 1 for a table or an
+# array of tables, which have none
+# A scalar is its value, decoded. An array or an inline table is what the file
+# wrote, so it can be read again by `toml_inline_get` or split by `toml_array`.
+_toml_text() {
+    local node="$1" i n
+    case "${_TOML_T[$node]-}" in
+        ''|aot)
+            return 1 ;;
+        table)
+            [[ "${_TOML_F[$node]-}" == *X* && -n "${_TOML_R[$node]+x}" ]] || return 1
+            _tx_out="${_TOML_R[$node]}" ;;
+        array)
+            _tx_out="${_TOML_R[$node]}"
+            [[ "$_tx_out" == *$'\n'* ]] || return 0
+            # Written over several lines: given back on one, element by element.
+            n="${_TOML_N[$node]}"
+            _tx_out="["
+            for (( i = 0; i < n; i++ )); do
+                (( i )) && _tx_out+=", "
+                _tx_out+="${_TOML_R[$node$_TOML_US$i]}"
+            done
+            _tx_out+="]" ;;
+        *)
+            _tx_out="${_TOML_V[$node]}" ;;
     esac
-    [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
 }
 
-_toml_trim_into() {
-    _toml_valid_target "$1" || return 2
-    local __toml_v="$2"
-    __toml_v="${__toml_v#"${__toml_v%%[![:space:]]*}"}"
-    __toml_v="${__toml_v%"${__toml_v##*[![:space:]]}"}"
-    printf -v "$1" '%s' "$__toml_v"
+# _toml_open <file> -> the file read; rc 2 also prints why
+_toml_open() {
+    local rc=0
+    _toml_load "$1" || rc=$?
+    (( rc == 2 )) && printf '%s\n' "$_TOML_ERR" >&2
+    return "$rc"
 }
 
-# The cleaner, likewise. Same rule about a `#` inside quotes; same result;
-# no fork.
-_toml_clean_into() {
-    _toml_valid_target "$1" || return 2
-    local __toml_out="$1" __toml_line="$2"
-
-    # The ordinary line has no quote and no `#` in it, and then there is
-    # nothing to scan for: the quote rules below only matter when a quote or a
-    # comment character is present. Deciding that costs one test; the loop
-    # costs six commands per character.
-    #
-    # This is the hottest path in the library. Config lookups go through it for
-    # every line of the file, and a trace of one QA run showed 1.4 million
-    # executions of the loop below, which was most of the run.
-    case "$__toml_line" in
-        *'"'*|*"'"*|*'#'*) ;;
-        *) _toml_trim_into "$__toml_out" "$__toml_line"; return ;;
-    esac
-
-    local __toml_acc="" __toml_i __toml_c __toml_q=0 __toml_qc=""
-    for (( __toml_i = 0; __toml_i < ${#__toml_line}; __toml_i++ )); do
-        __toml_c="${__toml_line:__toml_i:1}"
-        if [[ $__toml_q -eq 1 ]]; then
-            # The same escaped-quote rule as `_toml_clean_line`. It was fixed
-            # there and not here, and this is the copy on the hot path: every
-            # read of a value, every section listing and the JSON conversion go
-            # through it, so the truncation stayed for all of them.
-            if [[ "$__toml_c" == "\\" && "$__toml_qc" == '"' \
-                  && $(( __toml_i + 1 )) -lt ${#__toml_line} ]]; then
-                __toml_acc+="$__toml_c"
-                __toml_i=$(( __toml_i + 1 ))
-                __toml_c="${__toml_line:__toml_i:1}"
-            elif [[ "$__toml_c" == "$__toml_qc" ]]; then
-                __toml_q=0
-            fi
-        elif [[ "$__toml_c" == '"' || "$__toml_c" == "'" ]]; then
-            __toml_q=1; __toml_qc="$__toml_c"
-        elif [[ "$__toml_c" == "#" ]]; then
-            break
-        fi
-        __toml_acc+="$__toml_c"
+# _toml_children <node> -> `_tc_keys`, the keys of a table in file order
+_toml_children() {
+    local k="${_TOML_K[$1]-}"
+    _tc_keys=()
+    [[ -n "$k" ]] || return 0
+    k="${k#"$_TOML_RS"}"
+    while :; do
+        _tc_keys+=("${k%%"$_TOML_RS"*}")
+        [[ "$k" == *"$_TOML_RS"* ]] || return 0
+        k="${k#*"$_TOML_RS"}"
     done
-    _toml_trim_into "$__toml_out" "$__toml_acc"
-}
-
-_toml_clean_line() {
-    local line="$1"
-
-    # A `#` inside a quoted string is part of the value, not the start of a
-    # comment. Truncating at the first one regardless, which is what this did,
-    # silently emptied any value containing one: `public_api = "#[pub]"` parsed
-    # as `public_api =` and every consumer got an empty string with no error to
-    # explain it.
-    local out="" i char in_quotes=0 quote=""
-    for (( i = 0; i < ${#line}; i++ )); do
-        char="${line:i:1}"
-        if [[ "$in_quotes" -eq 1 ]]; then
-            # An escaped quote inside a basic string does not close it. Read as
-            # a terminator, the rest of the value falls outside the string and
-            # a `#` in it truncates the line. TOML gives a literal string no
-            # escapes at all, so the backslash only counts inside `"`.
-            if [[ "$char" == "\\" && "$quote" == '"' && $(( i + 1 )) -lt ${#line} ]]; then
-                out+="$char"
-                i=$(( i + 1 ))
-                char="${line:i:1}"
-            elif [[ "$char" == "$quote" ]]; then
-                in_quotes=0
-            fi
-        elif [[ "$char" == '"' || "$char" == "'" ]]; then
-            in_quotes=1
-            quote="$char"
-        elif [[ "$char" == "#" ]]; then
-            break
-        fi
-        out+="$char"
-    done
-
-    str_trim "$out"
-}
-
-# A codepoint as UTF-8 bytes, into a named variable.
-#
-# Not `printf '\uXXXX'`, which is what this used to be. That escape is decoded
-# against the current locale, so under `LC_ALL=C` bash emits the escape text
-# unchanged and a value comes back as `caf\u00E9` with no error anywhere. The
-# C locale is what a container and a build machine tend to run, which makes it
-# exactly the case that must work.
-#
-# `\xNN` writes a byte and means the same thing everywhere, so the encoding is
-# done here in arithmetic and handed over as bytes. A shell string is a byte
-# string, so nothing downstream has to know.
-#
-# Refuses a surrogate half and anything past the last codepoint, because
-# neither has a UTF-8 encoding; the caller keeps the escape as typed.
-_toml_utf8() {
-    # Prefixed locals, because the answer is written with `printf -v` and bash
-    # scopes dynamically: a local called `out` or `cp` shadows a caller asking
-    # for its own, the write lands in this frame and dies with it, and the
-    # caller still gets a zero return. `srcfile.sh` was bitten by exactly this
-    # and defends against it; the same treatment was owed here.
-    #
-    # It is a convention rather than a guarantee: a caller asking for its
-    # answer in `__tu_out` still loses it, and nothing can detect that from
-    # in here. The prefix makes the collision improbable, not impossible.
-    local __tu_cp="$1" __tu_out="$2"
-    [[ "$__tu_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 2
-    (( __tu_cp < 0 || __tu_cp > 0x10FFFF )) && return 1
-    (( __tu_cp >= 0xD800 && __tu_cp <= 0xDFFF )) && return 1
-    if (( __tu_cp < 0x80 )); then
-        printf -v "$__tu_out" '%b' "$(printf '\\x%02x' "$__tu_cp")"
-    elif (( __tu_cp < 0x800 )); then
-        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x' \
-            $(( 0xC0 | (__tu_cp >> 6) )) $(( 0x80 | (__tu_cp & 0x3F) )))"
-    elif (( __tu_cp < 0x10000 )); then
-        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x' \
-            $(( 0xE0 | (__tu_cp >> 12) )) $(( 0x80 | ((__tu_cp >> 6) & 0x3F) )) \
-            $(( 0x80 | (__tu_cp & 0x3F) )))"
-    else
-        printf -v "$__tu_out" '%b' "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
-            $(( 0xF0 | (__tu_cp >> 18) )) $(( 0x80 | ((__tu_cp >> 12) & 0x3F) )) \
-            $(( 0x80 | ((__tu_cp >> 6) & 0x3F) )) $(( 0x80 | (__tu_cp & 0x3F) )))"
-    fi
-    return 0
-}
-
-# Decode the escapes a TOML basic string is allowed to carry.
-#
-# Only a basic string has them: a literal string is taken as typed, which is
-# the whole difference between the two forms. Without this a value written
-# with an escaped quote or a backslash reads back with the backslashes still
-# in it, so a path or a piece of prose does not survive a write and a read.
-_toml_unescape() {
-    local s="$1"
-    # Nothing to do, and this is on the path of every value in every file.
-    if [[ "$s" != *\\* ]]; then
-        printf '%s' "$s"
-        return 0
-    fi
-
-    local out="" i char next
-    for (( i = 0; i < ${#s}; i++ )); do
-        char="${s:i:1}"
-        if [[ "$char" != "\\" || $(( i + 1 )) -ge ${#s} ]]; then
-            out+="$char"
-            continue
-        fi
-        next="${s:i+1:1}"
-        i=$(( i + 1 ))
-        case "$next" in
-            n)  out+=$'\n' ;;
-            t)  out+=$'\t' ;;
-            r)  out+=$'\r' ;;
-            b)  out+=$'\b' ;;
-            f)  out+=$'\f' ;;
-            '"') out+='"' ;;
-            "\\") out+="\\" ;;
-            u|U)
-                # \uXXXX and \UXXXXXXXX. Anything that is not the right
-                # number of hex digits is not one, and is kept as typed rather
-                # than silently eaten.
-                local n=4; [[ "$next" == "U" ]] && n=8
-                local hex="${s:i+1:n}"
-                if [[ "${#hex}" -eq "$n" && "$hex" =~ ^[0-9A-Fa-f]+$ ]]; then
-                    local __u_enc=""
-                    if _toml_utf8 "$(( 16#$hex ))" __u_enc; then
-                        out+="$__u_enc"
-                        i=$(( i + n ))
-                    else
-                        out+="\\$next"
-                    fi
-                else
-                    out+="\\$next"
-                fi
-                ;;
-            *)  out+="\\$next" ;;
-        esac
-    done
-    printf '%s' "$out"
-}
-
-# Extract value, handling quotes
-_toml_extract_value() {
-    local raw="$1"
-    raw="$(str_trim "$raw")"
-    
-    # Double-quoted string
-    if [[ "$raw" =~ ^\"(.*)\"$ ]]; then
-        _toml_unescape "${BASH_REMATCH[1]}"
-        printf '\n'
-        return 0
-    fi
-    
-    # Single-quoted string (literal)
-    if [[ "$raw" =~ ^\'(.*)\'$ ]]; then
-        echo "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    
-    # Unquoted value (number, boolean, etc.)
-    echo "$raw"
 }
 
 # -----------------------------------------------------------------------------
 # Public API
-# -----------------------------------------------------------------------------
 
 #[pub]
-# Get a value from a TOML file
-# Usage: toml_get "file.toml" "key" -> prints value
-# Usage: toml_get "file.toml" "section.key" -> prints value from [section]
-# Usage: toml_get "file.toml" "section.subsection.key" -> prints value from [section.subsection]
+# Get a value from a TOML file.
+#
+# The path reaches a key under a header, a dotted key, a key inside an inline
+# table and an element of an array alike. A string comes back decoded, a
+# number in decimal, an array or an inline table as written. A table that is
+# not inline, and an array of tables, have no value: `toml_keys` and
+# `toml_tables` read those.
+# Usage: toml_get "file.toml" "section.key" -> prints the value
 toml_get() {
-    local file="${1:-}"
-    local key="${2:-}"
-    
-    [[ ! -f "$file" ]] && return 1
-    [[ -z "$key" ]] && return 1
-    
-    local section=""
-    local search_key="$key"
-    
-    # Check if key has section prefix (section.key or section.subsection.key)
-    # We need to find the longest matching section name
-    if [[ "$key" == *.* ]]; then
-        # Try progressively shorter section prefixes until we find a match
-        local test_section="$key"
-        while [[ "$test_section" == *.* ]]; do
-            test_section="${test_section%.*}"
-            # Check if this section exists in the file
-            if grep -qE "^\[${test_section}\]" "$file" 2>/dev/null; then
-                section="$test_section"
-                search_key="${key#${section}.}"
-                break
-            fi
-        done
-        
-        # If no section found, use the simple split (first.rest)
-        if [[ -z "$section" && "$key" == *.* ]]; then
-            section="${key%%.*}"
-            search_key="${key#*.}"
-        fi
-    fi
-    
-    local in_section=0
-    local current_section=""
-    local line clean_line
-    local in_multiline_array=0
-    local multiline_value=""
-    local in_multiline_string=0
-    local multiline_string=""
-    local capture_string=0
-    local multiline_delim=""
-    
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        # A multi-line basic string, collected from RAW lines. Everything
-        # between the delimiters is literal, including a `#`, so the comment
-        # stripper must not run over it. Without this the reader returned a
-        # bare `"` for every such value, which callers then used as content.
-        if [[ $in_multiline_string -eq 1 ]]; then
-            if [[ "$line" == *"$multiline_delim"* ]]; then
-                in_multiline_string=0
-                if [[ $capture_string -eq 1 ]]; then
-                    multiline_string+="${line%%"$multiline_delim"*}"
-                    printf '%s' "$multiline_string"
-                    return 0
-                fi
-                continue
-            fi
-            [[ $capture_string -eq 1 ]] && multiline_string+="${line}"$'\n'
-            continue
-        fi
-
-        # If we're collecting a multiline array, keep collecting
-        # Don't use _toml_clean_line here because it would strip # inside quoted strings
-        if [[ $in_multiline_array -eq 1 ]]; then
-            # Comments inside a multi-line array are still comments. This used
-            # to keep the whole line, on the grounds that a `#` may sit inside
-            # a quoted value -- which is true, and is exactly what
-            # _toml_clean_line was written to handle. Keeping it meant the
-            # comment text was appended into the array and then split on
-            # commas, so a comment containing one swallowed the entry after it,
-            # silently. A declared path simply stopped being read.
-            local trimmed
-            _toml_clean_into trimmed "$line"
-            [[ -z "$trimmed" ]] && continue  # blank, or comment-only
-            multiline_value+="$trimmed"
-            # Check if this line closes the array (] not inside quotes)
-            # Simple heuristic: line ends with ] or ],
-            if [[ "$trimmed" == *"]" ]] || [[ "$trimmed" == "]," ]]; then
-                in_multiline_array=0
-                _toml_extract_value "$multiline_value"
-                return 0
-            fi
-            continue
-        fi
-        
-        _toml_clean_into clean_line "$line"
-        [[ -z "$clean_line" ]] && continue
-        
-        # Section header
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
-            current_section="${BASH_REMATCH[1]}"
-            if [[ -z "$section" ]]; then
-                in_section=0
-            elif [[ "$current_section" == "$section" ]]; then
-                in_section=1
-            else
-                in_section=0
-            fi
-            continue
-        fi
-        
-        # A multi-line string opens here. Detected BEFORE the section gates,
-        # because the body has to be skipped whatever section it sits in: a
-        # body line reading `[n]` was being taken as a real section header, and
-        # one reading `keymap = wrong` was returned as a real setting, from a
-        # section the caller never asked about.
-        if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
-            # Copied out before anything else runs. BASH_REMATCH is global and
-            # any `[[ =~ ]]` anywhere -- including inside a function called
-            # between the two reads -- replaces it. Reading group two after a
-            # call that matched something else gets nothing, under `set -u`
-            # loudly and otherwise silently.
-            local __raw_k="${BASH_REMATCH[1]}" __raw_v="${BASH_REMATCH[2]}"
-            local __k __v
-            _toml_trim_into __k "$__raw_k"
-            _toml_trim_into __v "$__raw_v"
-            # Basic and literal delimiters both. They differ in escape
-            # handling, which this reader does no processing of either way, so
-            # the only difference that matters here is which three characters
-            # close it.
-            local __d=""
-            [[ "$__v" == '"""'* ]] && __d='"""'
-            [[ "$__v" == "'''"* ]] && __d="'''"
-            if [[ -n "$__d" && "${__v#"$__d"}" != *"$__d"* ]]; then
-                in_multiline_string=1
-                multiline_delim="$__d"
-                capture_string=0
-                # Captured only when it is the value being looked for, and only
-                # when we are in the right section for it.
-                if [[ "$__k" == "$search_key" ]] \
-                   && { [[ -z "$section" && -z "$current_section" ]] \
-                        || [[ -n "$section" && $in_section -eq 1 ]]; }; then
-                    capture_string=1
-                    local __opening="${__v#"$__d"}"
-                    multiline_string="${__opening:+${__opening}$'\n'}"
-                fi
-                continue
-            fi
-        fi
-
-        # Skip if we need a section but aren't in it
-        if [[ -n "$section" && $in_section -eq 0 ]]; then
-            continue
-        fi
-        
-        # Skip if we don't want a section but are in one
-        if [[ -z "$section" && -n "$current_section" ]]; then
-            continue
-        fi
-        
-        # Key = value
-        if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
-            local raw_k="${BASH_REMATCH[1]}" raw_v="${BASH_REMATCH[2]}"
-            local k v
-            _toml_trim_into k "$raw_k"
-            _toml_trim_into v "$raw_v"
-            
-            if [[ "$k" == "$search_key" ]]; then
-                # A triple-quoted value. Closed on the same line when there
-                # is a second delimiter after the first; otherwise it runs on.
-                # The single-line form of either delimiter.
-                local __sd=""
-                [[ "$v" == '"""'* ]] && __sd='"""'
-                [[ "$v" == "'''"* ]] && __sd="'''"
-                if [[ -n "$__sd" ]]; then
-                    local rest="${v#"$__sd"}"
-                    printf '%s' "${rest%%"$__sd"*}"
-                    return 0
-                fi
-
-                # Check if value starts an array that spans multiple lines
-                if [[ "$v" == "["* && "$v" != *"]"* ]]; then
-                    in_multiline_array=1
-                    multiline_value="$v"
-                    continue
-                fi
-                _toml_extract_value "$v"
-                return 0
-            fi
-        fi
-    done < "$file"
-    
-    return 1
+    local file="${1:-}" key="${2:-}"
+    [[ -n "$file" && -n "$key" ]] || return 1
+    _toml_open "$file" || return $?
+    _toml_path_split "$key" || return 1
+    _toml_lookup || return 1
+    _toml_text "$_tl_node" || return 1
+    printf '%s\n' "$_tx_out"
 }
 
 #[pub]
 # Get a value with a default if not found
 # Usage: toml_get_or "file.toml" "key" "default" -> prints the value, or the default when the key is absent
 toml_get_or() {
-    local file="${1:-}"
-    local key="${2:-}"
-    local default="${3:-}"
-    
-    local value
-    if value="$(toml_get "$file" "$key")"; then
-        echo "$value"
-    else
-        echo "$default"
-    fi
+    local file="${1:-}" key="${2:-}" default="${3:-}" rc=0
+    toml_get "$file" "$key" || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        2) return 2 ;;
+    esac
+    printf '%s\n' "$default"
 }
 
 #[pub]
 # Check if a key exists in a TOML file
-# Usage: toml_has "file.toml" "key" -> returns 0 (true) or 1 (false)
+# Usage: toml_has "file.toml" "key" -> returns 0 (true), 1 (false), 2 (not TOML)
 toml_has() {
-    local file="${1:-}"
-    local key="${2:-}"
-    
-    toml_get "$file" "$key" >/dev/null 2>&1
+    toml_get "${1:-}" "${2:-}" >/dev/null
 }
 
 #[pub]
-# List all section names in a TOML file
+# List the tables named by a header, in the order the file first names them.
+# An array of tables is listed once, and a table under one of its elements by
+# the element's index, `servers.0.opts`.
 # Usage: toml_sections "file.toml" -> prints section names, one per line
 toml_sections() {
-    local file="${1:-}"
-    [[ ! -f "$file" ]] && return 1
-    
-    local line clean_line
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        clean_line="$(_toml_clean_line "$line")"
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
-            echo "${BASH_REMATCH[1]}"
-        fi
-    done < "$file"
+    local file="${1:-}" node
+    _toml_open "$file" || return $?
+    for node in "${_TOML_HDR[@]}"; do
+        _toml_node_show "$node"
+        printf '%s\n' "$_tn_out"
+    done
 }
 
 #[pub]
-# List all keys in a section (or root if no section specified)
+# List the keys that hold values in a table, the root when none is named.
+# A table that has a header of its own is a section rather than a key.
 # Usage: toml_keys "file.toml" [section] -> prints one key per line, root keys when no section is named
 toml_keys() {
-    local file="${1:-}"
-    local section="${2:-}"
-    
-    [[ ! -f "$file" ]] && return 1
-    
-    local in_section=0
-    local current_section=""
-    local line clean_line
-    
-    # If no section specified, we want root-level keys
-    [[ -z "$section" ]] && in_section=1
-    
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        _toml_clean_into clean_line "$line"
-        [[ -z "$clean_line" ]] && continue
-        
-        # Section header
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
-            current_section="${BASH_REMATCH[1]}"
-            if [[ -z "$section" ]]; then
-                in_section=0  # Stop reading root keys when we hit a section
-            elif [[ "$current_section" == "$section" ]]; then
-                in_section=1
-            else
-                in_section=0
-            fi
-            continue
-        fi
-        
-        [[ $in_section -eq 0 ]] && continue
-        
-        # Skip lines that start with quotes (array elements, not keys)
-        [[ "$clean_line" =~ ^[\"\'] ]] && continue
-        
-        # Key = value (key must not start with quote)
-        if [[ "$clean_line" =~ ^([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*= ]]; then
-            echo "${BASH_REMATCH[1]}"
-        fi
-    done < "$file"
+    local file="${1:-}" section="${2:-}" node k child f
+    _toml_open "$file" || return $?
+    node=R
+    if [[ -n "$section" ]]; then
+        _toml_path_split "$section" || return 1
+        _toml_lookup || return 1
+        node="$_tl_node"
+    fi
+    [[ "${_TOML_T[$node]}" == table ]] || return 1
+    _toml_children "$node"
+    for k in "${_tc_keys[@]}"; do
+        child="$node$_TOML_US$k"
+        f="${_TOML_F[$child]-}"
+        [[ "${_TOML_T[$child]}" == aot ]] && continue
+        [[ "${_TOML_T[$child]}" == table && "$f" != *[dX]* ]] && continue
+        printf '%s\n' "$k"
+    done
 }
 
 #[pub]
-# Check if a section exists in a TOML file, literally or implicitly
-# `toml_has` answers for keys and only keys: it delegates to `toml_get`, and a
-# section header has no value to return, so asking it about `[server]` says no
-# while `toml_sections` lists it. That gap is easy to walk into and hard to see
-# once you have, because the failure looks like a missing file.
-#
-# "Exists" means the TABLE exists, not that a header was literally written.
-# `[a.b.c]` creates `a` and `a.b` per TOML v1.0.0, so both answer true here.
-# That has to match `toml_subsections`, which reports children of exactly those
-# implicit parents; a stricter reading would have made the obvious composition
-# `toml_has_section f "$p" && toml_subsections f "$p"` silently skip them.
-#
-# Quoted keys containing dots (`[x."a.b"]`) are not understood, in common with
-# the rest of this module.
+# Whether a path names a table or an array of tables.
+# `[a.b.c]` creates `a` and `a.b` per TOML v1.0.0, so both answer true here,
+# which is what `toml_subsections` lists. An inline table is a value, not a
+# section.
 # Usage: toml_has_section "file.toml" "server" -> returns 0 (true) or 1 (false)
 toml_has_section() {
-    local file="${1:-}"
-    local section="${2:-}"
-
-    [[ -f "$file" && -n "$section" ]] || return 1
-
-    # Cheap reject before the per-line scan. A predicate gets called in loops,
-    # and _toml_clean_line forks a subshell per line, so a full pass to answer
-    # "no" costs seconds on a large file. grep against the FILE is safe here;
-    # piping a shell function into `grep -q` is not, because grep exits on the
-    # first match, the writer takes SIGPIPE, and a caller running with
-    # `set -o pipefail` sees 141 for a successful lookup.
-    grep -q '^[[:space:]]*\[' -- "$file" || return 1
-
-    local line clean_line found
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        clean_line="$(_toml_clean_line "$line")"
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
-            found="${BASH_REMATCH[1]}"
-            # Literal, or an ancestor of a deeper header.
-            [[ "$found" == "$section" || "$found" == "$section."* ]] && return 0
-        fi
-    done < "$file"
-    return 1
+    local file="${1:-}" section="${2:-}"
+    [[ -n "$file" && -n "$section" ]] || return 1
+    _toml_open "$file" || return $?
+    _toml_path_split "$section" || return 1
+    _toml_lookup || return 1
+    case "${_TOML_T[$_tl_node]}" in
+        aot) return 0 ;;
+        table) [[ "${_TOML_F[$_tl_node]-}" != *X* ]] ;;
+        *) return 1 ;;
+    esac
 }
 
 #[pub]
-# List the direct children of a section, by name, without duplicates
-# `[a.b.c]` makes `a.b` a table whether or not `[a.b]` was ever written, so a
-# child is counted from any descendant header rather than only from a literal
-# one. Under parent `a`, both `[a.b]` and `[a.b.c]` yield `b`, once.
-# Reading a tree of named sub-tables otherwise means piping `toml_sections`
-# into sed with a pattern built by hand, which every caller writes slightly
-# differently and one of them writes wrong.
-#
-# Quoted keys containing dots (`[x."a.b"]`) are not understood: the name would
-# be split inside the quotes and yield a fragment rather than a table. Such
-# headers are skipped rather than mangled.
+# List the tables and arrays of tables directly under a table, each once.
 # Usage: toml_subsections "file.toml" "kind.gpg" -> child names, one per line
 toml_subsections() {
-    local file="${1:-}"
-    local parent="${2:-}"
-
-    [[ -f "$file" && -n "$parent" ]] || return 1
-
-    local section rest child
-    local -a seen=()
-    while IFS= read -r section; do
-        [[ "$section" == "$parent."* ]] || continue
-        # A quoted key may contain a dot; splitting on it would emit half a
-        # name. Skip rather than lie about the answer.
-        case "$section" in *\"*|*\'*) continue ;; esac
-        rest="${section#"$parent".}"
-        child="${rest%%.*}"
-        [[ -n "$child" ]] || continue
-        # Emit each child once, however many descendants it has. This is
-        # `arr_contains` open-coded, and O(n^2), on purpose: toml is layer 0
-        # and its dependency line is `string validate`. Pulling in `array` to
-        # save a loop over a handful of section names would buy a dependency
-        # with a micro-optimisation.
-        local s found=0
-        for s in "${seen[@]:-}"; do [[ "$s" == "$child" ]] && { found=1; break; }; done
-        (( found )) && continue
-        seen+=("$child")
-        printf '%s\n' "$child"
-    done < <(toml_sections "$file")
+    local file="${1:-}" parent="${2:-}" k child
+    [[ -n "$file" && -n "$parent" ]] || return 1
+    _toml_open "$file" || return $?
+    _toml_path_split "$parent" || return 1
+    _toml_lookup || return 1
+    [[ "${_TOML_T[$_tl_node]}" == table ]] || return 1
+    _toml_children "$_tl_node"
+    for k in "${_tc_keys[@]}"; do
+        child="$_tl_node$_TOML_US$k"
+        case "${_TOML_T[$child]}" in
+            aot) ;;
+            table) [[ "${_TOML_F[$child]-}" != *X* ]] || continue ;;
+            *) continue ;;
+        esac
+        _toml_seg_show "$k"
+        printf '%s\n' "$_ts_out"
+    done
 }
 
 #[pub]
-# Parse a TOML array value into a bash array
-# Usage: toml_array "file.toml" "key" arr
+# Read an array into a bash array, one element each.
+# A string element comes back decoded, a nested array or an inline table as
+# written, which `toml_inline_get` reads further. A value that is not an array
+# comes back as the one element. An array of tables has no text; `toml_tables`
+# reads it.
+# Usage: toml_array "file.toml" "key" arr -> fills arr, returns 1 when the key is absent
 toml_array() {
-    local file="${1:-}"
-    local key="${2:-}"
+    local __toml_file="${1:-}" __toml_key="${2:-}"
     local -n _arr="${3:-_toml_array_result}"
-    
     _arr=()
-    
-    local value
-    value="$(toml_get "$file" "$key")" || return 1
-    
-    # Check if it's an array format: [ "a", "b", "c" ]
-    if [[ "$value" =~ ^\[.*\]$ ]]; then
-        # Remove brackets
-        value="${value#\[}"
-        value="${value%]}"
-        value="$(str_trim "$value")"
-        
-        # Split on the commas that separate elements, which are the ones
-        # outside every string and at nesting depth zero. An inline table and a
-        # nested array both carry their own commas, and splitting on those cuts
-        # one element into several fragments that are each half a value. That
-        # is what happened to every `[{ src = "a", dest = "b" }]`: it came back
-        # as `{ src = "a"` and `dest = "b" }`.
-        #
-        # The quote state holds *which* delimiter opened the string rather than
-        # whether one is open, because TOML has two and each is inert inside the
-        # other. A flag that only knew about `"` read the apostrophes in
-        # `['x&y', 'z']`, with an opening brace where the `&` is, as ordinary
-        # characters. It then counted that brace as a real nesting level and
-        # never came back down.
-        #
-        # The brace is written as an `&` on purpose, and the same goes for
-        # every other one in a comment in this file. `nut-lower` shakes unused
-        # definitions out by counting braces textually, comments included, so a
-        # lone one inside a function body makes the shaker believe the function
-        # never ended and swallow whatever follows it in the lowered file.
-        # `nut_lower_test.sh` has the case.
-        local quote=""
-        local depth=0
-        local current=""
-        local char
-        local i
-
-        for ((i=0; i<${#value}; i++)); do
-            char="${value:$i:1}"
-
-            if [[ -n "$quote" ]]; then
-                [[ "$char" == "$quote" ]] && quote=""
-            else
-                case "$char" in
-                    '"'|"'") quote="$char" ;;
-                    '{'|'[') (( depth++ )) ;;
-                    '}'|']') (( depth > 0 )) && (( depth-- )) ;;
-                    ',') if (( depth == 0 )); then
-                             current="$(str_trim "$current")"
-                             [[ -n "$current" ]] && _arr+=("$(_toml_extract_value "$current")")
-                             current=""
-                             continue
-                         fi ;;
-                esac
-            fi
-
-            current+="$char"
+    [[ -n "$__toml_file" && -n "$__toml_key" ]] || return 1
+    _toml_open "$__toml_file" || return $?
+    _toml_path_split "$__toml_key" || return 1
+    _toml_lookup || return 1
+    local __toml_n __toml_i
+    if [[ "${_TOML_T[$_tl_node]}" == array ]]; then
+        __toml_n="${_TOML_N[$_tl_node]}"
+        for (( __toml_i = 0; __toml_i < __toml_n; __toml_i++ )); do
+            _toml_text "$_tl_node$_TOML_US$__toml_i" || return 1
+            _arr+=("$_tx_out")
         done
-
-        # An opening that never closed means the value was not the array it
-        # looked like, and every element after the unbalanced bracket is
-        # wrong. Saying so beats handing back a plausible answer: the reader
-        # this exists for turns rows into files on somebody's disk.
-        if (( depth != 0 )) || [[ -n "$quote" ]]; then
-            _arr=()
-            return 1
-        fi
-
-        # Don't forget the last element
-        current="$(str_trim "$current")"
-        [[ -n "$current" ]] && _arr+=("$(_toml_extract_value "$current")")
-    else
-        # Single value, treat as single-element array
-        _arr+=("$value")
+        return 0
     fi
-
-    # Explicit, because the last statement above is a test. A trailing comma
-    # leaves the final element empty, that test is false, and the function
-    # would report failure having just populated the array correctly. TOML
-    # permits the trailing comma, so this was every well-formed multi-line
-    # array whose author used one.
-    return 0
+    _toml_text "$_tl_node" || return 1
+    _arr=("$_tx_out")
 }
 
-
 #[pub]
-# Read one key out of an inline table, as `toml_array` hands them back.
-#
-# An inline table is a value rather than a section, so it has no header for
-# `toml_get` to address and comes out of `toml_array` whole. This takes the
-# text and a key and gives back the value, unquoted the same way any other
-# value is.
+# Read a key out of an inline table given as text, as `toml_array` and
+# `toml_get` hand one back. The key is one key, taken as it is, dots and all.
 #
 # Returns 1 when the key is absent, which is how an optional field is read:
 # `type` is missing on most of a dotfiles registry's config rows and means
 # file, and asking for it should say "not there" rather than print nothing and
-# claim success.
+# claim success. Returns 2 when the text is not an inline table TOML accepts.
 # Usage: toml_inline_get '{ a = "1", b = "2" }' b -> prints 2
 toml_inline_get() {
-    local table="${1:-}"
-    local want="${2:-}"
-
+    local table="${1:-}" want="${2:-}" node
     [[ -n "$want" ]] || return 1
-
-    table="$(str_trim "$table")"
-    [[ "$table" == '{'*'}' ]] || return 1
-    table="${table#\{}"
-    table="${table%\}}"
-
-    # Same scan as the array splitter, and for the same reasons, both of them:
-    # a value may hold a comma inside its quotes, a nested table or array holds
-    # its own separators, and the quote state has to know which delimiter
-    # opened the string because the other one is inert inside it.
-    local quote="" depth=0 current="" char i key val
-    local -a pairs=()
-    for ((i=0; i<${#table}; i++)); do
-        char="${table:$i:1}"
-        if [[ -n "$quote" ]]; then
-            [[ "$char" == "$quote" ]] && quote=""
-        else
-            case "$char" in
-                '"'|"'") quote="$char" ;;
-                '{'|'[') (( depth++ )) ;;
-                '}'|']') (( depth > 0 )) && (( depth-- )) ;;
-                ',') if (( depth == 0 )); then
-                         pairs+=("$current"); current=""; continue
-                     fi ;;
-            esac
-        fi
-        current+="$char"
-    done
-    (( depth == 0 )) && [[ -z "$quote" ]] || return 1
-    pairs+=("$current")
-
-    for current in "${pairs[@]}"; do
-        current="$(str_trim "$current")"
-        [[ -n "$current" ]] || continue
-        # Split on the first `=`, which is right for a bare key and for the
-        # quoted keys that hold no `=`. A quoted key *may* hold one, and
-        # `{ "k=y" = "1" }` is legal TOML this cannot read: it looks for a key
-        # called `"k`. Quoted keys are not understood here, in common with the
-        # rest of this module.
-        key="${current%%=*}"
-        val="${current#*=}"
-        [[ "$current" == *=* ]] || continue
-        key="$(str_trim "$key")"
-        key="${key%\"}"; key="${key#\"}"
-        [[ "$key" == "$want" ]] || continue
-        _toml_extract_value "$(str_trim "$val")"
-        return 0
-    done
-    return 1
+    _toml_trim_into table "$table"
+    [[ "$table" == "$_TOML_LB"* ]] || return 1
+    _TOML_ID=""
+    if ! _toml_parse_text "inline" "_x = ${table}"; then
+        printf '%s\n' "$_TOML_ERR" >&2
+        return 2
+    fi
+    node="R${_TOML_US}_x"
+    [[ "${_TOML_T[$node]}" == table ]] || return 1
+    node+="$_TOML_US$want"
+    [[ -n "${_TOML_T[$node]-}" ]] || return 1
+    _toml_text "$node" || return 1
+    printf '%s\n' "$_tx_out"
 }
 
 #[pub]
 # Whether an inline table carries a key at all.
 # Usage: toml_inline_has '{ a = "1" }' a -> returns 0 (true) or 1 (false)
 toml_inline_has() { toml_inline_get "${1:-}" "${2:-}" >/dev/null 2>&1; }
+
+#[pub]
+# How many tables an array of tables holds.
+# Fails where the path names anything other than an array of tables.
+# Usage: toml_table_count "file.toml" "products" -> prints 3
+toml_table_count() {
+    local file="${1:-}" path="${2:-}"
+    [[ -n "$file" && -n "$path" ]] || return 1
+    _toml_open "$file" || return $?
+    _toml_path_split "$path" || return 1
+    _toml_lookup || return 1
+    [[ "${_TOML_T[$_tl_node]}" == aot ]] || return 1
+    printf '%s\n' "${_TOML_N[$_tl_node]}"
+}
+
+#[pub]
+# The path of every table in an array of tables, one per line, each ready to
+# be extended with a key and handed to `toml_get`.
+# Usage: toml_tables "file.toml" "products" -> prints products.0, products.1, ...
+toml_tables() {
+    local file="${1:-}" path="${2:-}" i n
+    [[ -n "$file" && -n "$path" ]] || return 1
+    _toml_open "$file" || return $?
+    _toml_path_split "$path" || return 1
+    _toml_lookup || return 1
+    [[ "${_TOML_T[$_tl_node]}" == aot ]] || return 1
+    n="${_TOML_N[$_tl_node]}"
+    for (( i = 0; i < n; i++ )); do
+        printf '%s.%s\n' "$path" "$i"
+    done
+}
+
 #[pub]
 # Check if a TOML value is true (handles various boolean representations)
 # Usage: toml_is_true "file.toml" "key" -> returns 0 (true) or 1 (false)
 toml_is_true() {
-    local file="${1:-}"
-    local key="${2:-}"
-    
-    local value
+    local file="${1:-}" key="${2:-}" value
     value="$(toml_get "$file" "$key")" || return 1
-    
     is_truthy "$value"
 }
 
 #[pub]
-# Get all key=value pairs from a section as "key=value" lines
+# Get the keys of a table that hold values, as "key=value" lines. A table
+# under it is left out, as `toml_keys` would.
 # Usage: toml_section_pairs "file.toml" "section" -> prints one key=value per line, values already unquoted
 toml_section_pairs() {
-    local file="${1:-}"
-    local section="${2:-}"
-    
-    [[ ! -f "$file" ]] && return 1
-    [[ -z "$section" ]] && return 1
-    
-    local in_section=0
-    local current_section=""
-    local line clean_line
-    
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        _toml_clean_into clean_line "$line"
-        [[ -z "$clean_line" ]] && continue
-        
-        # Section header
-        if [[ "$clean_line" =~ ^\[([^\]]+)\]$ ]]; then
-            current_section="${BASH_REMATCH[1]}"
-            if [[ "$current_section" == "$section" ]]; then
-                in_section=1
-            else
-                [[ $in_section -eq 1 ]] && break  # We've left our section
-                in_section=0
-            fi
-            continue
-        fi
-        
-        [[ $in_section -eq 0 ]] && continue
-        
-        # Key = value
-        if [[ "$clean_line" =~ ^([^=]+)=(.*)$ ]]; then
-            local k v
-            k="$(str_trim "${BASH_REMATCH[1]}")"
-            v="$(_toml_extract_value "$(str_trim "${BASH_REMATCH[2]}")")"
-            echo "${k}=${v}"
-        fi
-    done < "$file"
+    local file="${1:-}" section="${2:-}" k child
+    [[ -n "$file" && -n "$section" ]] || return 1
+    _toml_open "$file" || return $?
+    _toml_path_split "$section" || return 1
+    _toml_lookup || return 1
+    [[ "${_TOML_T[$_tl_node]}" == table ]] || return 1
+    _toml_children "$_tl_node"
+    for k in "${_tc_keys[@]}"; do
+        child="$_tl_node$_TOML_US$k"
+        _toml_text "$child" || continue
+        printf '%s=%s\n' "$k" "$_tx_out"
+    done
 }

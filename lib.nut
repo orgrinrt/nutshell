@@ -68,6 +68,9 @@ text::impl::perl_match   lib/text/impl/perl_match.sh  internal
 text::impl::perl_replace lib/text/impl/perl_replace.sh internal
 text::impl::sed_replace  lib/text/impl/sed_replace.sh internal
 toml                     lib/toml.sh
+toml::impl::bash         lib/toml/impl/bash.sh        internal
+toml::impl::bash_lex     lib/toml/impl/bash_lex.sh    internal
+toml::impl::bash_path    lib/toml/impl/bash_path.sh   internal
 toml::json               lib/toml/json.sh
 toml::write              lib/toml/write.sh
 validate                 lib/validate.sh

@@ -54,7 +54,9 @@ Layer 0 (Core): May depend on foundation, uses external tools
   array.sh    - Array operations (pure bash)
   fs.sh       - Filesystem primitives (uses stat, etc.)
   text.sh     - Text file processing (uses sed, grep, awk, perl)
-  toml.sh     - TOML parsing (depends on string.sh, fs.sh)
+  toml.sh     - TOML reading in pure bash (depends on validate.sh); the reader
+                is toml/impl/, toml/write.sh edits in place, toml/json.sh
+                converts to JSON
   xdg.sh      - XDG directories (depends on os.sh, validate.sh)
 ```
 

@@ -1,0 +1,5 @@
+"quoted.dot" = "root"
+site."google.com" = true
+
+[hosts]
+"a.b" = "dotted"

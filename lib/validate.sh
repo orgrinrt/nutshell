@@ -23,7 +23,7 @@ _NUTSHELL_VALIDATE_SH=1
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
-use log
+use log deps
 
 # -----------------------------------------------------------------------------
 # Variable checks
@@ -71,11 +71,10 @@ is_empty() {
 # -----------------------------------------------------------------------------
 
 #[pub]
-#[allow(trivial_wrapper)]
 # Check if a command is available
 # Usage: has_command "git" -> returns 0 (true) or 1 (false)
 has_command() {
-    command -v "${1:-}" >/dev/null 2>&1
+    deps_has "${1:-}"
 }
 
 # -----------------------------------------------------------------------------

@@ -85,13 +85,13 @@ def emit(value):
 
 
 def walk(data, path):
-    """Follow a dotted path.
+    """Follow a path, its segments joined by the unit separator.
 
     Raises when the path does not lead anywhere, which the caller turns into a
     status of 1: an absent key is absent, and answering `null` cannot be told
     apart from a key that is present and holds null.
     """
-    for part in path.split("."):
+    for part in path.split("\x1f"):
         if not part:
             continue
         if isinstance(data, list):
@@ -116,7 +116,7 @@ def kind(value):
 
 
 def parent_and_last(data, path):
-    parts = [p for p in path.split(".") if p]
+    parts = [p for p in path.split("\x1f") if p]
     current = data
     for part in parts[:-1]:
         current = current[int(part)] if isinstance(current, list) else current[part]

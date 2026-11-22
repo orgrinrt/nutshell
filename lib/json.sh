@@ -7,22 +7,27 @@
 #
 # Layer 0 (Core): Depends on deps.sh for tool detection
 #
-# Provides JSON parsing and manipulation functions. Uses lazy-init stubs to
-# select the best available tool (jq > python > perl > pure bash fallback).
+# Reads and writes JSON through the first of jq, python and perl that `deps`
+# finds, and reads through bash itself where none of the three is there, so a
+# container with no jq still answers `json_get`, `json_has`, `json_keys`,
+# `json_type`, `json_length` and `json_valid`. What writes (`json_set`,
+# `json_delete`, `json_merge`, `json_pretty`, `json_compact`, `json_write`)
+# needs one of the three, and without them refuses with status 2 and says so.
+# `json_query` runs a jq program through jq, gojq or jaq, whichever `deps` finds
+# first, and refuses with status 2 where there is none.
+#
+# A path is the one the toml reader takes: `a.b.0.c`, an integer segment
+# indexing an array, a segment in double quotes one segment whatever it holds
+# (`"k.d".z`), a leading dot allowed.
 #
 # Object keys come back sorted, and documents come back compact. Not a
 # preference: a perl hash has no order and its iteration order is randomised
-# per process, so sorted is the only order all three backends can produce, and
+# per process, so sorted is the only order all backends can produce, and
 # `json_pretty` is where formatting lives. Without this the same call returned
 # different text depending on which tool happened to be installed, and on perl
 # a different order on every run.
 #
-# Features:
-#   - Get values by path (dot notation or jq syntax)
-#   - Set/modify values
-#   - Array operations
-#   - Validation
-#   - Pretty printing
+# Status: 0 found, 1 not there or not JSON, 2 nothing here can do it.
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -41,13 +46,38 @@ _NUTSHELL_JSON_SH=1
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
-use deps string
+use deps
+use super::json::build
 
-# A newline and a tab as themselves. There is no `$'\n'` here to write one
-# inline with, and the trailing `.` is because command substitution strips the
-# trailing newline, which is the character being asked for.
-_JSON_NL="$(printf '\n.')"; _JSON_NL="${_JSON_NL%.}"
-_JSON_TAB="$(printf '\t.')"; _JSON_TAB="${_JSON_TAB%.}"
+# What joins the segments of a path on their way to a backend.
+_JSON_US="$(printf '\037.')"; _JSON_US="${_JSON_US%.}"
+
+# -----------------------------------------------------------------------------
+# Backends
+# -----------------------------------------------------------------------------
+#
+# Interchangeable implementations of the same operations, one per tool, in
+# `json/impl/`. They lived here and made this file 940 lines, of which the
+# public surface was the last fifth. The one in bash needs no tool and only
+# reads.
+#
+# Every backend whose tool is present is loaded, not only the selected one.
+# Loading one would save little (they are function definitions) and would make
+# `_JSON_IMPL` a decision taken once at load rather than a value the dispatch
+# reads, which is what lets a caller move it and lets the tests exercise all of
+# them rather than whichever the machine happened to pick.
+# Named, not sourced by a path this file assembles. A hand-rolled `source`
+# goes around the resolver, so the file is loaded again for every caller that
+# reaches it, the declaration does not cover it, and nothing can tell before
+# running that the path was wrong.
+deps_has jq                             && use super::json::impl::jq
+{ deps_has python3 || deps_has python; } && use super::json::impl::python
+deps_has perl                           && use super::json::impl::perl
+# The path language is the toml reader's, and its splitter is loaded as it is
+# rather than copied. Both need bash, so a shell without it keeps the tools.
+if [ -n "${BASH_VERSION:-}" ]; then
+    use super::toml::impl::bash_path super::json::impl::bash
+fi
 
 # -----------------------------------------------------------------------------
 # Module Status
@@ -57,44 +87,68 @@ _JSON_READY=0
 _JSON_ERROR=""
 _JSON_IMPL=""
 
-# Check for available JSON tools
-if deps_has "jq"; then
+#[pub]
+# Pick the backend again, from what `deps` knows now. Run at load, and after
+# `deps_forget` when a tool has come or gone.
+# Order: jq, python, perl, then bash, which only reads.
+# Usage: json_detect
+json_detect() {
     _JSON_READY=1
-    _JSON_IMPL="jq"
-elif deps_has "python3" || deps_has "python"; then
-    _JSON_READY=1
-    _JSON_IMPL="python"
-elif deps_has "perl"; then
-    _JSON_READY=1
-    _JSON_IMPL="perl"
-else
-    _JSON_ERROR="No JSON tool available (need jq, python, or perl)"
-fi
+    _JSON_ERROR=""
+    if deps_has jq && type _json_get_jq >/dev/null 2>&1; then
+        _JSON_IMPL="jq"
+    elif { deps_has python3 || deps_has python; } && type _json_get_python >/dev/null 2>&1; then
+        _JSON_IMPL="python"
+    elif deps_has perl && type _json_get_perl >/dev/null 2>&1; then
+        _JSON_IMPL="perl"
+    elif type _json_get_bash >/dev/null 2>&1; then
+        _JSON_IMPL="bash"
+        _JSON_ERROR="No jq, python or perl: reading only"
+    else
+        _JSON_READY=0
+        _JSON_IMPL=""
+        _JSON_ERROR="No JSON tool available (need jq, python, perl or bash)"
+    fi
+}
+json_detect
+
+# _json_segs <path> -> `_js_out`, the segments of a path joined for a backend
+# Status 2 when a quote never closes. The splitter is the toml reader's.
+_json_segs() {
+    local p="${1:-}" seg
+    _js_out=""
+    case "$p" in .*) p="${p#.}" ;; esac
+    [ -z "$p" ] && return 0
+    if type _toml_path_split >/dev/null 2>&1; then
+        _toml_path_split "$p" || { echo "json: a quote in the path never closes: ${1}" >&2; return 2; }
+        for seg in "${_tp_pseg[@]}"; do
+            [ -n "$seg" ] && _js_out="${_js_out:+${_js_out}${_JSON_US}}${seg}"
+        done
+    else
+        _js_out="$(printf '%s' "$p" | tr '.' "$_JSON_US")"
+    fi
+    return 0
+}
+
+# _json_ready_for <name> -> status 1 with the reason when nothing can read
+_json_ready_for() {
+    [ "$_JSON_READY" = "1" ] && return 0
+    echo "${1}: ${_JSON_ERROR}" >&2
+    return 1
+}
+
+# _json_needs_tool <name> -> status 2 with the reason when the selected backend
+# cannot write, which is the one in bash.
+_json_needs_tool() {
+    case "$_JSON_IMPL" in
+        jq|python|perl) return 0 ;;
+    esac
+    echo "${1}: needs jq, python or perl, and this machine has none" >&2
+    return 2
+}
 
 # -----------------------------------------------------------------------------
-# Backends
-# -----------------------------------------------------------------------------
-#
-# Three interchangeable implementations of the same eight operations, one per
-# tool, in `json/impl/`. They lived here and made this file 940 lines, of which
-# the public surface was the last fifth.
-#
-# Every backend whose tool is present is loaded, not only the selected one.
-# Loading one would save little (they are function definitions) and would make
-# `_JSON_IMPL` a decision taken once at load rather than a value the dispatch
-# reads, which is what lets a caller move it and lets the tests exercise all
-# three rather than whichever the machine happened to pick.
-# Named, not sourced by a path this file assembles. A hand-rolled `source`
-# goes around the resolver, so the file is loaded again for every caller that
-# reaches it, the declaration does not cover it, and nothing can tell before
-# running that the path was wrong.
-deps_has jq                             && use super::json::impl::jq
-{ deps_has python3 || deps_has python; } && use super::json::impl::python
-deps_has perl                           && use super::json::impl::perl
-
-
-# -----------------------------------------------------------------------------
-# Public API - Core Functions
+# Public API - Reading
 # -----------------------------------------------------------------------------
 
 #[pub]
@@ -102,38 +156,18 @@ deps_has perl                           && use super::json::impl::perl
 # Usage: json_get '{"foo":"bar"}' "foo" -> "bar"
 # Usage: json_get '{"a":{"b":1}}' "a.b" -> "1"
 # Usage: json_get '[1,2,3]' "1" -> "2"
-# Returns: The value at the path, or empty if not found
+# Usage: json_get '{"k.d":{"z":1}}' '"k.d".z' -> "1"
+# Returns: The value at the path; status 1 when there is none
 json_get() {
     local json="${1:-}"
-    local path="${2:-}"
-    
     [ -z "$json" ] && return 1
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
+    _json_ready_for json_get || return 1
+    _json_segs "${2:-}" || return 2
     case "$_JSON_IMPL" in
-        jq)     _json_get_jq "$json" "$path" ;;
-        python) _json_get_python "$json" "$path" ;;
-        perl)   _json_get_perl "$json" "$path" ;;
-    esac
-}
-
-#[pub]
-# Set a value in JSON by path
-# Usage: json_set '{"foo":"bar"}' "foo" "baz" -> '{"foo":"baz"}'
-# Usage: json_set '{}' "new.key" "value" -> '{"new":{"key":"value"}}'
-# Returns: The modified JSON
-json_set() {
-    local json="${1:-}"
-    local path="${2:-}"
-    local value="${3:-}"
-    
-    [ -z "$json" ] && return 1
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
-    case "$_JSON_IMPL" in
-        jq)     _json_set_jq "$json" "$path" "$value" ;;
-        python) _json_set_python "$json" "$path" "$value" ;;
-        perl)   _json_set_perl "$json" "$path" "$value" ;;
+        jq)     _json_get_jq "$json" "$_js_out" ;;
+        python) _json_get_python "$json" "$_js_out" ;;
+        perl)   _json_get_perl "$json" "$_js_out" ;;
+        bash)   _json_get_bash "$json" "$_js_out" ;;
     esac
 }
 
@@ -144,15 +178,14 @@ json_set() {
 # Returns: Keys, one per line
 json_keys() {
     local json="${1:-}"
-    local path="${2:-}"
-    
     [ -z "$json" ] && return 1
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
+    _json_ready_for json_keys || return 1
+    _json_segs "${2:-}" || return 2
     case "$_JSON_IMPL" in
-        jq)     _json_keys_jq "$json" "$path" ;;
-        python) _json_keys_python "$json" "$path" ;;
-        perl)   _json_keys_perl "$json" "$path" ;;
+        jq)     _json_keys_jq "$json" "$_js_out" ;;
+        python) _json_keys_python "$json" "$_js_out" ;;
+        perl)   _json_keys_perl "$json" "$_js_out" ;;
+        bash)   _json_keys_bash "$json" "$_js_out" ;;
     esac
 }
 
@@ -163,48 +196,13 @@ json_keys() {
 # Returns: 0 if valid, 1 if invalid
 json_valid() {
     local json="${1:-}"
-    
     [ -z "$json" ] && return 1
     [ "$_JSON_READY" != "1" ] && return 1
-    
     case "$_JSON_IMPL" in
         jq)     _json_valid_jq "$json" ;;
         python) _json_valid_python "$json" ;;
         perl)   _json_valid_perl "$json" ;;
-    esac
-}
-
-#[pub]
-# Pretty print JSON with indentation
-# Usage: json_pretty '{"a":1,"b":2}' -> prints formatted JSON
-# Returns: Pretty-printed JSON
-json_pretty() {
-    local json="${1:-}"
-    
-    [ -z "$json" ] && return 1
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
-    case "$_JSON_IMPL" in
-        jq)     _json_pretty_jq "$json" ;;
-        python) _json_pretty_python "$json" ;;
-        perl)   _json_pretty_perl "$json" ;;
-    esac
-}
-
-#[pub]
-# Compact JSON (remove whitespace)
-# Usage: json_compact '{ "a": 1, "b": 2 }' -> '{"a":1,"b":2}'
-# Returns: Compact JSON on single line
-json_compact() {
-    local json="${1:-}"
-    
-    [ -z "$json" ] && return 1
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
-    case "$_JSON_IMPL" in
-        jq)     _json_compact_jq "$json" ;;
-        python) _json_compact_python "$json" ;;
-        perl)   _json_compact_perl "$json" ;;
+        bash)   _json_valid_bash "$json" ;;
     esac
 }
 
@@ -219,15 +217,14 @@ json_compact() {
 # Returns: "object", "array", "string", "number", "boolean", or "null"
 json_type() {
     local json="${1:-}"
-    local path="${2:-}"
-    
     [ -z "$json" ] && return 1
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
+    _json_ready_for json_type || return 1
+    _json_segs "${2:-}" || return 2
     case "$_JSON_IMPL" in
-        jq)     _json_type_jq "$json" "$path" ;;
-        python) _json_type_python "$json" "$path" ;;
-        perl)   _json_type_perl "$json" "$path" ;;
+        jq)     _json_type_jq "$json" "$_js_out" ;;
+        python) _json_type_python "$json" "$_js_out" ;;
+        perl)   _json_type_perl "$json" "$_js_out" ;;
+        bash)   _json_type_bash "$json" "$_js_out" ;;
     esac
 }
 
@@ -238,21 +235,16 @@ json_type() {
 # Returns: Length as number
 json_length() {
     local json="${1:-}"
-    local path="${2:-}"
-    
     [ -z "$json" ] && return 1
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-    
+    _json_ready_for json_length || return 1
+    _json_segs "${2:-}" || return 2
     case "$_JSON_IMPL" in
-        jq)     _json_length_jq "$json" "$path" ;;
-        python) _json_length_python "$json" "$path" ;;
-        perl)   _json_length_perl "$json" "$path" ;;
+        jq)     _json_length_jq "$json" "$_js_out" ;;
+        python) _json_length_python "$json" "$_js_out" ;;
+        perl)   _json_length_perl "$json" "$_js_out" ;;
+        bash)   _json_length_bash "$json" "$_js_out" ;;
     esac
 }
-
-# -----------------------------------------------------------------------------
-# Public API - Convenience Functions
-# -----------------------------------------------------------------------------
 
 #[pub]
 # Check if a path exists in JSON
@@ -262,7 +254,7 @@ json_length() {
 json_has() {
     local json="${1:-}"
     local path="${2:-}"
-    
+
     local result
     result=$(json_get "$json" "$path" 2>/dev/null)
     [ -n "$result" ] && [ "$result" != "null" ]
@@ -277,10 +269,10 @@ json_get_or() {
     local json="${1:-}"
     local path="${2:-}"
     local default="${3:-}"
-    
+
     local result
     result=$(json_get "$json" "$path" 2>/dev/null)
-    
+
     if [ -n "$result" ] && [ "$result" != "null" ]; then
         echo "$result"
     else
@@ -289,71 +281,73 @@ json_get_or() {
 }
 
 #[pub]
-# Create a simple JSON object from key-value pairs
-# Usage: json_object "key1" "value1" "key2" "value2" -> '{"key1":"value1","key2":"value2"}'
-# Returns: JSON object
-json_object() {
-    local result="{"
-    local first=1
-    
-    while [ $# -ge 2 ]; do
-        local key="$1"
-        local value="$2"
-        shift 2
-        
-        [ "$first" -eq 0 ] && result="${result},"
-        first=0
-        
-        # Escape special characters in value
-        # Backslash first. Any other order escapes the backslashes it adds.
-        str_replace "$value" '\' '\\' value
-        str_replace "$value" '"' '\"' value
-        str_replace "$value" "$_JSON_NL" '\n' value
-        str_replace "$value" "$_JSON_TAB" '\t' value
-        
-        result="${result}""\"${key}\":\"${value}\""
+# Run a jq program over a document, through jq, gojq or jaq, whichever `deps`
+# finds first. Strings come back bare and everything else compact, so
+# `json_query '.a | length' "$doc"` prints `3`. The document is the second
+# argument, or stdin when there is none.
+# Usage: json_query '.items[] | .name' "$json"
+# Usage: curl -s "$url" | json_query '.total'
+# Returns: what the program printed; status 2 when no jq family tool is here
+json_query() {
+    local filter="${1:-}" tool="" t
+    for t in jq gojq jaq; do
+        deps_has "$t" && { tool="$t"; break; }
     done
-    
-    result="${result}""}"
-    echo "$result"
+    if [ -z "$tool" ]; then
+        echo "json_query: needs jq, gojq or jaq, and this machine has none" >&2
+        return 2
+    fi
+    [ -n "$filter" ] || return 1
+    if [ "$#" -ge 2 ]; then
+        printf '%s\n' "$2" | "$(deps_path "$tool")" -c -r "$filter"
+    else
+        "$(deps_path "$tool")" -c -r "$filter"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Public API - Writing, which needs jq, python or perl
+# -----------------------------------------------------------------------------
+
+#[pub]
+# Set a value in JSON by path
+# Usage: json_set '{"foo":"bar"}' "foo" "baz" -> '{"foo":"baz"}'
+# Usage: json_set '{}' "new.key" "value" -> '{"new":{"key":"value"}}'
+# Returns: The modified JSON; status 2 with none of jq, python or perl
+json_set() {
+    local json="${1:-}" value="${3:-}"
+    _json_needs_tool json_set || return 2
+    [ -z "$json" ] && return 1
+    _json_segs "${2:-}" || return 2
+    case "$_JSON_IMPL" in
+        jq)     _json_set_jq "$json" "$_js_out" "$value" ;;
+        python) _json_set_python "$json" "$_js_out" "$value" ;;
+        perl)   _json_set_perl "$json" "$_js_out" "$value" ;;
+    esac
 }
 
 #[pub]
-# Create a JSON array from values
-# Usage: json_array "a" "b" "c" -> '["a","b","c"]'
-# Returns: JSON array
-json_array() {
-    local result="["
-    local first=1
-    
-    for value in "$@"; do
-        [ "$first" -eq 0 ] && result="${result},"
-        first=0
-        
-        # Escape special characters
-        # Backslash first. Any other order escapes the backslashes it adds.
-        str_replace "$value" '\' '\\' value
-        str_replace "$value" '"' '\"' value
-        str_replace "$value" "$_JSON_NL" '\n' value
-        str_replace "$value" "$_JSON_TAB" '\t' value
-        
-        result="${result}""\"${value}\""
-    done
-    
-    result="${result}""]"
-    echo "$result"
+# Delete a key from JSON
+# Usage: json_delete '{"a":1,"b":2}' "a" -> '{"b":2}'
+# Returns: JSON with key removed; status 2 with none of jq, python or perl
+json_delete() {
+    local json="${1:-}"
+    _json_needs_tool json_delete || return 2
+    _json_segs "${2:-}" || return 2
+    case "$_JSON_IMPL" in
+        jq)     _json_delete_jq "$json" "$_js_out" ;;
+        python) _json_delete_python "$json" "$_js_out" ;;
+        perl)   _json_delete_perl "$json" "$_js_out" ;;
+    esac
 }
 
 #[pub]
 # Merge two JSON objects (second overwrites first for conflicts)
 # Usage: json_merge '{"a":1}' '{"b":2}' -> '{"a":1,"b":2}'
-# Returns: Merged JSON object
+# Returns: Merged JSON object; status 2 with none of jq, python or perl
 json_merge() {
-    local json1="${1:-\{\}}"
-    local json2="${2:-\{\}}"
-
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-
+    local json1="${1:-\{\}}" json2="${2:-\{\}}"
+    _json_needs_tool json_merge || return 2
     case "$_JSON_IMPL" in
         jq)     _json_merge_jq "$json1" "$json2" ;;
         python) _json_merge_python "$json1" "$json2" ;;
@@ -362,25 +356,48 @@ json_merge() {
 }
 
 #[pub]
-# Delete a key from JSON
-# Usage: json_delete '{"a":1,"b":2}' "a" -> '{"b":2}'
-# Returns: JSON with key removed
-json_delete() {
+# Pretty print JSON with indentation
+# Usage: json_pretty '{"a":1,"b":2}' -> prints formatted JSON
+# Returns: Pretty-printed JSON; status 2 with none of jq, python or perl
+json_pretty() {
     local json="${1:-}"
-    local path="${2:-}"
-
-    [ "$_JSON_READY" != "1" ] && { echo "$_JSON_ERROR" >&2; return 1; }
-
-    case "$path" in
-        .*) ;;
-        *) path=".${path}" ;;
-    esac
-
+    _json_needs_tool json_pretty || return 2
+    [ -z "$json" ] && return 1
     case "$_JSON_IMPL" in
-        jq)     _json_delete_jq "$json" "$path" ;;
-        python) _json_delete_python "$json" "$path" ;;
-        perl)   _json_delete_perl "$json" "$path" ;;
+        jq)     _json_pretty_jq "$json" ;;
+        python) _json_pretty_python "$json" ;;
+        perl)   _json_pretty_perl "$json" ;;
     esac
+}
+
+#[pub]
+# Compact JSON (remove whitespace)
+# Usage: json_compact '{ "a": 1, "b": 2 }' -> '{"a":1,"b":2}'
+# Returns: Compact JSON on single line; status 2 with none of jq, python or perl
+json_compact() {
+    local json="${1:-}"
+    _json_needs_tool json_compact || return 2
+    [ -z "$json" ] && return 1
+    case "$_JSON_IMPL" in
+        jq)     _json_compact_jq "$json" ;;
+        python) _json_compact_python "$json" ;;
+        perl)   _json_compact_perl "$json" ;;
+    esac
+}
+
+#[pub]
+# Write JSON to a file (pretty printed)
+# Usage: json_write '{"a":1}' "/path/to/file.json"
+# Returns: 0 on success, 1 on failure, 2 with none of jq, python or perl, and
+# then the file is not touched
+json_write() {
+    local json="${1:-}"
+    local file="${2:-}"
+
+    _json_needs_tool json_write || return 2
+    [ -z "$file" ] && return 1
+
+    json_pretty "$json" > "$file"
 }
 
 #[pub]
@@ -389,23 +406,10 @@ json_delete() {
 # Returns: JSON content of file
 json_read() {
     local file="${1:-}"
-    
-    [ ! -f "$file" ] && { echo "File not found: $file" >&2; return 1; }
-    
-    cat "$file"
-}
 
-#[pub]
-# Write JSON to a file (pretty printed)
-# Usage: json_write '{"a":1}' "/path/to/file.json"
-# Returns: 0 on success, 1 on failure
-json_write() {
-    local json="${1:-}"
-    local file="${2:-}"
-    
-    [ -z "$file" ] && return 1
-    
-    json_pretty "$json" > "$file"
+    [ ! -f "$file" ] && { echo "File not found: $file" >&2; return 1; }
+
+    cat "$file"
 }
 
 # -----------------------------------------------------------------------------
@@ -413,14 +417,14 @@ json_write() {
 # -----------------------------------------------------------------------------
 
 #[pub]
-# Check if JSON module is ready
-# Usage: json_ready -> returns 0 if ready, 1 if not
+# Check if JSON module can read
+# Usage: json_ready -> returns 0 if it can, 1 if not
 json_ready() {
     [ "$_JSON_READY" = "1" ]
 }
 
 #[pub]
-# Get JSON module error (if not ready)
+# Get JSON module error (if not ready), or the note that it only reads
 # Usage: json_error -> prints error message
 json_error() {
     echo "$_JSON_ERROR"
@@ -428,7 +432,7 @@ json_error() {
 
 #[pub]
 # Get which JSON implementation is being used
-# Usage: json_impl -> "jq" | "python" | "perl" | ""
+# Usage: json_impl -> "jq" | "python" | "perl" | "bash" | ""
 json_impl() {
     echo "$_JSON_IMPL"
 }

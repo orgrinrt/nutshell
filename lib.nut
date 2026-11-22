@@ -23,6 +23,9 @@ inuse                    lib/inuse.sh
 http                     lib/http.sh
 key                      lib/key.sh
 json                     lib/json.sh
+json::build              lib/json/build.sh           internal
+json::impl::bash         lib/json/impl/bash.sh        internal
+json::impl::bash_parse   lib/json/impl/bash_parse.sh  internal
 json::impl::jq           lib/json/impl/jq.sh          internal
 json::impl::perl         lib/json/impl/perl.sh        internal
 json::impl::python       lib/json/impl/python.sh      internal

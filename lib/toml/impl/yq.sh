@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
+# =============================================================================
 # nutshell/lib/toml/impl/yq.sh - TOML read by mikefarah yq
+# Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
 # The backend `lib/toml.sh` picks where there is no taplo and `deps` finds

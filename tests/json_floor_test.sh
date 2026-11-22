@@ -89,6 +89,19 @@ it_answers_has_keys_type_and_length() {
 }
 
 #[test]
+it_counts_a_strings_length_in_characters_in_any_locale() {
+    # jq's `length` on these strings, written in: 1, 5 and 4 characters, of 2,
+    # 6 and 10 bytes. The escaped form is decoded first, so it counts the same.
+    _jf_bare
+    local loc
+    for loc in C POSIX C.UTF-8; do
+        assert_eq "$(LC_ALL=$loc json_length '{"a":"é"}' a)" "1" "under ${loc}"
+        assert_eq "$(LC_ALL=$loc json_length '{"a":"héllo"}' a)" "5" "under ${loc}"
+        assert_eq "$(LC_ALL=$loc json_length '{"a":"a😀éb"}' a)" "4" "under ${loc}"
+    done
+}
+
+#[test]
 it_takes_the_last_of_a_repeated_key() {
     _jf_bare
     assert_eq "$(json_get '{"a":1,"a":2}' a)" "2"

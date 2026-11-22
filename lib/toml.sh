@@ -4,7 +4,7 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Layer 0 (Core): Depends on validate.sh
+# Layer 0 (Core): Depends on validate.sh and deps.sh
 #
 # The TOML API. `use toml` and call it. The values come from the best reader
 # `deps` finds, picked at the first call: taplo where it prints TOML as JSON, else

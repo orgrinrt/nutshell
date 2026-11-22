@@ -36,6 +36,7 @@
 #   attr_has  lib/string.sh str_trim pub  # is it marked?
 #   attr_arg  lib/foo.sh    big_fn allow  # the argument, `loc = 400`
 #   attr_find lib/foo.sh    test          # every definition marked #[test]
+#   attr_usage lib/foo.sh   big_fn        # its `# Usage:` lines
 # =============================================================================
 
 # A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and so
@@ -359,4 +360,48 @@ attr_find() {
 
         pending=0
     done < "$file"
+}
+
+# attr_usage <file> <function>
+#
+# The `# Usage:` lines written above a definition, one per line, without the
+# marker. The block is the comments directly above the definition, attributes
+# included, so a usage line may sit before or after `#[pub]` with prose around
+# it. A blank line or a line of code ends the block, which is what keeps a
+# module header's own `# Usage:` from landing on the first function under it,
+# and a marker with no text after it is no usage at all. Fails when there is
+# none, the way `attr_arg` does.
+#
+#[pub]
+# Usage: attr_usage lib/string.sh str_trim -> prints "str_trim <text> -> ..."
+attr_usage() {
+    local file="$1" want="$2"
+    local line t found="" block=""
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            [![:space:]]*) t="$line" ;;
+            *) t="${line#"${line%%[![:space:]]*}"}" ;;
+        esac
+
+        case "$t" in
+            '') block=""; continue ;;
+            '#['*) continue ;;
+            '# Usage:'*)
+                t="${t#\# Usage:}"
+                t="${t#"${t%%[![:space:]]*}"}"
+                [ -n "$t" ] && block="${block}${t}${_ATTR_NL}"
+                continue ;;
+            '#'*) continue ;;
+        esac
+
+        _attr_defines_set_t "$t"
+        if [ "$_ATTR_DEF" = "$want" ] && [ -n "$block" ]; then
+            found="${found}${block}"
+        fi
+        block=""
+    done < "$file"
+
+    [ -n "$found" ] || return 1
+    printf '%s\n' "${found%"$_ATTR_NL"}"
 }

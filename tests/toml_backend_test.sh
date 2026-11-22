@@ -200,3 +200,34 @@ it_reads_a_tools_json_through_the_json_parser() {
     _toml_json_tree t '[1]'
     assert_eq "$?" "2" "a document that is not a table"
 }
+
+#[test]
+it_picks_its_backend_from_pins_deps_reads_through_toml() {
+    # deps reads its `[deps.paths]` pins through toml, and toml picks its
+    # backend through deps, so the first toml read in a process may be deps
+    # reading its own manifest. That read must not pick the backend before deps
+    # has its pins: here both tools are pinned away and only the floor may
+    # serve. And toml keeps one tree per process, so deps asked between two
+    # reads must leave the next one answering from its own file.
+    local d out; d="$(mktemp -d)"
+    mkdir -p "$d/sub"
+    printf '[deps.paths]\nyq = "%s"\ntaplo = "%s"\n' "$d/no-yq" "$d/no-taplo" > "$d/nut.toml"
+    printf 'a = 1\n[t]\nb = "x"\n' > "$d/f.toml"
+    cat > "$d/sub/s.sh" <<'EOS'
+use toml deps
+printf 'a=%s\n' "$(toml_get "$1" a)"
+toml_get "$1" a > /dev/null
+printf 'backend=%s\n' "$_TOML_BACKEND"
+deps_has jq > /dev/null
+printf 't.b=%s\n' "$(toml_get "$1" t.b)"
+printf 'deps=%s\n' "$(toml_get "$2" deps.paths.yq)"
+printf 'a=%s\n' "$(toml_get "$1" a)"
+EOS
+    out="$( cd / && "${NUTSHELL_ROOT}/bin/nutshell" "$d/sub/s.sh" "$d/f.toml" "$d/nut.toml" 2>/dev/null )"
+    assert_eq "$out" "a=1
+backend=bash
+t.b=x
+deps=${d}/no-yq
+a=1"
+    rm -rf "$d"
+}

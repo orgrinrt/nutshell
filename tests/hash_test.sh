@@ -299,18 +299,35 @@ it_takes_the_digest_off_the_front_of_what_b3sum_prints() {
 }
 
 #[test]
+it_says_b3sum_cannot_serve_when_it_prints_no_digest() {
+    # A b3sum that runs and prints nothing, or no digest, gives no BLAKE3 here:
+    # rc 2, a fact about the machine, as for no b3sum at all, not rc 1.
+    _h_setup
+    mkdir -p "$HROOT/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$HROOT/bin/b3sum"
+    chmod +x "$HROOT/bin/b3sum"
+    PATH="$HROOT/bin:$PATH"; deps_forget
+    hash_blake3 "$HROOT/f" >/dev/null 2>&1; assert_eq "$?" "2" "printed nothing"
+    printf '#!/bin/sh\necho "fetching b3sum"\n' > "$HROOT/bin/b3sum"
+    deps_forget
+    hash_blake3 "$HROOT/f" >/dev/null 2>&1; assert_eq "$?" "2" "printed no digest"
+    _h_end
+}
+
+#[test]
 it_matches_the_published_blake3_digest_of_nothing() {
     # The BLAKE3 digest of empty input, from the reference test vectors, written
-    # here rather than taken from the tool under test.
-    #
-    # LAZY_TOOL_ACTIVE makes this workspace's install-on-first-use shim answer
-    # at once instead of fetching, so an absent tool is seen as absent.
-    if ! LAZY_TOOL_ACTIVE=1 b3sum --version >/dev/null 2>&1; then
-        skip "b3sum is not installed on this machine"
-        return 0
-    fi
+    # here rather than taken from the tool under test. Where no b3sum gives a
+    # digest, rc 2, there is nothing to check.
     _h_setup
     : > "$HROOT/empty"
-    assert_eq "$(hash_blake3 "$HROOT/empty")" "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    local out rc=0
+    out="$(hash_blake3 "$HROOT/empty" 2>/dev/null)" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+        _h_end
+        skip "no b3sum that gives a digest on this machine"
+        return 0
+    fi
+    assert_eq "${rc}/${out}" "0/af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
     _h_end
 }

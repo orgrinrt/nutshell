@@ -243,11 +243,9 @@ it_trims_into_a_variable_named_like_its_own_locals() {
     # The caller names the target, so a plain `local v` inside would shadow it
     # and hand back nothing. toml_get asks for exactly `v` and `k`, so this is
     # not hypothetical: it broke twenty-six tests at once.
-    local v k line out
+    local v k
     _toml_trim_into v "  a  ";    assert_eq "$v" "a"
     _toml_trim_into k "  b  ";    assert_eq "$k" "b"
-    _toml_clean_into line " x # c"; assert_eq "$line" "x"
-    _toml_clean_into out  " y # c"; assert_eq "$out" "y"
 }
 
 #[test]
@@ -257,9 +255,6 @@ it_refuses_a_target_inside_its_own_reserved_namespace() {
     # caller's variable untouched with nothing to say so. Refused loudly now.
     local rc=0
     _toml_trim_into __toml_v "x" || rc=$?
-    assert_ne "$rc" "0"
-    rc=0
-    _toml_clean_into __toml_acc "y" || rc=$?
     assert_ne "$rc" "0"
 }
 
@@ -298,51 +293,6 @@ it_tracks_a_multiline_string_in_a_section_it_was_not_asked_about() {
     local got; got="$(toml_get "$d/t.toml" n.keymap)"
     rm -rf "$d"
     assert_eq "$got" "right"
-}
-
-#[test]
-it_cleans_into_a_variable_without_forking() {
-    local out
-    _toml_clean_into out 'key = "value" # trailing'
-    assert_eq "$out" 'key = "value"'
-}
-
-#[test]
-it_keeps_a_hash_inside_quotes_when_cleaning_into_a_variable() {
-    # The fork-free twin has to agree with the original on the case the
-    # original exists for.
-    local out
-    _toml_clean_into out 'public_api = "#[pub]"'
-    assert_eq "$out" 'public_api = "#[pub]"'
-}
-
-#[test]
-it_agrees_with_the_printing_cleaner() {
-    # Two implementations of one rule drift. Checked against each other over
-    # inputs chosen to be able to disagree -- backslashes, percent signs and a
-    # leading dash all go through printf, which is where a twin diverges.
-    local samples=(
-        'a = "b"'
-        'a = "b" # c'
-        'a = "#not a comment"'
-        '# whole line'
-        '   indented = 1   '
-        "a = 'single #quoted'"
-        'a = "back\\slash"'
-        'a = "100%% sure"'
-        'a = "%s %d"'
-        '-a = "leading dash"'
-        'a = "trailing space "   # c'
-        'a = "unclosed'
-        'a = ""'
-        ''
-    )
-    local s out bad=""
-    for s in "${samples[@]}"; do
-        _toml_clean_into out "$s"
-        [[ "$out" == "$(_toml_clean_line "$s")" ]] || bad+="[$s] "
-    done
-    assert_empty "$bad"
 }
 
 #[test]
@@ -432,14 +382,16 @@ it_decodes_a_unicode_escape() {
 }
 
 #[test]
-it_keeps_a_backslash_that_starts_no_escape() {
-    # Not every backslash is an escape. Eating one that introduces nothing
-    # loses a character with no warning.
+it_refuses_a_backslash_that_starts_no_escape() {
+    # TOML has no `\q`. Eating the backslash lost a character with no warning,
+    # and keeping it read a file TOML calls invalid as if it were fine.
     local d; d="$(mktemp -d)"
     printf '[a]\nv = "a\\qb"\n' > "$d/t.toml"
-    local got; got="$(toml_get "$d/t.toml" a.v)"
+    local rc=0 err
+    err="$(toml_get "$d/t.toml" a.v 2>&1 >/dev/null)" || rc=$?
     rm -rf "$d"
-    assert_eq "$got" 'a\qb'
+    assert_eq "$rc" "2"
+    assert_contains "$err" "escape"
 }
 
 #[test]
@@ -467,8 +419,8 @@ it_does_not_end_a_basic_string_at_an_escaped_quote() {
 
 #[test]
 it_keeps_a_hash_after_a_single_escaped_quote_on_the_hot_path() {
-    # `_toml_clean_into` is the copy every value read goes through, and the
-    # escaped-quote fix landed only in `_toml_clean_line`. The two cases the
+    # The old line cleaner had two copies, and the escaped-quote fix landed in
+    # only one of them. The two cases the
     # suite had both carried an even number of escaped quotes before the `#`,
     # where the broken counting cancels out and gets the right answer by luck.
     # One is the shape that breaks.
@@ -480,36 +432,6 @@ it_keeps_a_hash_after_a_single_escaped_quote_on_the_hot_path() {
     rm -rf "$d"
     assert_eq "$v" 'a " b # c'
     assert_eq "$after" "5"
-}
-
-#[test]
-it_cleans_a_line_the_same_way_through_both_cleaners() {
-    # Two implementations of one rule is two places for it to be wrong, and
-    # only one of them was fixed. Whatever they answer, they answer together.
-    local -a cases=(
-        'v = "a \" b # c"'
-        'v = "a \" b \" c # d"'
-        'v = "plain # hash"'
-        "v = 'literal # hash'"
-        'v = 1  # a real comment'
-        'v = "trailing backslash \\\\"'
-    )
-    local c into wrong=""
-    for c in "${cases[@]}"; do
-        _toml_clean_into into "$c"
-        [[ "$into" == "$(_toml_clean_line "$c")" ]] || wrong="${wrong} [${c}]"
-    done
-    assert_empty "$wrong"
-}
-
-#[test]
-it_has_a_detector_that_notices_the_two_cleaners_disagreeing() {
-    # The control for the comparison above: it has to be able to see a
-    # difference, or its silence means nothing.
-    local into
-    _toml_clean_into into 'v = 1  # comment'
-    assert_ne "$into" "$(_toml_clean_line 'v = 2  # comment')"
-    assert_eq "$into" "$(_toml_clean_line 'v = 1  # comment')"
 }
 
 #[test]
@@ -558,28 +480,19 @@ it_decodes_a_unicode_escape_in_any_locale() {
 # What has no encoding is kept as typed rather than turned into something.
 #
 # A surrogate half and anything past the last codepoint are not characters,
-# and a run of hex digits that is too short was never an escape. Each is left
-# exactly as written, because silently producing a replacement character would
-# lose the fact that the file said something impossible.
-it_keeps_an_escape_that_names_no_character() {
+# and a run of hex digits that is too short was never an escape. Each is
+# refused rather than kept as written or replaced, because either would lose
+# the fact that the file said something impossible.
+it_refuses_an_escape_that_names_no_character() {
     local d; d="$(mktemp -d)"
-    {
-        printf 'lone = "\\uD800"\n'
-        printf 'past = "\\U00110000"\n'
-        printf 'nothex = "\\uZZZZ"\n'
-        printf 'short = "\\u00"\n'
-    } > "$d/t.toml"
-
-    local loc
-    for loc in C en_US.UTF-8; do
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" lone)" '\uD800' \
-            "surrogate half under LC_ALL=${loc}"
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" past)" '\U00110000' \
-            "past the last codepoint under LC_ALL=${loc}"
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" nothex)" '\uZZZZ' \
-            "not hex under LC_ALL=${loc}"
-        assert_eq "$(LC_ALL="$loc" toml_get "$d/t.toml" short)" '\u00' \
-            "too few digits under LC_ALL=${loc}"
+    local loc line rc
+    for line in 'v = "\uD800"' 'v = "\U00110000"' 'v = "\uZZZZ"' 'v = "\u00"'; do
+        printf '%s\n' "$line" > "$d/t.toml"
+        for loc in C en_US.UTF-8; do
+            rc=0
+            LC_ALL="$loc" toml_get "$d/t.toml" v >/dev/null 2>&1 || rc=$?
+            assert_eq "$rc" "2" "${line} under LC_ALL=${loc}"
+        done
     done
     rm -rf "$d"
 }
@@ -781,33 +694,22 @@ it_refuses_an_inline_table_that_never_closes_its_string() {
 }
 
 #[test]
-it_cannot_read_a_quoted_key_holding_an_equals_and_says_so_in_the_comment() {
-    # `{ "k=y" = "1" }` is legal TOML and this splits on the first `=`, so it
-    # looks for a key called `"k`. Pinned as the known limit rather than left
-    # for somebody to discover, since the comment used to claim the opposite.
-    assert_fails toml_inline_get '{ "k=y" = "1" }' "k=y"
+it_reads_a_quoted_key_holding_an_equals() {
+    # `{ "k=y" = "1" }` is legal TOML. The splitter cut it at the first `=`;
+    # the reader takes the quoted key as one key.
+    assert_eq "$(toml_inline_get '{ "k=y" = "1" }' "k=y")" "1"
 }
 
 
 #[test]
-it_refuses_a_multi_line_nested_array_rather_than_truncating_it() {
-    # A known gap, pinned at what it actually does rather than at what is
-    # wanted. The defect is upstream of the splitter, in the line collector,
-    # which ends a multi-line value at any line ending in `]` and so stops at
-    # the inner array's own bracket.
-    #
-    # Before the depth check this handed back two elements, the second of them
-    # `["z"` with its bracket missing, and reported success. Now the unbalanced
-    # bracket is caught and it refuses. That is still not the answer wanted,
-    # and it is the right failure, because a caller can see it went wrong.
-    #
-    # Reading it correctly means teaching the collector the depth the splitter
-    # now knows, which changes how every multi-line value is read and wants its
-    # own pass. The single-line and trailing-comma forms both work and are
-    # tested above, and those are the shapes the registry this fix serves uses.
+it_reads_a_multi_line_nested_array_whole() {
+    # The line collector used to end a multi-line value at the inner array's
+    # own bracket. The reader keeps the depth across lines now.
     local d; d="$(mktemp -d)"
     printf '[a]\nv = [\n  ["x", "y"],\n  ["z"]\n]\n' > "$d/t.toml"
-    local -a arr=(); assert_fails toml_array "$d/t.toml" a.v arr
-    assert_eq "${#arr[@]}" "0"
+    local -a arr=(); assert_ok toml_array "$d/t.toml" a.v arr
+    assert_eq "${#arr[@]}" "2"
+    assert_eq "${arr[0]}" '["x", "y"]'
+    assert_eq "${arr[1]}" '["z"]'
     rm -rf "$d"
 }

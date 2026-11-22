@@ -76,16 +76,27 @@ it_nests_three_deep() {
 }
 
 #[test]
-it_refuses_a_file_that_comes_back_to_a_finished_section() {
-    # One pass cannot reopen a closed object, and emitting the key twice is
-    # worse than saying so.
+it_converts_a_file_that_comes_back_to_a_finished_section() {
+    # Valid TOML: `[b.c]` after `[a]` adds to `b`. The one-pass emitter could
+    # not reopen `b` and refused; the tree has `b` whole before anything is
+    # written. Literal from yq on the same file.
     local d; d="$(_tj)"
     printf '[b]\nx = 1\n[a]\ny = 2\n[b.c]\nz = 3\n' > "$d/t.toml"
-    local out; out="$(toml_to_json "$d/t.toml" 2>&1)"
-    local rc=$?
+    local out; out="$(toml_to_json "$d/t.toml")"
     rm -rf "$d"
-    assert_ne "$rc" "0"
-    assert_contains "$out" "b.c"
+    assert_eq "$out" '{"b":{"x":1,"c":{"z":3}},"a":{"y":2}}'
+}
+
+#[test]
+it_refuses_a_table_defined_twice() {
+    # The true redefinition, which TOML forbids and the converter refuses.
+    local d; d="$(_tj)"
+    printf '[b]\nx = 1\n[a]\n[b]\nz = 3\n' > "$d/t.toml"
+    local out rc=0
+    out="$(toml_to_json "$d/t.toml" 2>&1)" || rc=$?
+    rm -rf "$d"
+    assert_eq "$rc" "2"
+    assert_contains "$out" "defined twice"
 }
 
 #[test]
@@ -184,41 +195,32 @@ it_keeps_a_hash_that_is_part_of_a_value() {
 }
 
 #[test]
-it_refuses_a_quoted_key() {
-    # Nothing here can address one: `toml_keys` leaves it out and `toml_get`
-    # cannot reach it. Converting it anyway produced valid JSON naming a key
-    # that is not the key, which is a worse failure than refusing.
+it_converts_a_quoted_key() {
+    # `toml_get` reaches it now, so the converter writes it. Literal from yq.
     local d; d="$(_tj)"
     printf '[a]\n"my key" = 1\n' > "$d/t.toml"
-    local out rc=0
-    out="$(toml_to_json "$d/t.toml" 2>&1)" || rc=$?
+    local out; out="$(toml_to_json "$d/t.toml")"
     rm -rf "$d"
-    assert_ne "$rc" "0"
-    assert_contains "$out" "my key"
-    assert_contains "$out" "quoted key"
+    assert_eq "$out" '{"a":{"my key":1}}'
 }
 
 #[test]
-it_refuses_a_key_holding_a_quote() {
+it_converts_a_key_holding_a_quote() {
     local d; d="$(_tj)"
     printf '[a]\n"a\\"b" = 1\n' > "$d/t.toml"
-    local rc=0
-    toml_to_json "$d/t.toml" >/dev/null 2>&1 || rc=$?
+    local out; out="$(toml_to_json "$d/t.toml")"
     rm -rf "$d"
-    assert_ne "$rc" "0"
+    assert_eq "$out" '{"a":{"a\"b":1}}'
 }
 
 #[test]
-it_refuses_a_quoted_section_name() {
-    # `["a.b"]` is one section whose name has a dot in it. Split on the dot it
-    # came out as two nested objects for a document with one level.
+it_converts_a_quoted_section_name_as_one_level() {
+    # `["a.b"]` is one section whose name has a dot in it, one level deep.
     local d; d="$(_tj)"
     printf '["a.b"]\nx = 1\n' > "$d/t.toml"
-    local out rc=0
-    out="$(toml_to_json "$d/t.toml" 2>&1)" || rc=$?
+    local out; out="$(toml_to_json "$d/t.toml")"
     rm -rf "$d"
-    assert_ne "$rc" "0"
-    assert_contains "$out" "quoted section"
+    assert_eq "$out" '{"a.b":{"x":1}}'
 }
 
 #[test]

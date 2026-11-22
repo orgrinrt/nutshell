@@ -1,0 +1,8 @@
+ml = """
+line one
+line "two" with ""quotes""
+"""
+lit = '''
+raw \n kept
+'''
+after = 1

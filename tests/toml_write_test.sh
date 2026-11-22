@@ -496,16 +496,10 @@ it_encodes_every_escape_the_reader_decodes() {
 }
 
 #[test]
-# Nothing here has `local`, so every variable it uses is the caller's too
-# unless the name is its own.
-#
-# The floor convention is a prefix rather than `local`, which is not POSIX.
-# Getting that wrong is silent and awful: this module walks lines with `line`,
-# `file`, `n` and `key`, which are the four names a caller is most likely to
-# be holding, and it would overwrite them mid-loop with no error anywhere.
-#
-# So the test is a caller that holds all of them across a write and checks
-# they survived.
+# The writer walks lines and keys under names a caller is likely to be
+# holding, `line`, `file`, `n` and `key` among them. Each is local to it, and
+# this is a caller that holds all of them across a write and checks they
+# survived.
 it_does_not_write_into_the_callers_variables() {
     local d; d="$(mktemp -d)"
     printf '[ui]\ntheme = "dark"\n' > "$d/t.toml"
@@ -526,18 +520,213 @@ it_does_not_write_into_the_callers_variables() {
     rm -rf "$d"
 }
 
+# The writer edits one line, so it refuses what one line cannot change without
+# breaking the file: a key that a dotted key defined, a key inside an array of
+# tables, a key inside an inline table. Each used to append a table TOML
+# forbids and return 0.
+
+_tw_refuse() {
+    # _tw_refuse <content> <fn> <key> [value]: runs <fn> <file> <key> [value]
+    # and sets _TW_RC, _TW_ERR, and _TW_SAME when the file is left untouched.
+    local d; d="$(_tw_dir)"
+    printf '%b' "$1" > "$d/t.toml"
+    cp "$d/t.toml" "$d/before.toml"
+    shift
+    _TW_RC=0
+    local fn="$1"; shift
+    _TW_ERR="$("$fn" "$d/t.toml" "$@" 2>&1 >/dev/null)" || _TW_RC=$?
+    _TW_SAME=0
+    cmp -s "$d/t.toml" "$d/before.toml" && _TW_SAME=1
+    rm -rf "$d"
+}
+
 #[test]
-# The floor is the point of the rewrite, so it is asserted rather than assumed.
+it_refuses_to_set_a_key_defined_by_a_dotted_key() {
+    _tw_refuse 'fruit.apple.color = "red"\n' toml_set fruit.apple.color blue
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "dotted key"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_beside_one_a_dotted_key_made_in_a_table() {
+    _tw_refuse '[server]\nnet.port = 80\n' toml_set server.net.host localhost
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "dotted key"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_inside_an_array_of_tables() {
+    _tw_refuse '[[products]]\nname = "a"\n' toml_set products.name b
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "array of tables"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_under_a_table_of_an_array_of_tables() {
+    _tw_refuse '[[servers]]\nname = "a"\n[servers.opts]\nfast = true\n' toml_set servers.opts.fast false
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "array of tables"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_set_a_key_inside_an_inline_table() {
+    _tw_refuse 'i = { x = 1 }\n' toml_set i.x 2
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "inline table"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_unset_a_key_defined_by_a_dotted_key() {
+    _tw_refuse 'fruit.apple.color = "red"\nx = 1\n' toml_unset fruit.apple.color
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "dotted key"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_unset_a_key_inside_an_array_of_tables() {
+    _tw_refuse '[[products]]\nname = "a"\n' toml_unset products.name
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "array of tables"
+    assert_eq "$_TW_SAME" "1"
+}
+
+#[test]
+it_refuses_to_unset_a_key_inside_an_inline_table() {
+    _tw_refuse 'i = { x = 1, y = 2 }\n' toml_unset i.x
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "inline table"
+    assert_eq "$_TW_SAME" "1"
+}
+
+
+#[test]
+it_keeps_a_trailing_comment_on_the_edited_line() {
+    local d; d="$(_tw_dir)"
+    printf 'title = "Hello"   # trailing comment\nn = 1 # count\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" title New
+    assert_ok toml_set "$d/t.toml" n 2
+    local got; got="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" $'title = "New"   # trailing comment\nn = 2 # count'
+}
+
+#[test]
+it_edits_a_key_under_a_padded_or_commented_header_in_place() {
+    local d; d="$(_tw_dir)"
+    printf '[ sp ]\nk = 1\n\n[b] # the b table\nk = 1\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" sp.k 2
+    assert_ok toml_set "$d/t.toml" b.k 3
+    local got; got="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" $'[ sp ]\nk = 2\n\n[b] # the b table\nk = 3'
+}
+
+# --- the line comes from the reader's tree -----------------------------------
 #
-# `dash -n` parses without running, and it is the shell the posix_floor check
-# reaches for first. A construct that only bash accepts creeps back in as an
-# ordinary-looking edit otherwise, and nothing else in this file would notice.
-it_parses_under_a_posix_shell() {
-    local sh
-    for sh in dash ash busybox-sh; do
-        command -v "$sh" >/dev/null 2>&1 || continue
-        assert_ok "$sh" -n "${BASH_SOURCE[0]%/*}/../lib/toml/write.sh"
-        return 0
-    done
-    skip "no strict POSIX shell on this machine to check against"
+# A quoted key holding a dot is one segment, and a line inside a multi-line
+# value is part of that value. A writer with a scanner of its own got both
+# wrong: it split `a."b.c"` at the dot inside the quotes, and it took a `[t]`
+# or a `k = 9` inside a string or an array for the header or the key.
+
+#[test]
+it_sets_a_quoted_key_holding_a_dot() {
+    local d; d="$(_tw_dir)"
+    printf '[a]\n"b.c" = 1\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" 'a."b.c"' 7
+    local got body; got="$(toml_get "$d/t.toml" 'a."b.c"')"; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$got" "7"
+    assert_eq "$body" $'[a]\n"b.c" = 7'
+}
+
+#[test]
+it_adds_a_quoted_key_holding_a_dot_to_its_table() {
+    local d; d="$(_tw_dir)"
+    printf '[a]\nx = 1\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" 'a."b.c"' 7
+    local got x; got="$(toml_get "$d/t.toml" 'a."b.c"')"; x="$(toml_get "$d/t.toml" a.x)"
+    rm -rf "$d"
+    assert_eq "$got" "7"
+    assert_eq "$x" "1"
+}
+
+#[test]
+it_unsets_a_quoted_key_holding_a_dot() {
+    local d; d="$(_tw_dir)"
+    printf '[a]\n"b.c" = 1\nx = 2\n' > "$d/t.toml"
+    assert_ok toml_unset "$d/t.toml" 'a."b.c"'
+    local body; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$body" $'[a]\nx = 2'
+}
+
+# The value of `s.doc` holds a header line and a key line. Setting `t.k` has
+# to change the real `[t]` at the end and leave the string as it was.
+_tw_ml_case() {
+    local d; d="$(_tw_dir)"
+    printf '%b' "$1" > "$d/t.toml"
+    cp "$d/t.toml" "$d/want.toml"
+    _TW_RC=0
+    toml_set "$d/t.toml" t.k 6 2>/dev/null || _TW_RC=$?
+    _TW_K="$(toml_get "$d/t.toml" t.k 2>&1)"
+    _TW_BODY="$(cat "$d/t.toml")"
+    rm -rf "$d"
+}
+
+#[test]
+it_sets_past_a_multi_line_basic_string_holding_a_header() {
+    _tw_ml_case '[s]\ndoc = """\n[t]\nk = 9\n"""\n\n[t]\nk = 5\n'
+    assert_eq "$_TW_RC" "0"
+    assert_eq "$_TW_K" "6"
+    assert_eq "$_TW_BODY" $'[s]\ndoc = """\n[t]\nk = 9\n"""\n\n[t]\nk = 6'
+}
+
+#[test]
+it_sets_past_a_multi_line_literal_string_holding_a_header() {
+    _tw_ml_case "[s]\ndoc = '''\n[t]\nk = 9\n'''\n\n[t]\nk = 5\n"
+    assert_eq "$_TW_RC" "0"
+    assert_eq "$_TW_K" "6"
+    assert_eq "$_TW_BODY" $'[s]\ndoc = \'\'\'\n[t]\nk = 9\n\'\'\'\n\n[t]\nk = 6'
+}
+
+#[test]
+it_sets_past_a_multi_line_array_holding_a_key_line() {
+    _tw_ml_case '[t]\nlist = [\n  "k = 9",\n]\nk = 5\n'
+    assert_eq "$_TW_RC" "0"
+    assert_eq "$_TW_K" "6"
+    assert_eq "$_TW_BODY" $'[t]\nlist = [\n  "k = 9",\n]\nk = 6'
+}
+
+#[test]
+it_replaces_a_multi_line_value_whole() {
+    local d; d="$(_tw_dir)"
+    printf '[t]\nk = """\nk = 1\n""" # note\nafter = 2\n' > "$d/t.toml"
+    assert_ok toml_set "$d/t.toml" t.k v
+    local body; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$body" $'[t]\nk = "v" # note\nafter = 2'
+}
+
+#[test]
+it_unsets_past_a_multi_line_string_holding_the_same_key() {
+    local d; d="$(_tw_dir)"
+    printf '[s]\ndoc = """\nk = 9\n"""\nk = 5\n' > "$d/t.toml"
+    assert_ok toml_unset "$d/t.toml" s.k
+    local body; body="$(cat "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$body" $'[s]\ndoc = """\nk = 9\n"""'
+}
+
+#[test]
+it_refuses_to_write_a_file_the_reader_refuses() {
+    _tw_refuse 'a = 1\na = 2\n' toml_set b 3
+    assert_eq "$_TW_RC" "2"
+    assert_contains "$_TW_ERR" "defined twice"
+    assert_eq "$_TW_SAME" "1"
 }

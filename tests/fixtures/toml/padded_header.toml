@@ -1,0 +1,5 @@
+[ sp ]
+k = 2
+
+[  outer . inner  ]   # a comment after the header
+k = 5

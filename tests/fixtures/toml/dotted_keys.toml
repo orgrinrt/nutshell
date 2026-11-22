@@ -1,0 +1,8 @@
+# Dotted keys at the root and inside a table.
+fruit.apple.color = "red"
+fruit.apple.size = 3
+fruit . banana = "yellow"
+
+[server]
+net.port = 80
+net.host = "localhost"

@@ -54,6 +54,9 @@ printf '#!/usr/bin/env nutshell\nprintf ok\n' > "$_SC_TMP/bare/none.sh"
 printf '#!/usr/bin/env nutshell\nuse json\nprintf ok\n' > "$_SC_TMP/bare/json.sh"
 printf '#!/usr/bin/env nutshell\nprintf ok\n' > "$_SC_TMP/unit/none.sh"
 printf '#!/usr/bin/env nutshell\nuse toml\nprintf ok\n' > "$_SC_TMP/unit/toml.sh"
+# Twenty captures of a stub, the shape a loop over paths takes: each `$(...)`
+# is a subshell, and a module loaded in one is lost with it.
+printf '#!/usr/bin/env nutshell\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do x="$(fs_basename /a/b)"; done\nprintf ok\n' > "$_SC_TMP/bare/captures.sh"
 
 # A project manifest of 300 lines with no pin in it, so the interpreter's pin
 # read walks all of it and finds nothing, which is what every unpinned project
@@ -114,6 +117,8 @@ arm_bare_manifest() { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/unit/none.sh"; }
 arm_json()          { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/bare/json.sh"; }
 # `use toml` beside the 300-line `nut.toml`.
 arm_toml()          { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/unit/toml.sh"; }
+# Twenty `$(fs_basename)` with no `use`, no manifest.
+arm_captures()      { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/bare/captures.sh"; }
 # No `use` beside the manifest, with no tree kept for it.
 arm_bare_cold()     { _sc_run_cold "$ROOT/bin/nutshell" "$_SC_TMP/unit/none.sh"; }
 
@@ -132,6 +137,7 @@ bench_arm "script, no use, ${_SC_LINES}-line manifest" arm_bare_manifest
 bench_arm "script, use json, no manifest"     arm_json
 bench_arm "script, use toml, ${_SC_LINES}-line manifest" arm_toml
 bench_arm "script, no use, ${_SC_LINES}-line manifest, cold" arm_bare_cold
+bench_arm "script, 20 captures of a stub, no manifest" arm_captures
 
 bench_target arm_bare          $(( 50 * ITERS ))
 bench_target arm_bare_manifest $(( 50 * ITERS ))

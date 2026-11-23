@@ -368,6 +368,50 @@ This enables:
 - Use as standalone scripts if needed
 - Normal sourced operation
 
+## The Interpreter's Prelude Stubs
+
+`bin/nutshell` loads no module for itself. It used to load `extern` and `log`
+before every script, about 230ms and 22 files, and a script that called
+`log_info` or `deps_has` with no `use` worked because of it. `prelude.nut` keeps
+that working: one row per module, the name a `use` writes and then the public
+functions that load put in reach, 165 of them. The table is read with `read`,
+before any module is loaded, so it needs no parser.
+
+For each function in it that is not already defined, the interpreter defines a
+stub, all of them in one `eval`:
+
+```bash
+log_info() { _nut_prelude log log_info "$@"; }
+```
+
+The first call runs `use log`, which overwrites every stub of that module with
+the real function, and then calls the function again by name. Where the `use`
+loaded the module but the name is still the stub, `_nut_prelude` stops with
+`[ERROR] log_info: use log loaded but did not define it` rather than calling
+itself until the stack gives out. A script that calls none of them loads
+nothing; the stubs cost about 2ms a start, measured in `benches/start-cost`.
+
+Three rules keep a script working as it did when both modules loaded first:
+
+- A function already defined when the interpreter is sourced is the real one,
+  and gets no stub.
+- A function the script defines itself, in place of a stub, is not overwritten
+  by a later `use` of its module, or of a module that loads it. Before a module
+  the table names is sourced for the first time, `use` asks
+  `_nut_prelude_keep` which of its functions are there and are not stubs, and
+  puts those back afterwards. That is one capture of the row's definitions per
+  first load of such a module.
+- A stub called inside `$(...)` loads its module in that subshell, and the load
+  is lost with it, so every call pays the whole load again: twenty
+  `$(fs_basename)` calls would take about 1.5s a start, some 75ms each, where
+  with `fs` loaded first they take a few milliseconds. So where the
+  script's own text opens a `$(` with a function of the table, as its first
+  word, the interpreter loads that module once before the script runs. The scan
+  is one read, one substitution and one field split, under 1ms for a 13KB
+  script. A call reached through a pipe or a later word in the `$(`, or from a
+  file the script sources, is not seen, and still pays the load in each
+  subshell; a script that wants none of this cost writes the `use`.
+
 ## Impl File Contract
 
 Every impl file in `*/impl/` directories must follow this contract:

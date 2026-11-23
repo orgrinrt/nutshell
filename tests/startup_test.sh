@@ -61,3 +61,73 @@ it_runs_a_script_that_asks_for_a_module_after_loading_none() {
     rm -rf "$_ST_D"
     assert_eq "$out" "OK"
 }
+
+# --- what was there before the interpreter stopped loading it -------------------
+#
+# The interpreter used to load `extern` and `log` before every script, and so
+# everything they load. A script that called `log_info` with no `use` worked,
+# and still does: each such function is a stub that loads its module on the
+# first call, so a script that calls none of them loads nothing.
+
+#[test]
+it_logs_from_a_script_that_asked_for_no_module() {
+    _st_dir || return 0
+    local out; out="$(_st_run 'log_info hello')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "[INFO] hello"
+}
+
+#[test]
+it_logs_from_a_capture_in_a_script_that_asked_for_no_module() {
+    _st_dir || return 0
+    local out; out="$(_st_run 'x="$(log_info hello 2>&1)"; printf "<%s>" "$x"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "<[INFO] hello>"
+}
+
+#[test]
+it_asks_deps_after_asking_only_for_toml() {
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'use toml; deps_has bash && printf yes; is_truthy true && printf " truthy"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "yes truthy"
+}
+
+#[test]
+it_asks_deps_from_a_capture_after_asking_only_for_toml() {
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'use toml; printf "<%s>" "$(deps_has bash && printf yes; is_truthy 1 && printf " truthy")"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "<yes truthy>"
+}
+
+#[test]
+it_still_loads_nothing_for_a_script_that_calls_none_of_them() {
+    # What the stubs cost: they are there, and no module is.
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'declare -F log_info >/dev/null && printf "stub "; printf "[%s]" "$(nutshell_modules | tr "\n" " ")"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "stub []"
+}
+
+#[test]
+it_defines_each_stubbed_function_in_the_module_the_stub_names() {
+    # A stub naming the wrong module, or a function its module no longer has,
+    # would recurse into the guard at the first call. Each row is checked in a
+    # bash that loaded only that module.
+    local table="${NUT%/bin/nutshell}/lib/prelude.sh" init="${NUT%/bin/nutshell}/init"
+    local rows name mod n=0 bad=""
+    rows="$(sed -n 's/^\([a-z][a-z0-9_]*\)() { _nut_prelude \([a-z:_]*\) .*/\1 \2/p' "$table")"
+    while read -r name mod; do
+        [[ -n "$name" ]] || continue
+        n=$(( n + 1 ))
+        env -i PATH="$PATH" HOME="$HOME" bash -c '. "$1" || exit 1; use "$2" >/dev/null 2>&1; declare -F "$3" >/dev/null' \
+            _ "$init" "$mod" "$name" || bad+=" $name($mod)"
+    done <<< "$rows"
+    assert_eq "$bad" ""
+    # 165 public functions were reachable on dev with no `use`.
+    assert_eq "$n" "165"
+}

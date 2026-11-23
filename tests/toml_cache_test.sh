@@ -82,3 +82,152 @@ it_keeps_the_answers_of_a_table_and_an_array_through_the_cache() {
     assert_eq "$list" "[1, 2, 3]"
     assert_eq "$dotted" "dotted"
 }
+
+# --- a kept tree nobody else could have written --------------------------------
+#
+# A kept tree is run as shell by the reader, so a file somebody else could write
+# is code somebody else chose. Each plant below is a tree that would announce
+# itself on stderr and refuse; the read must answer from the file, and say
+# nothing of the plant.
+
+# _tc_place -> `_TC_AT`, where the tree of `$_TC_D/nut.toml` is kept
+_tc_place() {
+    _TC_AT="$(env -i HOME="$HOME" PATH="$PATH" XDG_CACHE_HOME="${_TC_CACHE:-$_TC_D/cache}" \
+        bash -c '. "$1" || exit 1; use toml; _toml_cache_at "$2/nut.toml" && printf %s "$_tca"' \
+        _ "$INIT" "$_TC_D")"
+}
+
+# _tc_plant <file mode> <directory mode>: a tree that runs where it is read
+_tc_plant() {
+    _tc_place
+    mkdir -p "${_TC_AT%/*}"
+    printf 'printf "PLANTED " >&2; return 1\n' > "$_TC_AT"
+    chmod "$1" "$_TC_AT"
+    chmod "$2" "${_TC_AT%/*}"
+}
+
+#[test]
+it_runs_a_planted_tree_nobody_else_could_write_as_the_positive_control() {
+    # Shows the plant is where the reader looks and does run when trusted, so
+    # its silence in the two tests after this one means something.
+    _tc_fresh
+    _tc_plant 600 700
+    local out; out="$(_tc_read package.name)"
+    rm -rf "$_TC_D"
+    assert_contains "$out" "PLANTED"
+    assert_contains "$out" "first"
+}
+
+#[test]
+it_does_not_run_a_kept_tree_others_can_write() {
+    local mode out
+    for mode in 620 602 666; do
+        _tc_fresh
+        _tc_plant "$mode" 700
+        out="$(_tc_read package.name)"
+        rm -rf "$_TC_D"
+        assert_eq "$out" "first" "file mode $mode"
+    done
+}
+
+#[test]
+it_does_not_run_a_kept_tree_in_a_directory_others_can_write() {
+    local mode out
+    for mode in 770 707 777 1777; do
+        _tc_fresh
+        _tc_plant 600 "$mode"
+        out="$(_tc_read package.name)"
+        rm -rf "$_TC_D"
+        assert_eq "$out" "first" "directory mode $mode"
+    done
+}
+
+#[test]
+it_keeps_no_tree_where_there_is_no_home_for_one() {
+    # With neither HOME nor XDG_CACHE_HOME there is no directory that is the
+    # reader's own, and a shared fallback is one anybody can plant in.
+    _tc_fresh
+    local run='. "$1" || exit 1; use toml; _TOML_FLOOR_ONLY=1; eval "$3"; toml_get "$2/nut.toml" package.name'
+    local first second
+    first="$(env -i PATH="$PATH" bash -c "$run" _ "$INIT" "$_TC_D" "" 2>&1)"
+    second="$(env -i PATH="$PATH" bash -c "$run" _ "$INIT" "$_TC_D" "$_TC_CANARY" 2>&1)"
+    rm -rf "$_TC_D"
+    assert_eq "$first" "first"
+    assert_contains "$second" "parsed"
+}
+
+#[test]
+it_keeps_a_tree_it_can_trust_again_under_any_umask() {
+    # Written under a umask that would leave it open to everybody, the kept
+    # tree is still one the next process takes.
+    _tc_fresh
+    local second
+    (umask 000; _tc_read package.name >/dev/null)
+    second="$(_tc_read package.name "$_TC_CANARY")"
+    rm -rf "$_TC_D"
+    assert_eq "$second" "first"
+}
+
+# --- a kept tree that no longer stands for the parse ---------------------------
+
+#[test]
+it_parses_again_where_the_floor_changed_after_the_tree_was_kept() {
+    # A copy of the floor and of this file, so touching them touches nothing
+    # else. Each of the four, made newer than the kept tree, sends the read
+    # back to the parser.
+    local g root out
+    for g in impl/bash.sh impl/bash_lex.sh impl/bash_path.sh cache.sh; do
+        _tc_fresh
+        root="${INIT%/init}/lib/toml"
+        mkdir -p "$_TC_D/floor/impl"
+        cp "$root"/impl/bash.sh "$root"/impl/bash_lex.sh "$root"/impl/bash_path.sh "$_TC_D/floor/impl/"
+        cp "$root"/cache.sh "$_TC_D/floor/"
+        local pin="_TOML_CACHE_FLOOR=$_TC_D/floor/impl _TOML_CACHE_SELF=$_TC_D/floor/cache.sh"
+        _tc_read package.name "$pin" >/dev/null
+        touch -t 209901010000 "$_TC_D/floor/$g"
+        out="$(_tc_read package.name "$pin; $_TC_CANARY")"
+        rm -rf "$_TC_D"
+        assert_contains "$out" "parsed" "$g newer than the tree"
+    done
+}
+
+#[test]
+it_takes_the_tree_while_the_floor_is_older_as_the_positive_control() {
+    local root out
+    _tc_fresh
+    root="${INIT%/init}/lib/toml"
+    mkdir -p "$_TC_D/floor/impl"
+    cp "$root"/impl/bash.sh "$root"/impl/bash_lex.sh "$root"/impl/bash_path.sh "$_TC_D/floor/impl/"
+    cp "$root"/cache.sh "$_TC_D/floor/"
+    touch -t 200001010000 "$_TC_D/floor/impl/"*.sh "$_TC_D/floor/cache.sh"
+    local pin="_TOML_CACHE_FLOOR=$_TC_D/floor/impl _TOML_CACHE_SELF=$_TC_D/floor/cache.sh"
+    _tc_read package.name "$pin" >/dev/null
+    out="$(_tc_read package.name "$pin; $_TC_CANARY")"
+    rm -rf "$_TC_D"
+    assert_eq "$out" "first"
+}
+
+#[test]
+it_parses_again_under_another_bash() {
+    _tc_fresh
+    _tc_read package.name >/dev/null
+    local out; out="$(_tc_read package.name "BASH_VERSION=0.0.0-other; $_TC_CANARY")"
+    rm -rf "$_TC_D"
+    assert_contains "$out" "parsed"
+}
+
+#[test]
+it_reads_the_file_past_a_corrupt_kept_tree() {
+    # Cut short, and garbage: each is read past in silence, and the answer is
+    # the file's.
+    local body out
+    for body in 'garbage ((( "' "$(printf '[[ 1 ]]\n_TOML_T=([R]=table ')"; do
+        _tc_fresh
+        _tc_read package.name >/dev/null
+        _tc_place
+        printf '%s' "$body" > "$_TC_AT"
+        out="$(_tc_read package.name)"
+        rm -rf "$_TC_D"
+        assert_eq "$out" "first" "kept tree: $body"
+    done
+}

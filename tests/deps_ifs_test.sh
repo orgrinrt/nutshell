@@ -90,12 +90,33 @@ it_drops_every_capability_on_a_forget() {
 #[test]
 it_leaves_the_callers_variables_alone_on_dropping_capabilities() {
     # `unset _TOOL_CAN_ a b c` was run with the names split apart, which also
-    # unset the caller's variables called a, b and c.
-    _di_each 'a=1 b=2;' '
+    # unset the caller's variables named like a capability.
+    _di_each 'grep_pcre=1 sed_inplace=1;' '
         deps_can grep_pcre >/dev/null 2>&1 || true
-        a=1 b=2
+        grep_pcre=1 sed_inplace=1
         deps_hide sh >/dev/null
-        printf "a=%s b=%s;" "${a-unset}" "${b-unset}"'
+        printf "grep_pcre=%s sed_inplace=%s;" "${grep_pcre-unset}" "${sed_inplace-unset}"'
+}
+
+#[test]
+it_forgets_a_hidden_tool_from_what_it_has_seen() {
+    _di_each 'seen=no avail=no;' '
+        deps_has sh; deps_has cat; deps_available >/dev/null
+        deps_hide sh >/dev/null
+        s=no a=no
+        case " $_DEPS_SEEN " in *" sh "*) s=yes ;; esac
+        case " $_TOOLS_AVAILABLE " in *" sh "*) a=yes ;; esac
+        printf "seen=%s avail=%s;" "$s" "$a"'
+}
+
+#[test]
+it_probes_a_tool_with_its_arguments_split_under_any_ifs() {
+    # The arguments of a probe are one string of words of ours, split for the
+    # call; the probe ran `yq "-p toml -o json ."` as one word.
+    deps_has yq || { skip "no yq on this machine"; return 0; }
+    _di_each 'toml_read=1;' '
+        deps_can toml_read >/dev/null 2>&1
+        printf "toml_read=%s;" "$(deps_cap toml_read)"'
 }
 
 #[test]

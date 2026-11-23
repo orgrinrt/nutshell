@@ -63,8 +63,10 @@ _tj_large() {
 # taplo is not the backend, refuses the text, or gives something the floor
 # writes otherwise
 _tj_tool() {
+    local body="$1"
     [[ -z "${_TOML_FLOOR_ONLY:-}" ]] || return 1
-    _toml_taplo_compact "${1#$'\xef\xbb\xbf'}" || return 1
+    _toml_bom_cut body
+    _toml_taplo_compact "$body" || return 1
     [[ "$_tt_json" =~ $_TJ_RE_ODD ]] && return 1
     _tj_same_wide "$1" "$_tt_json" || return 1
     _tj_json="$_tt_json"

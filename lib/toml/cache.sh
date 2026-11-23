@@ -212,13 +212,18 @@ _toml_cache_store() {
 # on the end, for `toml_to_json`. The same rules: kept for the file's text and
 # not its mtime, taken only where the file and every directory to the cache root
 # are the reader's own and nobody else can write, and not taken where the files
-# that write it are newer. The file is the floor's version and bash's, a line
-# break, the byte length of the text, a line break, the text, and the JSON.
+# that write it are newer. The file is one line of the floor's version, bash's
+# and the byte length of the text, then the text, then the JSON.
+#
+# The three parts are read as three reads of the one descriptor, the text by its
+# length, rather than read whole and cut apart: taking a 4 MB text and a 4 MB
+# JSON out of one 8 MB string copies megabytes four times over and cost more
+# than reading the file did.
 
 # Usage: _toml_jcache_load <file> <text> -> `_tj_json`, the JSON kept for that text; rc 1 where none is
 #[pub(super)]
 _toml_jcache_load() {
-    local f="$1" _tc_src="$2" _tcb _tca _tcr body g fd n ok=1 LC_ALL=C
+    local f="$1" src="$2" _tcb _tca _tcr hdr kept json g fd ok=1 LC_ALL=C
     _toml_cache_at "$f" || return 1
     _tca="${_tca}.json"
     [[ -f "$_tca" && ! -L "$_tca" && -r "$_tca" ]] || return 1
@@ -227,19 +232,20 @@ _toml_jcache_load() {
         "${_TOML_CACHE_FLOOR}/../emit.sh" "${_TOML_CACHE_FLOOR}/../large.sh" "$_TOML_CACHE_SELF"; do
         [[ "$_tca" -nt "$g" ]] || return 1
     done
+    _toml_cache_by
     { exec {fd}< "$_tca"; } 2>/dev/null || return 1
-    IFS= read -r -d '' body <&"$fd"
+    IFS= read -r hdr <&"$fd"
+    if [[ "$hdr" == "${_tcb}|${#src}" ]]; then
+        IFS= read -r -N "${#src}" kept <&"$fd"
+        IFS= read -r -d '' json <&"$fd"
+    else
+        ok=0
+    fi
     _toml_cache_trusted "$_tca" "$fd" "$_tcr" || ok=0
     exec {fd}<&-
-    [[ "$ok" == 1 ]] || return 1
-    _toml_cache_by
-    [[ "${body%%$'\n'*}" == "$_tcb" ]] || return 1
-    body="${body#*$'\n'}"
-    n="${body%%$'\n'*}"
-    [[ "$n" =~ ^[0-9]+$ ]] || return 1
-    body="${body#*$'\n'}"
-    [[ "${body:0:n}" == "$_tc_src" ]] || return 1
-    _tj_json="${body:n}"
+    (( ok )) || return 1
+    [[ "$kept" == "$src" ]] || return 1
+    _tj_json="$json"
 }
 
 # Usage: _toml_jcache_store <file> <text> <json> -> 0 always; the cache is never needed for an answer
@@ -253,7 +259,7 @@ _toml_jcache_store() {
     (
         umask 077
         [[ -d "${_tca%/*}" ]] || mkdir -p "${_tca%/*}" || exit 0
-        printf '%s\n%d\n%s%s' "$_tcb" "${#src}" "$src" "$json" > "$tmp" || { rm -f "$tmp"; exit 0; }
+        printf '%s|%d\n%s%s' "$_tcb" "${#src}" "$src" "$json" > "$tmp" || { rm -f "$tmp"; exit 0; }
         mv -f "$tmp" "$_tca" || rm -f "$tmp"
     ) 2>/dev/null
     return 0

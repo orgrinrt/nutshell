@@ -73,10 +73,22 @@ _TOML_FROM=""
 # sends a file to the floor. With no group in it on purpose: a pattern with
 # groups finds its match through a slow submatch search, 2 s in 80 KB of text.
 _TOML_RE_WIDE='[0-9_]{19,}|0x[0-9A-Fa-f_]{16,}|0o[0-7_]{21,}|0b[01_]{63,}'
+_TOML_BOM=$'\xef\xbb\xbf'
 
 # -----------------------------------------------------------------------------
 # Internal helpers
 
+
+# _toml_bom_cut <variable name> -> the UTF-8 byte order mark cut from the front
+# of that variable's value, where it has one
+# A compare and a slice, never `${v#...}`: pattern removal from a value of a few
+# megabytes is quadratic in bash, whatever the pattern, and cost 200 s on 4 MB
+# where the compare and the slice cost 30 ms.
+_toml_bom_cut() {
+    local -n _tbc="$1"
+    [[ "${_tbc:0:3}" == "$_TOML_BOM" ]] && _tbc="${_tbc:3}"
+    return 0
+}
 # _toml_node_show <node> -> `_tn_out`, the path that names a node
 _toml_node_show() {
     local rest="${1#R}" seg
@@ -227,7 +239,9 @@ _toml_open_values() {
     # floor reads all of TOML 1.0.
     [[ "$c" =~ $_TOML_RE_WIDE ]] && { _TOML_FROM=bash; _toml_open "$f"; return; }
     _TOML_ID=""
-    if _toml_tool_json "${c#$'\xef\xbb\xbf'}" && use super::toml::impl::from_json && _toml_json_tree "$f" "$_tt_json"; then
+    local body="$c"
+    _toml_bom_cut body
+    if _toml_tool_json "$body" && use super::toml::impl::from_json && _toml_json_tree "$f" "$_tt_json"; then
         # Set again: the pick may have had deps read its pins through the floor.
         _TOML_ID="json$_TOML_US$f" _TOML_SRC="$c" _TOML_RC=0 _TOML_FROM=json
         return 0

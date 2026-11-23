@@ -152,14 +152,20 @@ _tp_key() {
     done
 }
 
-# _tp_kname <count> -> `_tp_kn`, the first <count> key segments, for a message
-_tp_kname() {
-    local i
-    _tp_kn=""
-    for (( i = 0; i < $1; i++ )); do
+# _tp_err_key <format> -> the error of that format, the key being parsed spelled
+# in place of its one `%s`
+#
+# Spelling the key for every key, against the chance of a message, was a tenth
+# of the parse, and nearly every key parses without one. The segments are still
+# `_tp_kseg` wherever this is called from: every one of those sites is reached
+# before the value under the key is read.
+_tp_err_key() {
+    local i kn=""
+    for (( i = 0; i < ${#_tp_kseg[@]}; i++ )); do
         _toml_seg_show "${_tp_kseg[i]}"
-        _tp_kn+="${_tp_kn:+.}${_ts_out}"
+        kn+="${kn:+.}${_ts_out}"
     done
+    _tp_err "${1//%s/$kn}"
 }
 
 # _tp_new <parent> <key> <type> <flags> -> `_tp_node`, a new child of a table
@@ -190,7 +196,6 @@ _tp_header() {
         _tp_s="${_tp_s:1}"
     fi
     local node=R i last=$(( ${#_tp_kseg[@]} - 1 )) child t f n
-    _tp_kname "${#_tp_kseg[@]}"
     for (( i = 0; i < last; i++ )); do
         child="$node$_TOML_US${_tp_kseg[i]}"
         t="${_TOML_T[$child]-}"
@@ -202,9 +207,9 @@ _tp_header() {
                 n="${_TOML_N[$child]}"
                 child="$child$_TOML_US$(( n - 1 ))" ;;
             table)
-                [[ "$f" == *X* ]] && { _tp_err "header ${_tp_kn} extends an inline table"; return 2; } ;;
+                [[ "$f" == *X* ]] && { _tp_err_key "header %s extends an inline table"; return 2; } ;;
             *)
-                _tp_err "header ${_tp_kn} runs into a value, a key defined twice"
+                _tp_err_key "header %s runs into a value, a key defined twice"
                 return 2 ;;
         esac
         node="$child"
@@ -218,7 +223,7 @@ _tp_header() {
             _TOML_N[$child]=0
             _TOML_HDR+=("$child")
         elif [[ "$t" != aot ]]; then
-            _tp_err "array of tables ${_tp_kn} names a key defined twice"
+            _tp_err_key "array of tables %s names a key defined twice"
             return 2
         fi
         n="${_TOML_N[$child]}"
@@ -236,16 +241,16 @@ _tp_header() {
             _TOML_HDR+=("$child") ;;
         table)
             if [[ "$f" == *X* ]]; then
-                _tp_err "table ${_tp_kn} is an inline table already"; return 2
+                _tp_err_key "table %s is an inline table already"; return 2
             elif [[ "$f" == *h* ]]; then
-                _tp_err "table ${_tp_kn} defined twice"; return 2
+                _tp_err_key "table %s defined twice"; return 2
             elif [[ "$f" == *d* ]]; then
-                _tp_err "table ${_tp_kn} was made by dotted keys and cannot take a header"; return 2
+                _tp_err_key "table %s was made by dotted keys and cannot take a header"; return 2
             fi
             _TOML_F[$child]="${f}h"
             _TOML_HDR+=("$child") ;;
         *)
-            _tp_err "table ${_tp_kn} names a key defined twice"
+            _tp_err_key "table %s names a key defined twice"
             return 2 ;;
     esac
     _tp_cur="$child"
@@ -261,7 +266,6 @@ _tp_keyval() {
     _tp_s="${_tp_s:1}"
     _tp_skip_ws
     pre="${_TL[from]:0:${#_TL[from]}-${#_tp_s}}"
-    _tp_kname "${#_tp_kseg[@]}"
     node="$tbl"
     last=$(( ${#_tp_kseg[@]} - 1 ))
     for (( i = 0; i < last; i++ )); do
@@ -275,19 +279,19 @@ _tp_keyval() {
                 if [[ "$f" == *d* ]] && [[ -n "$inl" || "$f" != *X* ]]; then
                     :
                 elif [[ "$f" == *X* ]]; then
-                    _tp_err "dotted key ${_tp_kn} extends an inline table"; return 2
+                    _tp_err_key "dotted key %s extends an inline table"; return 2
                 else
-                    _tp_err "dotted key ${_tp_kn} reopens a table defined by a header"; return 2
+                    _tp_err_key "dotted key %s reopens a table defined by a header"; return 2
                 fi ;;
             aot)
-                _tp_err "dotted key ${_tp_kn} runs into an array of tables"; return 2 ;;
+                _tp_err_key "dotted key %s runs into an array of tables"; return 2 ;;
             *)
-                _tp_err "dotted key ${_tp_kn} runs into a value, a key defined twice"; return 2 ;;
+                _tp_err_key "dotted key %s runs into a value, a key defined twice"; return 2 ;;
         esac
         node="$child"
     done
     child="$node$_TOML_US${_tp_kseg[last]}"
-    [[ -z "${_TOML_T[$child]-}" ]] || { _tp_err "key ${_tp_kn} defined twice"; return 2; }
+    [[ -z "${_TOML_T[$child]-}" ]] || { _tp_err_key "key %s defined twice"; return 2; }
     _TOML_K[$node]+="$_TOML_RS${_tp_kseg[last]}"
     _tv_value "$child" || return 2
     [[ -z "$inl" ]] || return 0

@@ -54,15 +54,20 @@ _NUTSHELL_INIT=1
 # =============================================================================
 
 # The directory a file sits in, absolute, into `_ncd`; empty when it cannot be
-# entered. What `cd "${f%/*}" && pwd` answers, without the fork, for the case
-# every module load is: an absolute directory with no `.` or `..` in it, which
-# A name with no slash sits in the working directory, as `dirname` has it.
-# that pair hands back unchanged.
+# entered. What `cd "$(dirname f)" && pwd` answers, without the fork, for the
+# case every module load is: an absolute directory with no `.` or `..` in it,
+# which that pair hands back unchanged. A name with no slash sits in the
+# working directory and a name directly under `/` sits in `/`, as `dirname`
+# has them.
 _nut_caller_dir() {
-    case "$1" in */*) ;; *) _ncd="$PWD"; return 0 ;; esac
+    case "$1" in
+        */*) ;;
+        *) _ncd="$PWD"; return 0 ;;
+    esac
     _ncd="${1%/*}"
     case "$_ncd" in
-        /*/./*|/*/../*|*/.|*/..|*//*|/./*|/../*|"") ;;
+        "") _ncd="/"; return 0 ;;
+        /*/./*|/*/../*|*/.|*/..|*//*|/./*|/../*) ;;
         /*) [[ -d "$_ncd" ]] || _ncd=""; return 0 ;;
     esac
     _ncd="$(cd "${1%/*}" 2>/dev/null && pwd)" || _ncd=""

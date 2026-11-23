@@ -68,7 +68,11 @@ use super::toml::impl::bash super::toml::impl::bash_path super::toml::cache
 
 _TOML_BACKEND=""
 _TOML_FROM=""
-_TOML_RE_WIDE='0x(_?[0-9A-Fa-f]){16}|0o(_?[0-7]){21}|0b(_?[01]){63}|[0-9](_?[0-9]){18}'
+# A number that may be past 64 bits: a run of 19 digits and underscores or more,
+# or a hex, octal or binary one as long as a wide one is. A superset, which only
+# sends a file to the floor. With no group in it on purpose: a pattern with
+# groups finds its match through a slow submatch search, 2 s in 80 KB of text.
+_TOML_RE_WIDE='[0-9_]{19,}|0x[0-9A-Fa-f_]{16,}|0o[0-7_]{21,}|0b[01_]{63,}'
 
 # -----------------------------------------------------------------------------
 # Internal helpers
@@ -137,7 +141,8 @@ _toml_open() {
 # whose module rebinds this name, and calls it. `_toml_reset` puts the stub
 # back. Where only the floor serves, it is rebound to rc 3, no JSON. In this
 # shell, never a subshell, or the pick is lost with it and made again on every
-# call.
+# call. With `--choose` as its only argument it picks and runs nothing, for the
+# large-file path, which needs to know the backend before it has anything to ask.
 _toml_tool_pick() {
     nut_lazy_guard _toml_tool_json || return 1
     local _NUT_LAZY__toml_tool_json=1
@@ -163,10 +168,28 @@ _toml_tool_pick() {
         _toml_tool_json() { return 3; }
         _TOML_BACKEND=bash
     fi
-    _toml_tool_json "$@"
+    [[ "${1-}" == --choose ]] || _toml_tool_json "$@"
 }
 
 _toml_tool_json() { _toml_tool_pick "$@"; }
+
+# _toml_taplo_compact <text> -> `_tt_json`, the text as taplo's compact JSON
+# The backend is picked first if it has not been. rc 1 where taplo is not the
+# backend, or refuses the text. For the large-file path of `toml_to_json`, which
+# takes the JSON as it is and builds no tree of it.
+_toml_taplo_compact() {
+    [[ -n "$_TOML_BACKEND" ]] || _toml_tool_pick --choose
+    [[ "$_TOML_BACKEND" == taplo ]] && _toml_tool_compact "$1"
+}
+
+# _toml_read_floor <file> -> the file read by the floor, its tree not kept for
+# the next process; codes as `_toml_open`
+_toml_read_floor() {
+    local rc=0
+    _toml_load "$1" || rc=$?
+    (( rc == 2 )) && printf '%s\n' "$_TOML_ERR" >&2
+    return "$rc"
+}
 
 # _toml_reset -> the backend dropped, picked again at the next read through one
 _toml_reset() {

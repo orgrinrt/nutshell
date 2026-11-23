@@ -24,7 +24,25 @@ INIT="${BASH_SOURCE[0]%/*}/../init"
 _tbg_file() {
     local f="$1" extra="${2:-}" i body
     body='a note with \"quotes\", a back\\slash, a tab\there,\nand a second line,\n\nand a third, a control \u0001 and \u001f, an é and a smiley \U0001F600.'
-    : > "$f"
+    # What the compaction of taplo's JSON could confuse for structure: a key and
+    # a string that start with a colon and a space, a quote and a colon inside a
+    # key, a signed zero, nested and empty arrays and tables.
+    cat > "$f" <<'EOT'
+zero = -0
+": colon-first" = 1
+"a\": b" = 2
+lead = ": starts with colon space"
+says = "x\": y"
+mixed = ["a", ": d", "e\": f", 1, true]
+nested = [[1, 2], [3, [4, 5]], []]
+empty = []
+inline = { a = 1, b = { c = "d: e" }, ": f" = 2, e = {} }
+dotted.a.b = 1
+ml = """
+first
+second \
+   third"""
+EOT
     for (( i = 0; i < 150; i++ )); do
         printf '[[action]]\nkey = "ticket_%d"\nowner = "op"\nnote = "%d: %s %s %s"\n' \
             "$i" "$i" "$body" "$body" "$body" >> "$f"
@@ -66,7 +84,7 @@ it_answers_a_large_file_from_the_json_an_earlier_process_kept() {
     first="$(_tbg_run "taplo yq" "$d/cache" "" "$d/big.toml")"
     second="$(_tbg_run "taplo yq" "$d/cache" "$_TBG_CANARY" "$d/big.toml")"
     rm -rf "$d"
-    assert_eq "${first:0:28}" '{"action":[{"key":"ticket_0"'
+    assert_eq "${first:0:30}" '{"zero":0,": colon-first":1,"a'
     assert_eq "$second" "$first"
 }
 
@@ -99,7 +117,7 @@ it_does_not_take_a_kept_json_others_can_write() {
     chmod 666 "$at"
     out="$(_tbg_run "taplo yq" "$d/cache" "$_TBG_CANARY" "$d/big.toml")"
     rm -rf "$d"
-    assert_eq "${control:0:11}" '{"action":['
+    assert_eq "${control:0:30}" '{"zero":0,": colon-first":1,"a'
     assert_contains "$out" "parsed"
 }
 

@@ -38,14 +38,15 @@ _TW_FF=$'\f'
 # read.
 #
 # Refused, because one line cannot change it without breaking the file:
-#   a key inside an array of tables, where a header names every element at
-#     once and a line names one;
+#   a key inside an array of tables that the path does not index, `row.status`
+#     where `row.3.status` names one row; a table to open by a header under any
+#     row, which a header cannot name by its index;
 #   a key inside an inline table, which is one value on one line;
 #   a key a dotted key made, or one in a table a dotted key made, which is not
 #     on a line of its own and whose table a header would define twice;
 #   a key whose path runs into a value or an array.
 _tw_place() {
-    local file="$1" key="$2" verb="$3" node=R seg t i last shown="" whole=""
+    local file="$1" key="$2" verb="$3" node=R seg t i last shown="" whole="" via=0
     _toml_open "$file" || return $?
     _toml_path_split "$key" || return 1
     last=$(( ${#_tp_pseg[@]} - 1 ))
@@ -60,7 +61,12 @@ _tw_place() {
         _toml_seg_show "${_tp_pseg[i]}"; shown+="${shown:+.}${_ts_out}"
         case "$t" in
             table) node="$seg" ;;
-            aot)   _tw_deny "it is inside the array of tables [[$shown]]"; return 2 ;;
+            aot)   _tw_row "$seg" "$i" "$last"
+                   case $? in
+                       0) node="$_tw_row_node"; i=$(( i + 1 )); via=1 ;;
+                       1) _tw_node=""; [[ "$verb" == unset ]]; return $? ;;
+                       *) return 2 ;;
+                   esac ;;
             *)     _tw_deny "$shown is a value, not a table"; return 2 ;;
         esac
     done
@@ -71,13 +77,17 @@ _tw_place() {
     _toml_seg_show "${_tp_pseg[last]}"; _tw_leaf="$_ts_out"
     _tw_node=""
     if (( i < last )); then
+        (( via )) && { _tw_deny "a header cannot open a table under one row and not the last"; return 2; }
         _tw_head="$whole"
         return 0
     fi
     if [[ "$node" != R && "${_TOML_F[$node]}" != *[hi]* ]]; then
         _tw_deny "a dotted key, $shown, defines it or a table above it"; return 2
     fi
-    [[ "$node" == R || -n "${_TOML_E[$node]+x}" ]] || _tw_head="$whole"
+    if [[ "$node" != R && -z "${_TOML_E[$node]+x}" ]]; then
+        (( via )) && { _tw_deny "a header cannot open a table under one row and not the last"; return 2; }
+        _tw_head="$whole"
+    fi
     seg="$node$_TOML_US${_tp_pseg[last]}"
     [[ -n "${_TOML_T[$seg]-}" ]] || return 0
     case "${_TOML_W[$seg]-}" in
@@ -85,6 +95,24 @@ _tw_place() {
         *' '1) _tw_node="$seg" ;;
         *)     _tw_deny "a dotted key defines it, not a line of its own"; return 2 ;;
     esac
+}
+
+# _tw_row <array node> <i> <last> -> `_tw_row_node`, the row the segment after
+# the array's name indexes, and the index added to `shown`
+# rc 1 where the array has no such row, 2 where the segment is not an index or
+# is the last one, so that it would be the row as a value.
+_tw_row() {
+    local idx="${_tp_pseg[$2 + 1]-}"
+    if (( $2 + 1 >= $3 )) || ! [[ "$idx" =~ ^[0-9]{1,9}$ ]]; then
+        _tw_deny "it is inside the array of tables [[$shown]]"; return 2
+    fi
+    idx=$(( 10#$idx ))
+    if (( idx >= ${_TOML_N[$1]} )); then
+        [[ "$verb" == unset ]] || _tw_deny "[[$shown]] has no row $idx"
+        return 1
+    fi
+    _tw_row_node="$1$_TOML_US$idx"
+    shown+=".$idx"
 }
 
 _tw_deny() {
@@ -135,6 +163,8 @@ _tw_edit() {
 # of its table's part of the file, so a root key lands above the first header;
 # a table with no part of its own gets a header at the end.
 #
+# A row of an array of tables is reached by its index, `row.3.status`. A row
+# that is not there is rc 1.
 # Usage: toml_set "file.toml" "section.key" "value" -> returns 2 for a shape one line cannot change
 toml_set() {
     local file="${1:-}" key="${2:-}" value="${3-}" verb=set written span e
@@ -198,4 +228,75 @@ toml_unset() {
     read -r -a span <<< "${_TOML_W[$_tw_node]}"
     _tw_edit "${span[0]}" "${span[1]}"
     _tw_out "$file"
+}
+
+#[pub]
+# Append a new table to an array of tables, and print its path.
+#
+# The `[[path]]` header goes after the last line of the array's last row,
+# including the tables under that row, so the rows stay together; an array the
+# file has not got yet is opened at the end of the file. The new row is empty,
+# `toml_set` fills it by the path this prints, `row.3`. Nothing else in the
+# file moves.
+#
+# A path through an array of tables names its last row, since a header can say
+# nothing else; an index in it is refused, with a path that is a table, a
+# value, or inside an inline table.
+# Usage: toml_append_table "file.toml" "row" -> prints row.3, returns 2 for a path one header cannot add to
+toml_append_table() {
+    local file="${1:-}" key="${2:-}" verb="append a table to" node=R seg t i last e k n=0 addr="" whole=""
+    [[ -n "$file" && -n "$key" ]] || return 1
+    [[ -f "$file" ]] || { : > "$file" 2>/dev/null || return 1; }
+    _toml_open "$file" || return $?
+    _toml_path_split "$key" || return 1
+    last=$(( ${#_tp_pseg[@]} - 1 ))
+    for (( i = 0; i <= last; i++ )); do
+        _toml_seg_show "${_tp_pseg[i]}"; whole+="${whole:+.}${_ts_out}"
+    done
+    for (( i = 0; i <= last; i++ )); do
+        seg="$node$_TOML_US${_tp_pseg[i]}"
+        t="${_TOML_T[$seg]-}"
+        [[ -n "$t" ]] || { addr=""; break; }
+        _toml_seg_show "${_tp_pseg[i]}"; addr+="${addr:+.}${_ts_out}"
+        case "$t" in
+            aot)
+                if (( i == last )); then
+                    n="${_TOML_N[$seg]}"
+                    node="$seg$_TOML_US$(( n - 1 ))"
+                elif [[ "${_tp_pseg[i+1]}" =~ ^[0-9]{1,9}$ ]]; then
+                    _tw_deny "a header names the last row, not row ${_tp_pseg[i+1]}"; return 2
+                else
+                    addr+=".$(( ${_TOML_N[$seg]} - 1 ))"
+                    node="$seg$_TOML_US$(( ${_TOML_N[$seg]} - 1 ))"
+                fi ;;
+            table)
+                if (( i == last )); then _tw_deny "it is a table, not an array of tables"; return 2; fi
+                if [[ "${_TOML_F[$seg]}" == *X* ]]; then _tw_deny "it is inside the inline table $addr"; return 2; fi
+                node="$seg" ;;
+            *)
+                _tw_deny "$addr is a value, not an array of tables"; return 2 ;;
+        esac
+    done
+    mapfile -t _tw_lines < "$file"
+    e=${#_tw_lines[@]}
+    if (( n )); then
+        e=-1
+        for k in "${!_TOML_E[@]}"; do
+            [[ "$k" == "$node" || "$k" == "$node$_TOML_US"* ]] && (( _TOML_E[$k] > e )) && e="${_TOML_E[$k]}"
+        done
+        for (( k = e + 1; k < ${#_tw_lines[@]}; k++ )); do
+            [[ "${_tw_lines[k]%$'\r'}" =~ $_TOML_RE_BLANK ]] || break
+        done
+        (( k < ${#_tw_lines[@]} )) || e=${#_tw_lines[@]}
+    fi
+    if (( e < ${#_tw_lines[@]} )); then
+        _tw_edit $(( e + 1 )) "$e" "[[${whole}]]"
+        _tw_edit $(( e + 1 )) "$e" ""
+    else
+        e=${#_tw_lines[@]}
+        _tw_edit "$e" $(( e - 1 )) "[[${whole}]]"
+        (( e == 0 )) || [[ "${_tw_lines[e-1]%$'\r'}" =~ ^[[:blank:]]*$ ]] || _tw_edit "$e" $(( e - 1 )) ""
+    fi
+    _tw_out "$file" || return 1
+    printf '%s.%s\n' "${addr:-$whole}" "$n"
 }

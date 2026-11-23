@@ -245,3 +245,59 @@ it_writes_a_value_that_needs_escaping_as_the_value_it_is() {
     assert_eq "$got" '{"a":{"v":"say \"hi\""}}'
     assert_ok _tj_valid "$got"
 }
+
+#[test]
+it_converts_toml_text_read_from_standard_input() {
+    local got; got="$(printf 'title = "t"\n\n[ui]\nwidth = 30\n' | toml_to_json -)"
+    assert_eq "$got" '{"title":"t","ui":{"width":30}}'
+}
+
+#[test]
+it_converts_the_same_text_from_a_file_and_from_standard_input_alike() {
+    local d; d="$(_tj)"
+    printf 'a = "x\\ty"\nf = 3.0\n[[r]]\nk = 1\n[[r]]\nk = 2\n' > "$d/t.toml"
+    local from_file from_stdin
+    from_file="$(toml_to_json "$d/t.toml")"
+    from_stdin="$(toml_to_json - < "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$from_stdin" '{"a":"x\ty","f":3.0,"r":[{"k":1},{"k":2}]}'
+    assert_eq "$from_file" "$from_stdin"
+}
+
+#[test]
+it_reads_each_text_given_on_standard_input_afresh() {
+    local one two
+    one="$(printf 'a = 1\n' | toml_to_json -)"
+    two="$(printf 'a = 2\n' | toml_to_json -)"
+    assert_eq "$one" '{"a":1}'
+    assert_eq "$two" '{"a":2}'
+}
+
+#[test]
+it_does_not_keep_a_tree_for_text_read_from_standard_input() {
+    local d; d="$(_tj)"
+    local out; out="$(XDG_CACHE_HOME="$d/cache" toml_to_json - <<< 'a = 1')"
+    local kept; kept="$(find "$d/cache" -type f 2>/dev/null | wc -l | tr -d ' ')"
+    rm -rf "$d"
+    assert_eq "$out" '{"a":1}'
+    assert_eq "$kept" "0"
+}
+
+#[test]
+it_refuses_standard_input_that_is_not_toml() {
+    local rc=0 err
+    err="$(printf 'a = 1\na = 2\n' | toml_to_json - 2>&1 >/dev/null)" || rc=$?
+    assert_eq "$rc" "2"
+    assert_contains "$err" "defined twice"
+}
+
+#[test]
+it_reads_a_file_after_standard_input_without_a_stale_tree() {
+    local d; d="$(_tj)"
+    printf 'file = 1\n' > "$d/t.toml"
+    local first; first="$(printf 'a = 1\n' | toml_to_json -)"
+    local got; got="$(toml_to_json "$d/t.toml")"
+    rm -rf "$d"
+    assert_eq "$first" '{"a":1}'
+    assert_eq "$got" '{"file":1}'
+}

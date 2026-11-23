@@ -53,8 +53,24 @@ _NUTSHELL_INIT=1
 # Resolve paths
 # =============================================================================
 
+# The directory a file sits in, absolute, into `_ncd`; empty when it cannot be
+# entered. What `cd "${f%/*}" && pwd` answers, without the fork, for the case
+# every module load is: an absolute directory with no `.` or `..` in it, which
+# A name with no slash sits in the working directory, as `dirname` has it.
+# that pair hands back unchanged.
+_nut_caller_dir() {
+    case "$1" in */*) ;; *) _ncd="$PWD"; return 0 ;; esac
+    _ncd="${1%/*}"
+    case "$_ncd" in
+        /*/./*|/*/../*|*/.|*/..|*//*|/./*|/../*|"") ;;
+        /*) [[ -d "$_ncd" ]] || _ncd=""; return 0 ;;
+    esac
+    _ncd="$(cd "${1%/*}" 2>/dev/null && pwd)" || _ncd=""
+}
+
 # Find our own directory (absolute path)
-_NUTSHELL_ROOT="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+_nut_caller_dir "${BASH_SOURCE[0]}"
+_NUTSHELL_ROOT="$_ncd"
 
 # Export for use by modules
 export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
@@ -67,6 +83,7 @@ export NUTSHELL_ROOT="${_NUTSHELL_ROOT}"
 #
 # Read as text, not through the toml module, because this runs before any
 # module is loaded and the parser is itself a module. One key, one shape.
+# _nutshell_read_version -> `_NUT_VER`, the version `[package]` names
 _nutshell_read_version() {
     local f="${_NUTSHELL_ROOT}/nut.toml" line in_pkg=0
     [ -r "$f" ] || return 1
@@ -83,12 +100,16 @@ _nutshell_read_version() {
                 line="${line#[\"\']}"
                 line="${line%%[!0-9.]*}"
                 [ -n "$line" ] || continue
-                printf '%s' "$line"; return 0 ;;
+                _NUT_VER="$line"; return 0 ;;
         esac
     done < "$f"
     return 1
 }
-export NUTSHELL_VERSION="$(_nutshell_read_version 2>/dev/null)"
+# Into a variable rather than captured, since a capture is a fork before a
+# script has run a line.
+_NUT_VER=""
+_nutshell_read_version 2>/dev/null
+export NUTSHELL_VERSION="$_NUT_VER"
 
 # Script identity belongs to the interpreter invocation, not to ancestry. The
 # interpreter exports NUTSHELL_SCRIPT and NUTSHELL_SCRIPT_DIR after this file
@@ -351,30 +372,29 @@ _lib_nut_lookup() {
 # every module and the capture around the printing form was a fork each time.
 _lib_nut_lookup_to() {
     _NUT_LK=""
-    local root="$1" want="$2" reach="${3:-any}" name file vis
-    [[ -r "${root}/lib.nut" ]] || return 1
-    # `|| [[ -n "$name" ]]`, so a file whose last line has no newline keeps
-    # its last declaration. Without it the module simply is not there, and the
-    # checker agreed because it read the file another way.
-    local rest word gates=""
-    while read -r name file rest || [[ -n "$name" ]]; do
-        [[ -z "$name" ]] && continue
-
-        # An attribute is a comment, which is the whole reason for the shape:
-        # `#` already means comment here, so a reader that does not know about
-        # gates skips them and the file stays the format it was.
-        #
-        # They attach downward and accumulate, the way they do in a shell file
-        # and the way `#[cfg(...)]` does above a `mod` in Rust. A run of them
-        # all has to hold.
-        if [[ "${name:0:2}" == "#[" ]]; then
-            word="${name#\#\[}"; word="${word%]}"
-            gates+="${word} "
-            continue
+    local root="$1" want="$2" reach="${3:-any}" file vis rest word gates row _nli
+    _lib_nut_index "$root" || return 1
+    # Every row declaring the name, in the order the file gives them, each with
+    # the gates written above it. The first whose gates hold is the answer.
+    #
+    # Found by a regex rather than by `${s#*pat}`, which bash matches against
+    # every prefix of the index in turn: 870us a lookup against 45us on
+    # nutshell's own. A name with a character the regex would read as syntax,
+    # which no module name has, takes the pattern.
+    local s="$_nli" pat=$'\n'"${want}"$'\x1f' esc="$want" re=""
+    case "$esc" in *[!A-Za-z0-9_:.-]*) esc="" ;; esac
+    [[ -n "$esc" ]] && re=$'\n'"${esc//./[.]}"$'\x1f''([^'$'\n'']*)'$'\n''(.*)'
+    while :; do
+        if [[ -n "$re" ]]; then
+            [[ "$s" =~ $re ]] || break
+            row="${BASH_REMATCH[1]}"; s=$'\n'"${BASH_REMATCH[2]}"
+        else
+            [[ "$s" == *"$pat"* ]] || break
+            s="${s#*"$pat"}"
+            row="${s%%$'\n'*}"
         fi
-        [[ "${name:0:1}" == "#" ]] && { gates=""; continue; }
-
-        if [[ "$name" != "$want" ]]; then gates=""; continue; fi
+        gates="${row%%$'\x1f'*}"; row="${row#*$'\x1f'}"
+        file="${row%%$'\x1f'*}"; rest="${row#*$'\x1f'}"
         [[ -n "$file" ]] || return 1
 
         # Everything after the file is read as words rather than by position,
@@ -385,13 +405,13 @@ _lib_nut_lookup_to() {
         # visibility, ignored the fourth word entirely, and loaded the module
         # on a machine whose predicate did not hold. Silently, which is the
         # only way this kind of thing ever goes.
-        # `read -ra` at both splits below, since both read `lib.nut`. An
+        # `_nut_words` at both splits below, since both read `lib.nut`. An
         # unquoted split hands authored text to the glob, so a `*` in a row
         # becomes whatever files sit beside the checkout, and the resolver
         # generated from this same manifest has the identical pair.
         vis=""
         local -a rwords gwords
-        read -ra rwords <<< "$rest"
+        _nut_words "$rest"; rwords=(${_nw[@]+"${_nw[@]}"})
         # `${a[@]+"${a[@]}"}` and not `"${a[@]}"`, at every one of these. Before
         # bash 4.4, expanding an array with no assigned elements under `set -u`
         # throws `unbound variable` and kills the shell, and `bin/nutshell` sets
@@ -404,20 +424,19 @@ _lib_nut_lookup_to() {
             # module load on a machine its predicate excluded.
             if [[ "$word" == when=* ]]; then
                 printf 'nutshell: %s/lib.nut still uses `%s` on `%s`.\n' \
-                    "$root" "$word" "$name" >&2
+                    "$root" "$word" "$want" >&2
                 printf '  Gates are an attribute on the line above the row now:\n' >&2
-                printf '    #[shell(bash4)]\n    %s  %s\n' "$name" "$file" >&2
+                printf '    #[shell(bash4)]\n    %s  %s\n' "$want" "$file" >&2
                 return 1
             fi
             vis="$word"
         done
 
         local g held=0
-        read -ra gwords <<< "$gates"
+        _nut_words "$gates"; gwords=(${_nw[@]+"${_nw[@]}"})
         for g in ${gwords[@]+"${gwords[@]}"}; do
             if ! _nut_gate "$g"; then held=1; break; fi
         done
-        gates=""
         [[ "$held" -eq 1 ]] && continue
 
         if [[ "$reach" == "public" && "${vis:-}" == "internal" ]]; then
@@ -426,8 +445,77 @@ _lib_nut_lookup_to() {
         fi
         _NUT_LK="${root}/${file}"
         return 0
-    done < "${root}/lib.nut"
+    done
     return 1
+}
+
+# _nut_words <text> -> `_nw`, its words, split on blanks without a here-string
+# or the glob. The here-string `read -ra` took was a temporary file or a pipe per
+# row looked up, about a millisecond each, and an unquoted split would hand
+# authored text to the glob.
+_nut_words() {
+    _nw=()
+    local s="$1" w
+    while :; do
+        s="${s#"${s%%[![:space:]]*}"}"
+        [[ -n "$s" ]] || return 0
+        w="${s%%[[:space:]]*}"
+        _nw+=("$w")
+        s="${s#"$w"}"
+    done
+}
+
+# _lib_nut_index <root> -> `_nli`, the rows of a library's `lib.nut`, read once
+#
+# Each row on a line of its own as name, gates, file and the rest, split by the
+# unit separator, so a lookup finds its name's rows without walking the others.
+# `use` looks a name up for every module it loads, and walking the manifest row
+# by row each time was the largest share of what a load cost once the forks
+# around it were gone.
+#
+# Kept per library and checked against the file's text on every lookup, which
+# is one read and no parse, so a manifest edited while a process runs is read
+# again rather than answered from what it said before.
+#
+# The rows are read the way they always were. `|| [[ -n "$name" ]]`, so a file
+# whose last line has no newline keeps its last declaration. An attribute is a
+# comment, which is the whole reason for the shape: `#` already means comment
+# here, so a reader that does not know about gates skips them and the file
+# stays the format it was. They attach downward and accumulate, the way they do
+# in a shell file and the way `#[cfg(...)]` does above a `mod` in Rust, and a
+# run of them all has to hold for the row under it.
+_NUT_LKI_ROOTS=""
+_NUT_LKI_N=0
+_lib_nut_index() {
+    local root="$1" txt="" n tv iv
+    [[ -r "${root}/lib.nut" ]] || return 1
+    IFS= read -r -d '' txt < "${root}/lib.nut"
+    if [[ "$_NUT_LKI_ROOTS" == *$'\n'"$root"$'\t'* ]]; then
+        n="${_NUT_LKI_ROOTS#*$'\n'"$root"$'\t'}"; n="${n%%$'\n'*}"
+    else
+        n=$(( _NUT_LKI_N + 1 )); _NUT_LKI_N="$n"
+        _NUT_LKI_ROOTS+=$'\n'"$root"$'\t'"$n"$'\n'
+    fi
+    tv="_NUT_LKI_TXT_$n"; iv="_NUT_LKI_IDX_$n"
+    if [[ -n "${!tv+x}" && "${!tv}" == "$txt" ]]; then
+        _nli="${!iv}"
+        return 0
+    fi
+    local name file rest word gates="" idx=$'\n'
+    while read -r name file rest || [[ -n "$name" ]]; do
+        [[ -z "$name" ]] && continue
+        if [[ "${name:0:2}" == "#[" ]]; then
+            word="${name#\#\[}"; word="${word%]}"
+            gates+="${word} "
+            continue
+        fi
+        [[ "${name:0:1}" == "#" ]] && { gates=""; continue; }
+        idx+="${name}"$'\x1f'"${gates}"$'\x1f'"${file}"$'\x1f'"${rest}"$'\n'
+        gates=""
+    done < "${root}/lib.nut"
+    printf -v "$tv" '%s' "$txt"
+    printf -v "$iv" '%s' "$idx"
+    _nli="$idx"
 }
 
 # What a `has(bin(...))` gate answered, so `command -v` runs once per name.
@@ -679,19 +767,6 @@ _use_resolve() {
     printf '%s' "$_NUT_RES"
 }
 
-# The directory a file sits in, absolute, into `_ncd`; empty when it cannot be
-# entered. What `cd "${f%/*}" && pwd` answers, without the fork, for the case
-# every module load is: an absolute directory with no `.` or `..` in it, which
-# that pair hands back unchanged.
-_nut_caller_dir() {
-    _ncd="${1%/*}"
-    case "$_ncd" in
-        /*/./*|/*/../*|*/.|*/..|*//*|/./*|/../*|"") ;;
-        /*) [[ -d "$_ncd" ]] || _ncd=""; return 0 ;;
-    esac
-    _ncd="$(cd "${1%/*}" 2>/dev/null && pwd)" || _ncd=""
-}
-
 # The same answer, into `_NUT_RES`, without a subshell: `use` asks it for every
 # module it loads.
 _use_resolve_to() {
@@ -829,6 +904,34 @@ _nut_realpath() {
 # absolute one, so a directory is resolved once per process; a relative one
 # depends on where the process stands and is resolved every time.
 _NUT_RP_CACHE=""
+
+# _nut_phys_dir <dir> -> `_npd`, the physical form of an absolute directory with
+# no `.` or `..` in it; rc 1 where a part of it is a link, which `cd -P` then
+# resolves. Each part is a link or it is not, so the physical form of a
+# directory is its parent's with its own name on the end, and every directory
+# on the way is remembered: the first module in a new directory costs a test
+# per part rather than a fork.
+_nut_phys_dir() {
+    local d="$1" p
+    if [[ -z "$d" || "$d" == / ]]; then _npd=/; return 0; fi
+    # By a regex where the name allows one, since `${s#*pat}` matches against
+    # every prefix of the list in turn.
+    local esc="$d" re
+    case "$esc" in *[!A-Za-z0-9_./-]*) esc="" ;; esac
+    if [[ -n "$esc" ]]; then
+        re=$'\n'"${esc//./[.]}"$'\t''([^'$'\n'']*)'
+        [[ "$_NUT_RP_CACHE" =~ $re ]] && { _npd="${BASH_REMATCH[1]}"; return 0; }
+    elif [[ "$_NUT_RP_CACHE" == *$'\n'"$d"$'\t'* ]]; then
+        _npd="${_NUT_RP_CACHE#*$'\n'"$d"$'\t'}"; _npd="${_npd%%$'\n'*}"
+        return 0
+    fi
+    [[ -d "$d" && ! -L "$d" ]] || return 1
+    _nut_phys_dir "${d%/*}" || return 1
+    p="${_npd%/}/${d##*/}"
+    _NUT_RP_CACHE+=$'\n'"$d"$'\t'"$p"$'\n'
+    _npd="$p"
+}
+
 _nut_realpath_to() {
     local p="$1" d b phys=""
     _nr=""
@@ -838,11 +941,12 @@ _nut_realpath_to() {
     # -P, so the key is the physical file. `cd` without it gives the logical
     # path, which leaves a symlinked module and its target as two different
     # keys and therefore two loads of one file.
-    if [[ "$d" == /* && "$_NUT_RP_CACHE" == *$'\n'"$d"$'\t'* ]]; then
-        phys="${_NUT_RP_CACHE#*$'\n'"$d"$'\t'}"; phys="${phys%%$'\n'*}"
-    else
+    case "$d" in
+        */./*|*/../*|*/.|*/..|*//*) ;;
+        /*) _nut_phys_dir "$d" && phys="$_npd" ;;
+    esac
+    if [[ -z "$phys" ]]; then
         phys="$(cd -P "$d" 2>/dev/null && pwd)" || phys=""
-        [[ -n "$phys" && "$d" == /* ]] && _NUT_RP_CACHE+=$'\n'"$d"$'\t'"$phys"$'\n'
     fi
     if [[ -n "$phys" ]]; then
         # And the leaf, if that is a link too.

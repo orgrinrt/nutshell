@@ -63,6 +63,12 @@ nut_key() {
     # first's path. Under `LC_ALL=C` both the character walk and the numeric
     # conversion go byte-wise, every byte is exactly two digits, and the
     # property holds.
+    # The last answer for a path and the last for anything else, since `use`
+    # keys one file three times while loading it, with a module's name between.
+    case "$1" in
+        */*) if [ -n "${_NK_LASTP+x}" ] && [ "$1" = "$_NK_LASTP" ]; then _nk="$_NK_LASTPK"; return 0; fi ;;
+        *)   if [ -n "${_NK_LAST+x}" ] && [ "$1" = "$_NK_LAST" ]; then _nk="$_NK_LASTK"; return 0; fi ;;
+    esac
     _nk_loc="${LC_ALL:-}"
     LC_ALL=C
     # A path is keyed by its directory and its leaf, and the directory's hex is
@@ -77,10 +83,12 @@ nut_key() {
                 _NK_DIR="${1%/*}"; _NK_DIRHEX="$_nhs"
             fi
             _nut_hexs "/${1##*/}"
-            _nk="enc_${_NK_DIRHEX}${_nhs}" ;;
+            _nk="enc_${_NK_DIRHEX}${_nhs}"
+            _NK_LASTP="$1"; _NK_LASTPK="$_nk" ;;
         *)
             _nut_hexs "$1"
-            _nk="enc_${_nhs}" ;;
+            _nk="enc_${_nhs}"
+            _NK_LAST="$1"; _NK_LASTK="$_nk" ;;
     esac
     LC_ALL="$_nk_loc"
     [ -n "$_nk_loc" ] || unset LC_ALL
@@ -98,6 +106,34 @@ _nut_hexs() {
         _nhs="${_nhs}${_nh}"
     done
 }
+
+# The same bytes under bash, from a table by index rather than a function call
+# and a copy of the rest per byte: about 3us a byte against 20, and `use` keys
+# every file it loads by a path of sixty or more. Defined through `eval` so a
+# POSIX shell never parses it and keeps the walk above, which gives the same
+# hex, so a key is the same whichever shell made it. A byte the table lacks
+# goes through `_nut_hex`, as above.
+if [ -n "${BASH_VERSION:-}" ]; then
+    eval '
+    declare -gA _NUT_HEXT=()
+    _nut_hexs() {
+        local i n="${#1}" c
+        _nhs=""
+        if (( ${#_NUT_HEXT[@]} == 0 )); then
+            for c in {a..z} {A..Z} {0..9} - . + "~" _ / " " :; do
+                printf -v "_NUT_HEXT[$c]" "%02x" "'"'"'$c"
+            done
+        fi
+        for (( i = 0; i < n; i++ )); do
+            c="${1:i:1}"
+            if [[ "$c" != [@*] && -n "${_NUT_HEXT[$c]+x}" ]]; then
+                _nhs+="${_NUT_HEXT[$c]}"
+            else
+                _nut_hex "$c"; _nhs+="$_nh"
+            fi
+        done
+    }'
+fi
 
 # One byte as two hex digits, without a fork.
 #

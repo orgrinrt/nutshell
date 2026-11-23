@@ -47,6 +47,7 @@ set -uo pipefail
 
 # The shebang line names whatever is on PATH, which is normally a symlink into
 # a checkout. Follow it to the real file, because the library sits next to it.
+# Into `_SELF`, in this shell: the loop forks only where there is a link to follow.
 _resolve_path() {
     local path="$1" dir
     while [[ -L "$path" ]]; do
@@ -54,12 +55,24 @@ _resolve_path() {
         path="$(readlink "$path")"
         [[ "$path" != /* ]] && path="$dir/$path"
     done
-    printf '%s' "$path"
+    _SELF="$path"
 }
 
-_SELF="$(_resolve_path "${BASH_SOURCE[0]}")"
-_NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-_NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
+_resolve_path "${BASH_SOURCE[0]}"
+# Its own directory and the checkout above it, taken as written where the path
+# is absolute with no `.` or `..` in it, which is what an exec through PATH
+# hands over: each capture is a fork, and this runs before every script.
+# `_nut_caller_dir` in `init` is the same test for every file `use` loads;
+# this one runs before `init` can be found.
+case "$_SELF" in
+    */./*|*/../*|*//*) _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)" ;;
+    /?*/*) _NUTSHELL_BIN_DIR="${_SELF%/*}" ;;
+    *) _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)" ;;
+esac
+case "$_NUTSHELL_BIN_DIR" in
+    /?*/*) _NUTSHELL_HOME="${_NUTSHELL_BIN_DIR%/*}" ;;
+    *) _NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)" ;;
+esac
 
 # shellcheck source=/dev/null
 source "${_NUTSHELL_HOME}/init" || {
@@ -67,11 +80,11 @@ source "${_NUTSHELL_HOME}/init" || {
     exit 1
 }
 
-# Before the pin block, so the pin can use the modules that already solve
-# caching rather than growing a fourth copy of them. Costs one redundant init
-# in the pinned case, since the exec re-runs it in the pinned copy.
-use extern log
-
+# Nothing is loaded here for the interpreter itself. The pin block below loads
+# `toml` when there is a manifest to read, and `extern` and `log` only when the
+# manifest pins an engine: they were loaded before every script, 22 files and
+# about 230ms, so a script that asked for no module paid for all of them, and
+# a hook on every tool call paid it every time.
 
 # =============================================================================
 # The engine pin
@@ -123,9 +136,17 @@ _NUT_PIN_TTL="${NUTSHELL_PIN_TTL:-3600}"
 # unbounded walk reached /tmp on macOS, where anyone can plant a nut.toml and
 # silently choose which engine another user's scripts run.
 _nut_manifest() {
+    _nut_manifest_to "$1" || return 1
+    printf '%s' "$_nut_mf"
+}
+
+# The same, into `_nut_mf`, in this shell: the interpreter asks it before every
+# script, and the capture around the printing form was a fork.
+_nut_manifest_to() {
     local dir="$1"
+    _nut_mf=""
     while [[ -n "$dir" && "$dir" != "/" ]]; do
-        [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
+        [[ -f "$dir/nut.toml" ]] && { _nut_mf="$dir/nut.toml"; return 0; }
         [[ -e "$dir/.git" ]] && return 1
         [[ "$dir" == "$HOME" ]] && return 1
         dir="${dir%/*}"
@@ -144,6 +165,7 @@ _nut_manifest() {
 _nut_pin_v=""
 _nut_pin() {
     local file="$1" key="$2"
+    use toml || return 1
     # The floor alone. The script's manifest is not known yet, and a backend
     # picked now would be the one deps finds without the script's pins, kept
     # for the rest of the run.
@@ -197,6 +219,7 @@ _nut_age() {
 
 # One repository, so the fetch and the reset refer to the same thing.
 _nut_advance_mirror() {
+    use log
     local dir="$1" ref="$2"
     git -C "$dir" fetch --quiet --depth 1 origin "$ref" 2>/dev/null || return 0
     git -C "$dir" reset --quiet --hard FETCH_HEAD 2>/dev/null ||
@@ -206,6 +229,7 @@ _nut_advance_mirror() {
 
 _nut_pinned_root() {
     local ref="$1" url="$2" dir age
+    use extern log || return 1
     dir="$(_extern_mirror nutshell "$url" "$ref")" || return 1
     age="$(_nut_age "$dir")"
     if (( age >= _NUT_PIN_TTL )); then
@@ -239,6 +263,7 @@ _nut_pinned_root() {
 # that project's own `dev` branch out into the nutshell cache.
 _nut_origin() {
     local home="$1" url
+    use extern || return 1
     _extern_is_repo "$home" || return 1
     [[ -f "$home/init" && -d "$home/lib" ]] || return 1
     url="$(git -C "$home" remote get-url origin 2>/dev/null)" || url=""
@@ -249,16 +274,16 @@ _nut_origin() {
 # it resolves. Only the second is an error worth failing on.
 _nut_declared() {
     local dir manifest
-    dir="$(cd "$(dirname "$1")" && pwd)" || return 1
-    manifest="$(_nut_manifest "$dir")" || return 1
+    _nut_caller_dir "$1"; dir="$_ncd"; [[ -n "$dir" ]] || return 1
+    _nut_manifest_to "$dir" || return 1; manifest="$_nut_mf"
     _nut_pin "$manifest" nutshell_branch >/dev/null && return 0
     _nut_pin "$manifest" nutshell_version >/dev/null
 }
 
 _nut_resolve_pin() {
     local script="$1" dir manifest ref url root
-    dir="$(cd "$(dirname "$script")" && pwd)" || return 1
-    manifest="$(_nut_manifest "$dir")" || return 1
+    _nut_caller_dir "$script"; dir="$_ncd"; [[ -n "$dir" ]] || return 1
+    _nut_manifest_to "$dir" || return 1; manifest="$_nut_mf"
 
     # Called here and not captured, so the manifest is read once in this shell
     # and the value comes back in `_nut_pin_v`.
@@ -267,6 +292,7 @@ _nut_resolve_pin() {
     else return 1
     fi
 
+    use log
     _nut_ref_ok "$ref" || {
         log_error "nutshell: '${ref}' in ${manifest} is not a usable git ref"
         return 1
@@ -431,7 +457,8 @@ if [[ "${_IS_COMMAND:-0}" -eq 1 ]]; then
     NUTSHELL_SCRIPT="$_SCRIPT"
     NUTSHELL_SCRIPT_DIR="$PWD"
 else
-    NUTSHELL_SCRIPT="$(cd "$(dirname "$_SCRIPT")" && pwd)/$(basename "$_SCRIPT")"
+    _nut_caller_dir "$_SCRIPT"
+    NUTSHELL_SCRIPT="${_ncd}/${_SCRIPT##*/}"
     NUTSHELL_SCRIPT_DIR="${NUTSHELL_SCRIPT%/*}"
 fi
 export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR

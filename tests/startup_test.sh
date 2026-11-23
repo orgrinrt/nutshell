@@ -236,3 +236,16 @@ printf "%s\n" "$(fs_basename /a/b)"')"
     rm -rf "$_ST_D"
     assert_eq "$out" "mine"
 }
+
+#[test]
+it_keeps_a_function_the_script_defined_in_each_spelling_over_a_later_use() {
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'function log_warn { printf "warn\n"; }
+log_error () { printf "error\n"; }
+function log_info() { printf "info\n"; }
+use log
+log_warn x; log_error x; log_info x')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "$(printf 'warn\nerror\ninfo')"
+}

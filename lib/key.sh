@@ -65,17 +65,38 @@ nut_key() {
     # property holds.
     _nk_loc="${LC_ALL:-}"
     LC_ALL=C
-    _nk="enc_"
+    # A path is keyed by its directory and its leaf, and the directory's hex is
+    # kept: `use` keys every file it loads, most of them sit in one or two
+    # directories, and the walk below is quadratic in the length it is handed,
+    # since each step copies what is left. The bytes are the same either way,
+    # so the key is too.
+    case "$1" in
+        */*)
+            if [ "${1%/*}" != "${_NK_DIR-}" ] || [ -z "${_NK_DIR+x}" ]; then
+                _nut_hexs "${1%/*}"
+                _NK_DIR="${1%/*}"; _NK_DIRHEX="$_nhs"
+            fi
+            _nut_hexs "/${1##*/}"
+            _nk="enc_${_NK_DIRHEX}${_nhs}" ;;
+        *)
+            _nut_hexs "$1"
+            _nk="enc_${_nhs}" ;;
+    esac
+    LC_ALL="$_nk_loc"
+    [ -n "$_nk_loc" ] || unset LC_ALL
+    return 0
+}
+
+# A string as hex, into `_nhs`, a byte at a time. The caller sets `LC_ALL=C`.
+_nut_hexs() {
+    _nhs=""
     _nk_in="$1"
     while [ -n "$_nk_in" ]; do
         _nk_c="${_nk_in%"${_nk_in#?}"}"
         _nk_in="${_nk_in#?}"
         _nut_hex "$_nk_c"
-        _nk="${_nk}${_nh}"
+        _nhs="${_nhs}${_nh}"
     done
-    LC_ALL="$_nk_loc"
-    [ -n "$_nk_loc" ] || unset LC_ALL
-    return 0
 }
 
 # One byte as two hex digits, without a fork.

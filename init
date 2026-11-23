@@ -173,7 +173,7 @@ nut_once() {
     # module whose functions are lazy stubs, that reinstalls the stubs over the
     # bindings an implementation had already made, and the stub then calls
     # itself until the stack dies.
-    src="$(_nut_realpath "$src" 2>/dev/null || printf '%s' "$src")"
+    _nut_realpath_to "$src" 2>/dev/null && src="$_nr"
     local key="_NUT_ONCE_${src//[^A-Za-z0-9]/_}"
     [[ -n "${!key:-}" ]] && return 1
     printf -v "$key" '%s' 1
@@ -229,14 +229,15 @@ use() {
         # NUTSHELL_SCRIPT_DIR is the entry point; neither answers "which unit
         # is asking".
         local mod_path
-        mod_path="$(_use_resolve "$mod" "${BASH_SOURCE[1]:-}")" || return 1
+        _use_resolve_to "$mod" "${BASH_SOURCE[1]:-}" || return 1
+        mod_path="$_NUT_RES"
 
         if [[ -f "$mod_path" ]]; then
             # The file decides identity, so a module reached by two names is
             # loaded once. Canonical, because a relative path and an absolute
             # one naming the same file are the same module.
             local _real
-            _real="$(_nut_realpath "$mod_path")" || _real="$mod_path"
+            if _nut_realpath_to "$mod_path"; then _real="$_nr"; else _real="$mod_path"; fi
 
             if _nut_loaded_get LOADED "$_real"; then
                 # Recorded under a key that carries the unit, so one unit's
@@ -342,6 +343,14 @@ use() {
 # reloads. That is per function and inside a module; this is per module and
 # above it, and a library will use both.
 _lib_nut_lookup() {
+    _lib_nut_lookup_to "$@" || return 1
+    printf '%s' "$_NUT_LK"
+}
+
+# The same answer, into `_NUT_LK`, for a caller in this shell: `use` asks it for
+# every module and the capture around the printing form was a fork each time.
+_lib_nut_lookup_to() {
+    _NUT_LK=""
     local root="$1" want="$2" reach="${3:-any}" name file vis
     [[ -r "${root}/lib.nut" ]] || return 1
     # `|| [[ -n "$name" ]]`, so a file whose last line has no newline keeps
@@ -415,7 +424,7 @@ _lib_nut_lookup() {
             echo "nutshell: '${want}' is internal to that library" >&2
             return 1
         fi
-        printf '%s/%s' "$root" "$file"
+        _NUT_LK="${root}/${file}"
         return 0
     done < "${root}/lib.nut"
     return 1
@@ -666,7 +675,28 @@ _lib_nut_modules() {
 # both need this answer and had one copy each, which is how they came to
 # disagree about which file a name meant.
 _use_resolve() {
+    _use_resolve_to "$@" || return 1
+    printf '%s' "$_NUT_RES"
+}
+
+# The directory a file sits in, absolute, into `_ncd`; empty when it cannot be
+# entered. What `cd "${f%/*}" && pwd` answers, without the fork, for the case
+# every module load is: an absolute directory with no `.` or `..` in it, which
+# that pair hands back unchanged.
+_nut_caller_dir() {
+    _ncd="${1%/*}"
+    case "$_ncd" in
+        /*/./*|/*/../*|*/.|*/..|*//*|/./*|/../*|"") ;;
+        /*) [[ -d "$_ncd" ]] || _ncd=""; return 0 ;;
+    esac
+    _ncd="$(cd "${1%/*}" 2>/dev/null && pwd)" || _ncd=""
+}
+
+# The same answer, into `_NUT_RES`, without a subshell: `use` asks it for every
+# module it loads.
+_use_resolve_to() {
     local mod="$1" caller="${2:-}" mod_path=""
+    _NUT_RES=""
     # A caller named outright wins. `use` reads the frame that wrote it, which
     # is right when a file wrote it and wrong when nut_reload did: the frame is
     # then init, and a `super::` resolves against nutshell instead of the unit
@@ -675,13 +705,14 @@ _use_resolve() {
     if [[ "$mod" == super::* ]]; then
         local _from
         if [[ -n "$caller" && "$caller" == */* ]]; then
-            _from="$(cd "${caller%/*}" 2>/dev/null && pwd)"
+            _nut_caller_dir "$caller"; _from="$_ncd"
         else
             _from="$PWD"
         fi
-        mod_path="$(_use_super_resolve "${mod#super::}" "$_from")" || return 1
+        _use_super_resolve_to "${mod#super::}" "$_from" || return 1
+        mod_path="$_NUT_SR"
     elif [[ "$mod" == *"::"* ]]; then
-        mod_path="$(_lib_nut_lookup "$_NUTSHELL_ROOT" "$mod" 2>/dev/null)" || mod_path=""
+        _lib_nut_lookup_to "$_NUTSHELL_ROOT" "$mod" 2>/dev/null; mod_path="$_NUT_LK"
         if [[ -z "$mod_path" ]]; then
             use extern || return 1
             # Where the asking file lives, so extern can find that unit's
@@ -689,7 +720,7 @@ _use_resolve() {
             # to have been started.
             local _NUT_ASKING_FROM=""
             if [[ -n "$caller" && "$caller" == */* ]]; then
-                _NUT_ASKING_FROM="$(cd "${caller%/*}" 2>/dev/null && pwd)"
+                _nut_caller_dir "$caller"; _NUT_ASKING_FROM="$_ncd"
             fi
             mod_path="$(extern_resolve "$mod")" || return 1
         fi
@@ -703,11 +734,11 @@ _use_resolve() {
             echo "  use '::' the whole way down: ${mod//\//::}" >&2
             return 1
         fi
-        mod_path="$(_lib_nut_lookup "$_NUTSHELL_ROOT" "$mod" 2>/dev/null)" || mod_path=""
+        _lib_nut_lookup_to "$_NUTSHELL_ROOT" "$mod" 2>/dev/null; mod_path="$_NUT_LK"
         [[ -n "$mod_path" ]] || mod_path="${_NUTSHELL_ROOT}/lib/${mod}.sh"
     fi
     [[ -n "$mod_path" ]] || return 1
-    printf '%s' "$mod_path"
+    _NUT_RES="$mod_path"
 }
 
 #[pub]
@@ -735,8 +766,8 @@ nut_reload() {
         # for the reload would still be the stub.
         local file=""; _nut_loaded_get LOADED_AS "$mod" && file="$_nl"
         if [[ -z "$file" ]]; then
-            local _p; _p="$(_use_resolve "$mod" "${BASH_SOURCE[1]:-}")" || _p=""
-            [[ -n "$_p" ]] && file="$(_nut_realpath "$_p" 2>/dev/null || printf '%s' "$_p")"
+            local _p=""; _use_resolve_to "$mod" "${BASH_SOURCE[1]:-}" && _p="$_NUT_RES"
+            [[ -n "$_p" ]] && { if _nut_realpath_to "$_p"; then file="$_nr"; else file="$_p"; fi; }
         fi
         if [[ -n "$file" ]]; then
             _nut_loaded_unset LOADED "$file"
@@ -786,28 +817,46 @@ nut_lazy_guard() {
 # passed the second guard, ran again, and reinstalled its lazy stubs over
 # bindings the implementation had already made.
 _nut_realpath() {
-    local p="$1" d b
+    _nut_realpath_to "$1" || return 1
+    printf '%s' "$_nr"
+}
+
+# The same answer, into `_nr`, without a subshell around the call.
+#
+# `use` and `nut_once` ask this for every file they load, and the capture
+# around the printing form was a fork each time, about a millisecond apiece
+# before a module had run a line. The physical directory is remembered for an
+# absolute one, so a directory is resolved once per process; a relative one
+# depends on where the process stands and is resolved every time.
+_NUT_RP_CACHE=""
+_nut_realpath_to() {
+    local p="$1" d b phys=""
+    _nr=""
     [[ -n "$p" ]] || return 1
     d="${p%/*}"; b="${p##*/}"
     [[ "$d" == "$p" ]] && d="."
     # -P, so the key is the physical file. `cd` without it gives the logical
     # path, which leaves a symlinked module and its target as two different
     # keys and therefore two loads of one file.
-    if cd -P "$d" 2>/dev/null; then
-        d="$PWD"
-        cd - >/dev/null 2>&1 || true
+    if [[ "$d" == /* && "$_NUT_RP_CACHE" == *$'\n'"$d"$'\t'* ]]; then
+        phys="${_NUT_RP_CACHE#*$'\n'"$d"$'\t'}"; phys="${phys%%$'\n'*}"
+    else
+        phys="$(cd -P "$d" 2>/dev/null && pwd)" || phys=""
+        [[ -n "$phys" && "$d" == /* ]] && _NUT_RP_CACHE+=$'\n'"$d"$'\t'"$phys"$'\n'
+    fi
+    if [[ -n "$phys" ]]; then
         # And the leaf, if that is a link too.
-        if [[ -L "${d}/${b}" ]]; then
-            local t; t="$(readlink "${d}/${b}")"
+        if [[ -L "${phys}/${b}" ]]; then
+            local t; t="$(readlink "${phys}/${b}")"
             case "$t" in
-                /*) printf '%s' "$t"; return 0 ;;
+                /*) _nr="$t"; return 0 ;;
                 *)  b="$t" ;;
             esac
         fi
-        printf '%s/%s' "$d" "$b"
+        _nr="${phys}/${b}"
         return 0
     fi
-    printf '%s' "$p"
+    _nr="$p"
 }
 
 # _use_mod_fragment <rest>
@@ -839,9 +888,19 @@ _use_mod_fragment() {
 # that silently resolved to a nutshell module of the same name would load
 # something the author did not write and did not mean.
 _use_super_resolve() {
+    _use_super_resolve_to "$@" || return 1
+    printf '%s' "$_NUT_SR"
+}
+
+# The same answer, into `_NUT_SR`, without a subshell around it or inside it.
+_use_super_resolve_to() {
+    _NUT_SR=""
     local rest="$1" from="$2" root candidate dir
     local declared="$rest"
-    rest="$(_use_mod_fragment "$rest")" || return 1
+    if [[ "$rest" == */* ]]; then
+        _use_mod_fragment "$rest"; return 1
+    fi
+    rest="${rest//:://}"
 
     # Walk up from the file that wrote the `use`, not from the entry point.
     #
@@ -872,12 +931,13 @@ _use_super_resolve() {
     # is answered from it and nowhere else: falling back to a search would put
     # the guessing back under the declaration and hide a wrong entry.
     if [[ -r "${root}/lib.nut" ]]; then
-        candidate="$(_lib_nut_lookup "$root" "$declared")" || {
+        _lib_nut_lookup_to "$root" "$declared" || {
             echo "nutshell: '${declared}' is not in this unit's lib.nut" >&2
             echo "  it declares: $(_lib_nut_modules "$root" | tr '\n' ' ')" >&2
             return 1
         }
-        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+        candidate="$_NUT_LK"
+        [[ -f "$candidate" ]] && { _NUT_SR="$candidate"; return 0; }
         echo "nutshell: lib.nut declares '${declared}' at ${candidate#$root/}, which is not there" >&2
         return 1
     fi
@@ -887,7 +947,7 @@ _use_super_resolve() {
     # resolved differently depending on who was asking. Only the undeclared
     # path reaches this now, and it exists to be migrated away from.
     for candidate in "${root}/libs/${rest}.sh" "${root}/lib/${rest}.sh" "${root}/${rest}.sh"; do
-        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+        [[ -f "$candidate" ]] && { _NUT_SR="$candidate"; return 0; }
     done
     echo "nutshell: this unit has no module '${rest}'" >&2
     echo "  looked in ${root}/lib, ${root}/libs and ${root}" >&2

@@ -69,7 +69,23 @@ srv_start() {
     ) &
     _SRV_PID=$!
     _SRV_PORT="$port"
-    sleep 0.3
+    srv_wait_listening "$port"
+}
+
+# srv_wait_listening <port> -> returns once something listens on the port
+#
+# A fixed sleep lost the race on a loaded machine: the client connected before
+# nc listened, and the server saw no request. Read from the kernel's table, so
+# the wait makes no connection of its own; a host without it waits as before.
+srv_wait_listening() {
+    local hex i
+    hex="$(printf '%04X' "$1")"
+    [[ -r /proc/net/tcp ]] || { sleep 0.3; return 0; }
+    for ((i = 0; i < 100; i++)); do
+        grep -q ":${hex} 00000000:0000 0A" /proc/net/tcp && return 0
+        sleep 0.05
+    done
+    return 0
 }
 
 # srv_requests <dir> -> how many requests the server was sent

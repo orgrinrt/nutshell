@@ -119,6 +119,27 @@ it_runs_a_planted_tree_nobody_else_could_write_as_the_positive_control() {
 }
 
 #[test]
+it_reads_the_file_when_the_cache_path_is_a_fifo_or_a_device() {
+    # Opening a FIFO blocks until a writer comes, and that open came before any
+    # check of what the path is, so a FIFO planted there hung every start of
+    # every script in the project. A device link is the same hazard.
+    local kind out rc
+    for kind in fifo device; do
+        _tc_fresh
+        _tc_place
+        mkdir -p "${_TC_AT%/*}"
+        chmod 700 "${_TC_AT%/*}"
+        case "$kind" in
+            fifo) mkfifo "$_TC_AT" ;;
+            device) ln -s /dev/zero "$_TC_AT" ;;
+        esac
+        rc=0; out="$(timeout 10 bash -c "$(declare -f _tc_read); _TC_D='$_TC_D'; INIT='$INIT'; _tc_read package.name")" || rc=$?
+        rm -rf "$_TC_D"
+        assert_eq "${rc}/${out}" "0/first" "cache path is a ${kind}"
+    done
+}
+
+#[test]
 it_does_not_run_a_kept_tree_others_can_write() {
     local mode out
     for mode in 620 602 666; do

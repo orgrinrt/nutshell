@@ -62,10 +62,13 @@ Core: may use the two above
   array.sh    - Array operations (uses list)
   fs.sh       - Filesystem primitives (uses deps; fs/impl/ per stat variant)
   text.sh     - Text file processing (uses deps; text/impl/ per tool)
-  toml.sh     - TOML reading (uses validate, deps). taplo or mikefarah yq
-                where deps finds one, else the bash reader in toml/impl/, which
-                needs nothing; toml/write.sh edits in place, toml/json.sh
-                converts to JSON
+  toml.sh     - TOML reading (uses key; deps on its first pick of a reader,
+                validate for `toml_is_true`). taplo or
+                mikefarah yq where deps finds one, else the bash reader in
+                toml/impl/, which needs nothing; toml/cache.sh keeps that
+                reader's tree between processes, under the user's cache
+                directory and only where nobody else can write it;
+                toml/write.sh edits in place, toml/json.sh converts to JSON
   xdg.sh      - XDG directories (uses os, validate)
 ```
 
@@ -110,7 +113,9 @@ deps.sh finds tools using this order:
    something that is not an executable file is refused, said once on stderr,
    and never falls through to PATH. A manifest that is not TOML pins nothing,
    and that is said once.
-2. If `which` is available, use it to find tools
+2. Else walk `PATH` element by element, an empty element being the working
+   directory, and take the first `<dir>/<tool>` that is an executable regular
+   file. No `which` and no `command -v`: the walk is in the shell, with no fork
 3. Else check common locations in order:
    - `/usr/bin/<tool>`
    - `/bin/<tool>`

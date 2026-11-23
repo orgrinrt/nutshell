@@ -27,11 +27,18 @@ use super::toml
 #
 # A file the reader refuses is refused here, rc 2 with its reason. So is an
 # infinity or a NaN, which TOML has and JSON has no spelling for.
-# Usage: toml_to_json "file.toml" -> prints JSON
+# A file named `-` is the text on standard input, which the floor reads whole and
+# a backend never sees, since there is no file to key a kept tree by: it is not
+# cached, and the tree it leaves is dropped so the next read starts clean.
+# Usage: toml_to_json "file.toml" -> prints JSON, `-` reads standard input
 toml_to_json() {
     local file="${1:-}" rc=0
     [[ -n "$file" ]] || return 1
-    _toml_open_values "$file" || return $?
+    if [[ "$file" == - ]]; then
+        _tj_stdin || return $?
+    else
+        _toml_open_values "$file" || return $?
+    fi
     # A value the tool rewrote, `_TOML_JL` of them, is the floor's to write.
     if [[ "$_TOML_FROM" == json ]] && (( ${_TOML_JL:-0} )); then
         _TOML_FROM=bash
@@ -44,6 +51,17 @@ toml_to_json() {
         return 2
     fi
     printf '%s\n' "$_tj_out"
+}
+
+# _tj_stdin -> the tree of standard input's text, rc 2 and the reason where it is not TOML
+_tj_stdin() {
+    local c=""
+    if IFS= read -r -d '' c; then
+        printf 'toml: -: the text holds a NUL byte\n' >&2
+        return 2
+    fi
+    _TOML_ID="" _TOML_FROM=bash
+    _toml_parse_text "-" "$c" || { printf '%s\n' "$_TOML_ERR" >&2; return 2; }
 }
 
 # _tj_emit <node> -> the node appended to `_tj_out` as JSON

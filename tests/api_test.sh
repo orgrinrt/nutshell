@@ -120,6 +120,7 @@ it_prints_markdown_with_a_block_per_module() {
 ```
 greet_alpha <name> -> prints a greeting
 greet_bare
+greet_wave <name> -> prints a wave
 greet_zulu <name> -> prints a farewell
 ```'
     assert_eq "$(_api_in "$_API_TMP" --path "$FIXLIB" --md)" "$want"

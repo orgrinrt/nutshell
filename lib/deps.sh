@@ -167,6 +167,17 @@ deps_hide() {
 }
 
 #[pub]
+# Have a function run after every `deps_hide` and `deps_forget`, for a module that
+# keeps the pick of a tool and has to drop it. Said once is enough.
+# Usage: deps_on_reset _json_reset
+deps_on_reset() {
+    case " $_DEPS_RESET_HOOKS " in
+        *" $1 "*) : ;;
+        *) _DEPS_RESET_HOOKS="${_DEPS_RESET_HOOKS} $1" ;;
+    esac
+}
+
+#[pub]
 # Forget what was learned about tools, so the next question looks again, and
 # what `deps_hide` hid. A miss is remembered for the life of the process, which
 # is right until something installs the tool. The manifest is read again too.

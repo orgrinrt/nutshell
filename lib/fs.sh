@@ -42,7 +42,7 @@ _FS_READY=""
 _FS_ERROR=""
 
 # _fs_check -> `_FS_READY`, whether basic filesystem tools are here; asked at
-# the first question, and again after a reset
+# load, and again at the first question after a reset
 _fs_check() {
     [ -z "$_FS_READY" ] || return 0
     if deps_has_any "stat" "perl"; then
@@ -52,14 +52,17 @@ _fs_check() {
         _FS_ERROR="No stat tool available (need stat or perl)"
     fi
 }
+# Asked at load, as it always was; not on the load a reset makes, which waits.
+[ -n "${_FS_RESETTING:-}" ] || _fs_check
 
 # _fs_reset -> the module as it was at load: the stubs back where picks had
 # replaced them, the check made again
 _fs_reset() {
-    _NUTSHELL_FS_SH=""
-    nut_reload fs
+    _NUTSHELL_FS_SH="" _FS_RESETTING=1
+    source "${BASH_SOURCE[0]}"
+    _FS_RESETTING=""
 }
-_deps_on_reset _fs_reset
+deps_on_reset _fs_reset
 
 # -----------------------------------------------------------------------------
 # Existence checks (pure bash; no external tools needed)

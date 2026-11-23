@@ -148,16 +148,6 @@ _deps_drop_caps() {
 # picks again.
 _DEPS_RESET_HOOKS=""
 
-# _deps_on_reset <function> -> the function runs after every hide and forget
-# Usage: _deps_on_reset _json_reset
-#[pub(lib)]
-_deps_on_reset() {
-    case " $_DEPS_RESET_HOOKS " in
-        *" $1 "*) : ;;
-        *) _DEPS_RESET_HOOKS="${_DEPS_RESET_HOOKS} $1" ;;
-    esac
-}
-
 # Usage: _deps_reset_modules -> runs every registered hook
 #[pub(super)]
 _deps_reset_modules() {

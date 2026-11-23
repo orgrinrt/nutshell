@@ -115,7 +115,7 @@ json_detect() {
     _JSON_READY=1
     _JSON_ERROR=""
     use deps || return 1
-    _deps_on_reset _json_reset
+    deps_on_reset _json_reset
     if deps_has jq; then
         _JSON_TOOL="jq"
     elif deps_has python3 || deps_has python; then

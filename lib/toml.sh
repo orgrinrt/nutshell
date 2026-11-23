@@ -142,7 +142,7 @@ _toml_tool_pick() {
     nut_lazy_guard _toml_tool_json || return 1
     local _NUT_LAZY__toml_tool_json=1
     use deps || return 1
-    _deps_on_reset _toml_reset
+    deps_on_reset _toml_reset
     # FIXME(63ac7b74f97a): the variant stands in for `deps_can toml_json_taplo`
     # and `deps_can toml_read`, which scan every tool first, 200 ms on the first
     # read; a tool that then fails on a file sends it to the floor all the same.

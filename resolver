@@ -83,6 +83,9 @@ _nut_resolve() {
         http::retry)
             { [ "$_nr_reach" = public ] && { echo "nutshell: 'http::retry' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/http/retry.sh"; return 0; }
             ;;
+        http::wget)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'http::wget' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/http/wget.sh"; return 0; }
+            ;;
         key)
             { printf '%s' "$_nr_root/lib/key.sh"; return 0; }
             ;;

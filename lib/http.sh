@@ -40,6 +40,7 @@ _NUTSHELL_HTTP_SH=1
 use deps
 use super::http::opts
 use super::http::retry
+use super::http::wget
 
 # -----------------------------------------------------------------------------
 # Module Status
@@ -171,7 +172,7 @@ _http_request_wget() {
     # One try: the retries are the module's, so the count means the same on
     # curl, which has none of its own, and wget, which has twenty.
     local -a wget_args=(
-        -q                              # Quiet
+        -nv                             # Messages on one line each, for the retry test
         -O -                            # Output to stdout
         -S                              # Print headers
         --tries=1                       # Retrying is `_http_retrying`'s
@@ -195,41 +196,25 @@ _http_request_wget() {
     # The options, then what the caller handed on, then the URL
     wget_args+=("${_HTTP_X_ARGS[@]}" "${_HTTP_O_REST[@]}" "$url")
 
-    # Execute and capture output (stderr has headers, stdout has body)
-    local body
-    body=$("$_HTTP_CALL_BIN" "${wget_args[@]}" 2>&1)
+    # Execute and capture output: stdout is the body, stderr the headers and
+    # wget's own messages, kept apart so a body is never read as either.
+    local body errf errtxt
+    errf="$(mktemp "${TMPDIR:-/tmp}/nut-http.XXXXXX")" || {
+        _HTTP_LAST_STATUS=""; _HTTP_LAST_HEADERS=""
+        _HTTP_LAST_BODY="wget error: no temporary file"
+        return 1
+    }
+    body=$("$_HTTP_CALL_BIN" "${wget_args[@]}" 2>"$errf")
     local exit_code=$?
     _HTTP_TRY_RC=$exit_code
+    errtxt="$(cat "$errf")"
+    rm -f "$errf"
 
-    # wget puts headers in stderr with -S, but we redirected to stdout
-    # Parse the output - headers start with "  HTTP/" and indented lines
-    _HTTP_LAST_HEADERS=""
-    _HTTP_LAST_BODY=""
-    _HTTP_LAST_STATUS=""
-
-    local in_headers=0
-    local line
-    while IFS= read -r line; do
-        if [[ "$line" == *"HTTP/"* ]]; then
-            in_headers=1
-            _HTTP_LAST_HEADERS+="$line"$'\n'
-            # Extract status code
-            if [[ "$line" =~ HTTP/[0-9.]+" "([0-9]+) ]]; then
-                _HTTP_LAST_STATUS="${BASH_REMATCH[1]}"
-            fi
-        elif [[ $in_headers -eq 1 && "$line" == "  "* ]]; then
-            _HTTP_LAST_HEADERS+="${line#  }"$'\n'
-        else
-            in_headers=0
-            _HTTP_LAST_BODY+="$line"$'\n'
-        fi
-    done <<< "$body"
-
-    # Remove trailing newline from body
-    _HTTP_LAST_BODY="${_HTTP_LAST_BODY%$'\n'}"
+    _http_wget_parse_err "$errtxt"
+    _HTTP_LAST_BODY="$body"
 
     if [[ $exit_code -ne 0 && -z "$_HTTP_LAST_STATUS" ]]; then
-        _HTTP_LAST_BODY="wget error: $body"
+        _HTTP_LAST_BODY="wget error: $errtxt"
         return 1
     fi
 
@@ -258,6 +243,7 @@ _http_request() {
 _http_call() {
     local method="$1" url="$2" data="$3"; shift 3
     _http_prepare "$data" "$@" || return $?
+    _HTTP_TRY_METHOD="$method"
     if [[ "$method" == "HEAD" && "$_HTTP_CALL_IMPL" == "curl" ]]; then
         _HTTP_O_REST=(-I "${_HTTP_O_REST[@]}")
     fi
@@ -483,31 +469,31 @@ http_get_json() {
 # Public API - File Operations
 # -----------------------------------------------------------------------------
 
-# One attempt at a download. Leaves the answer's status where there was one, so
-# an error page is told from a network failure.
+# One attempt at a download. Leaves the answer's status and headers where there
+# were any, so an error page is told from a network failure and a Retry-After
+# is read. The module's options only: `http_download` refuses the rest.
 _http_download_once() {
-    local url="$1" output="$2" rc status line
+    local url="$1" output="$2" rc raw
     _HTTP_LAST_STATUS=""
+    _HTTP_LAST_HEADERS=""
     if [[ "$_HTTP_CALL_IMPL" == "curl" ]]; then
-        status="$(_http_curl_run -fsS -L -o "$output" -w '%{http_code}' \
+        raw="$(_http_curl_run -fsS -L -D - -o "$output" -w '%{http_code}' \
             --max-time "$HTTP_TIMEOUT" \
             -A "$HTTP_USER_AGENT" \
-            "${_HTTP_X_ARGS[@]}" "${_HTTP_O_REST[@]}" \
+            "${_HTTP_X_ARGS[@]}" \
             "$url")"
         rc=$?
-        [[ "$status" =~ ^[1-5][0-9][0-9]$ ]] && _HTTP_LAST_STATUS="$status"
+        _HTTP_LAST_HEADERS="${raw%???}"
+        raw="${raw: -3}"
+        [[ "$raw" =~ ^[1-5][0-9][0-9]$ ]] && _HTTP_LAST_STATUS="$raw"
     else
-        status="$("$_HTTP_CALL_BIN" -q -S -O "$output" --tries=1 \
+        raw="$("$_HTTP_CALL_BIN" -nv -S -O "$output" --tries=1 \
             --timeout="$HTTP_TIMEOUT" \
             --user-agent="$HTTP_USER_AGENT" \
-            "${_HTTP_X_ARGS[@]}" "${_HTTP_O_REST[@]}" \
+            "${_HTTP_X_ARGS[@]}" \
             "$url" 2>&1 >/dev/null)"
         rc=$?
-        while IFS= read -r line; do
-            if [[ "$line" =~ HTTP/[0-9.]+" "([0-9]+) ]]; then
-                _HTTP_LAST_STATUS="${BASH_REMATCH[1]}"
-            fi
-        done <<<"$status"
+        _http_wget_parse_err "$raw"
     fi
     _HTTP_TRY_RC=$rc
     return $rc
@@ -520,6 +506,8 @@ _http_download_once() {
 # Returns: 0 on success, non-zero on failure, an error status included, so a
 # 404 page is never saved as though it were the file. 2 for an option refused.
 # A 429, 502, 503 or 504 and a connection that failed are tried again.
+# Only the module's own options are taken after the output path: anything else
+# is refused with status 2 naming it, since a curl flag means something else to wget.
 http_download() {
     local url="${1:-}"
     local output="${2:-}"
@@ -530,17 +518,20 @@ http_download() {
     shift 2
 
     _http_prepare "" "$@" || return $?
+    _http_no_rest http_download || return 2
     if [[ -n "$_HTTP_O_BODY_FILE" ]]; then
         _http_opts_fail "--body-file is for a request that sends a body, and a download does not"
         return 2
     fi
+    _HTTP_TRY_METHOD="GET"
     _http_retrying _http_download_once "$url" "$output"
 }
 
 #[pub]
 # Upload a file via POST (multipart form data)
 # Usage: http_upload "https://example.com/upload" "/path/to/file" "file"
-# Returns: 0 on success, 1 on failure, 2 for an option refused
+# Takes the module's own options after the field, and refuses anything else.
+# Returns: 0 on success, 1 on failure, 2 for an option or argument refused
 http_upload() {
     local url="${1:-}"
     local file="${2:-}"
@@ -552,6 +543,7 @@ http_upload() {
     [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
 
     _http_prepare "" "$@" || return $?
+    _http_no_rest http_upload || return 2
     if [[ "$_HTTP_CALL_IMPL" == "curl" ]]; then
         local output
         output=$(_http_curl_run -sS -w '\n%{http_code}' \
@@ -559,7 +551,7 @@ http_upload() {
             -F "${field}=@${file}" \
             --max-time "$HTTP_TIMEOUT" \
             -A "$HTTP_USER_AGENT" \
-            "${_HTTP_X_ARGS[@]}" "${_HTTP_O_REST[@]}" \
+            "${_HTTP_X_ARGS[@]}" \
             "$url" 2>&1)
 
         _HTTP_LAST_STATUS="${output##*$'\n'}"

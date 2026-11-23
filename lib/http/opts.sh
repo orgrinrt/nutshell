@@ -23,7 +23,8 @@
 #   --insecure                  TLS is not verified, for this call alone. It is
 #                               a test-only escape, for a local self-signed host.
 #
-# Whatever else follows the url is handed to the tool as it was.
+# Whatever else follows the url of a request is handed to the tool as it was,
+# and `http_download` and `http_upload` refuse it.
 
 [ -n "${_NUTSHELL_HTTP_OPTS_SH:-}" ] && return 0
 _NUTSHELL_HTTP_OPTS_SH=1
@@ -33,6 +34,7 @@ use deps
 # What the last parse found.
 _HTTP_O_HEADERS=""
 _HTTP_O_SECRET=""
+_HTTP_O_HAS_SECRET=0
 _HTTP_O_BODY_FILE=""
 _HTTP_O_CTYPE=""
 _HTTP_O_INSECURE=0
@@ -74,9 +76,36 @@ _http_header_ok() {
     return 1
 }
 
-# _http_opts_read_lines -> header lines from stdin into _HTTP_O_SECRET
-# A bad line is named by its number and never quoted, since it may be the secret.
+# Whether the caller was tracing, for `_http_xtrace_restore`.
+_HTTP_XTRACE=0
+
+# _http_xtrace_off -> `set -x` off, and whether it was on kept
+# A trace prints every expansion, so a line that holds a secret header is
+# never run with it on. The headers are tested through `_HTTP_O_HAS_SECRET`.
+_http_xtrace_off() {
+    case $- in
+        *x*) _HTTP_XTRACE=1; set +x ;;
+        *) _HTTP_XTRACE=0 ;;
+    esac
+}
+
+# _http_xtrace_restore -> `set -x` back on where `_http_xtrace_off` found it on
+_http_xtrace_restore() {
+    if [[ "$_HTTP_XTRACE" == "1" ]]; then set -x; fi
+    return 0
+}
+
+# _http_opts_read_lines -> header lines from stdin into _HTTP_O_SECRET, untraced
 _http_opts_read_lines() {
+    local rc
+    _http_xtrace_off
+    _http_opts_read_lines_quiet; rc=$?
+    _http_xtrace_restore
+    return $rc
+}
+
+# A bad line is named by its number and never quoted, since it may be the secret.
+_http_opts_read_lines_quiet() {
     local line n=0 got=0
     while IFS= read -r line || [[ -n "$line" ]]; do
         n=$((n + 1))
@@ -85,6 +114,7 @@ _http_opts_read_lines() {
         _http_header_ok "$line" || { _http_opts_fail "--headers-from line $n is not a header"; return 2; }
         _HTTP_O_SECRET+="${_HTTP_O_SECRET:+$'\n'}$line"
         got=1
+        _HTTP_O_HAS_SECRET=1
     done
     [[ $got -eq 1 ]] || { _http_opts_fail "--headers-from gave no header lines"; return 2; }
 }
@@ -115,7 +145,7 @@ _http_opts_take() {
 
 # _http_opts_parse <args...> -> the module's options taken, the rest in _HTTP_O_REST
 _http_opts_parse() {
-    _HTTP_O_HEADERS=""; _HTTP_O_SECRET=""; _HTTP_O_BODY_FILE=""
+    _HTTP_O_HEADERS=""; _HTTP_O_SECRET=""; _HTTP_O_HAS_SECRET=0; _HTTP_O_BODY_FILE=""
     _HTTP_O_CTYPE=""; _HTTP_O_INSECURE=0; _HTTP_O_REST=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -136,13 +166,13 @@ _http_opts_parse() {
 # Curl for a call with a secret header even where the module sits on wget.
 _http_opts_pick() {
     _HTTP_CALL_IMPL="$_HTTP_IMPL"
-    if [[ -n "$_HTTP_O_SECRET" && "$_HTTP_CALL_IMPL" != "curl" ]] && deps_has curl; then
+    if [[ "$_HTTP_O_HAS_SECRET" == "1" && "$_HTTP_CALL_IMPL" != "curl" ]] && deps_has curl; then
         _HTTP_CALL_IMPL="curl"
     fi
     if [[ "$_HTTP_CALL_IMPL" == "curl" ]]; then
         _HTTP_CALL_BIN="${_TOOL_PATH_curl}"
     else
-        if [[ -n "$_HTTP_O_SECRET" ]]; then
+        if [[ "$_HTTP_O_HAS_SECRET" == "1" ]]; then
             _http_opts_fail "a header read with --headers-from cannot go to wget without being on its command line, and curl is not on this machine"
             return 2
         fi
@@ -193,11 +223,22 @@ _http_opts_curl_config() {
 # Usage: _http_curl_run <curl args...> -> curl's status; the secret headers on its stdin
 #[pub(super)]
 _http_curl_run() {
-    if [[ -n "$_HTTP_O_SECRET" ]]; then
-        _http_opts_curl_config | "$_HTTP_CALL_BIN" -K - "$@"
+    if [[ "$_HTTP_O_HAS_SECRET" == "1" ]]; then
+        # the config is written in a subshell with tracing off, the tool itself traced
+        ( set +x; _http_opts_curl_config ) | "$_HTTP_CALL_BIN" -K - "$@"
     else
         "$_HTTP_CALL_BIN" "$@"
     fi
+}
+
+# Usage: _http_no_rest <caller> -> status 2 naming the first argument the module does not take
+# For a call that has no business handing a tool its flags, where one tool's
+# flag means another thing to the other: wget reads `-o` as its log file, `-k`
+# as convert links, `-L` as relative, `-i` as a list of urls and `-e` as a command.
+#[pub(super)]
+_http_no_rest() {
+    [[ ${#_HTTP_O_REST[@]} -eq 0 ]] && return 0
+    _http_opts_fail "$1 does not take the argument ${_HTTP_O_REST[0]}, only the options of http/opts"
 }
 
 # Usage: _http_prepare <data> <args...> -> options taken, tool picked and written for it, or status 2

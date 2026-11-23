@@ -5,7 +5,8 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# Layer 0 (Core): Depends on deps.sh for tool detection
+# Layer 0 (Core): Depends on deps.sh for tool detection, at the first call that
+# needs a tool
 #
 # Reads and writes JSON through the first of jq, python and perl that `deps`
 # finds, and reads through bash itself where none of the three is there, so a
@@ -16,6 +17,18 @@
 # `json_query` (in `json/query.sh`) runs a jq program through jq, gojq or jaq,
 # whichever `deps` finds first that has the options the call uses, and refuses
 # with status 2 where there is none.
+#
+# A plain path of a document no longer than `_JSON_FLOOR_MAX` bytes and
+# `_JSON_FLOOR_NODES` values is answered by the reader in bash first, with jq
+# or another tool behind it, so a hook that reads one field of its payload on
+# every tool call runs no tool at all. The reader answers only where its text
+# is the tool's to the byte, and hands the rest on (`_json_floor` in
+# `json/impl/bash.sh`). Past either limit the tool is the faster. Setting
+# `_JSON_IMPL` to a backend sends every call to it.
+#
+# `use json` loads the readers and nothing else: `deps`, the tool backends, the
+# builders and `json_query` load at the first call that needs them. Inside a
+# `$(...)` that load is the subshell's and goes with it.
 #
 # A path is the one the toml reader takes: `a.b.0.c`, an integer segment
 # indexing an array, a segment in double quotes one segment whatever it holds
@@ -44,12 +57,14 @@ _NUTSHELL_JSON_SH=1
 # Dependencies
 # -----------------------------------------------------------------------------
 
-# Declared, not sourced by path. A hand-rolled `source` loads the module and
-# hides it from the module-contract check, which reads `use` lines, so the
-# dependency was real and unrecorded at once.
-use deps
-use super::json::build
-use super::json::query
+# Declared, not sourced by path, so the module-contract check sees them. The
+# path language is the toml reader's, and its splitter is loaded as it is
+# rather than copied; the reader in bash is the floor. Both need bash, so a
+# shell without it reads through a tool. `deps`, the backends, `json::build`
+# and `json::query` are `use`d where they are first needed.
+if [ -n "${BASH_VERSION:-}" ]; then
+    use super::toml::impl::bash_path super::json::impl::bash
+fi
 
 # What joins the segments of a path on their way to a backend.
 # A capture under a POSIX shell and the quoting bash has under bash, as in
@@ -60,65 +75,77 @@ else
     _JSON_US="$(printf '\037.')"; _JSON_US="${_JSON_US%.}"
 fi
 
+# The longest document the floor answers for a tool, in bytes, and the most
+# values it parses before handing the question to the tool. The reader in bash
+# costs about 90us a value and a little a byte, and jq two runs of about 4.5ms:
+# measured on this machine, the floor is the faster up to about 32 KB of one
+# long string and up to about 100 values, and the budget sits below that so a
+# document that passes it has cost less than one run of jq before it goes to
+# one. `benches/start-cost` prices the hook path that this is for.
+: "${_JSON_FLOOR_MAX:=32768}"
+: "${_JSON_FLOOR_NODES:=64}"
+
 # -----------------------------------------------------------------------------
 # Backends
 # -----------------------------------------------------------------------------
 #
 # Interchangeable implementations of the same operations, one per tool, in
-# `json/impl/`. They lived here and made this file 940 lines, of which the
-# public surface was the last fifth. The one in bash needs no tool and only
-# reads.
+# `json/impl/`. The one in bash needs no tool and only reads.
 #
-# Every backend whose tool is present is loaded, not only the selected one.
-# Loading one would save little (they are function definitions) and would make
-# `_JSON_IMPL` a decision taken once at load rather than a value the dispatch
-# reads, which is what lets a caller move it and lets the tests exercise all of
-# them rather than whichever the machine happened to pick.
-# Named, not sourced by a path this file assembles. A hand-rolled `source`
-# goes around the resolver, so the file is loaded again for every caller that
-# reaches it, the declaration does not cover it, and nothing can tell before
-# running that the path was wrong.
-deps_has jq                             && use super::json::impl::jq
-{ deps_has python3 || deps_has python; } && use super::json::impl::python
-deps_has perl                           && use super::json::impl::perl
-# The path language is the toml reader's, and its splitter is loaded as it is
-# rather than copied. Both need bash, so a shell without it keeps the tools.
-if [ -n "${BASH_VERSION:-}" ]; then
-    use super::toml::impl::bash_path super::json::impl::bash
-fi
-
-# -----------------------------------------------------------------------------
-# Module Status
-# -----------------------------------------------------------------------------
+# `_JSON_IMPL` is a backend a caller (or a test) named, and empty means the one
+# picked from what `deps` finds, kept in `_JSON_TOOL`. A backend is loaded the
+# first time a call goes to it, named or picked, so a test can still move
+# `_JSON_IMPL` and get the implementation it named.
 
 _JSON_READY=0
 _JSON_ERROR=""
-_JSON_IMPL=""
+_JSON_IMPL="${_JSON_IMPL:-}"
+_JSON_TOOL=""
+_JSON_PICKED=0
 
 #[pub]
-# Pick the backend again, from what `deps` knows now. Run at load, and after
-# `deps_forget` when a tool has come or gone.
+# Pick the backend again, from what `deps` knows now, and forget one a caller
+# named. Run at the first call that needs a tool, and after `deps_forget` when a
+# tool has come or gone.
 # Order: jq, python, perl, then bash, which only reads.
 # Usage: json_detect
 json_detect() {
+    _JSON_IMPL=""
+    _JSON_PICKED=1
     _JSON_READY=1
     _JSON_ERROR=""
-    if deps_has jq && type _json_get_jq >/dev/null 2>&1; then
-        _JSON_IMPL="jq"
-    elif { deps_has python3 || deps_has python; } && type _json_get_python >/dev/null 2>&1; then
-        _JSON_IMPL="python"
-    elif deps_has perl && type _json_get_perl >/dev/null 2>&1; then
-        _JSON_IMPL="perl"
+    use deps || return 1
+    if deps_has jq; then
+        _JSON_TOOL="jq"
+    elif deps_has python3 || deps_has python; then
+        _JSON_TOOL="python"
+    elif deps_has perl; then
+        _JSON_TOOL="perl"
     elif type _json_get_bash >/dev/null 2>&1; then
-        _JSON_IMPL="bash"
+        _JSON_TOOL="bash"
         _JSON_ERROR="No jq, python or perl: reading only"
     else
         _JSON_READY=0
-        _JSON_IMPL=""
+        _JSON_TOOL=""
         _JSON_ERROR="No JSON tool available (need jq, python, perl or bash)"
     fi
 }
-json_detect
+
+# _json_now -> `_JSON_NOW`, the backend this call goes to, loaded; rc 1 where
+# there is none
+_json_now() {
+    [ "$_JSON_PICKED" = "1" ] || json_detect
+    _JSON_NOW="${_JSON_IMPL:-$_JSON_TOOL}"
+    case "$_JSON_NOW" in
+        # Asked of `deps` first, since a backend reads its tool's path as it
+        # loads, and a named one may be one the pick never asked about.
+        jq)     deps_has jq && use super::json::impl::jq ;;
+        python) { deps_has python3 || deps_has python; } && use super::json::impl::python ;;
+        perl)   deps_has perl && use super::json::impl::perl ;;
+        bash)   type _json_get_bash >/dev/null 2>&1 ;;
+        *)      return 1 ;;
+    esac
+}
 
 # _json_segs <path> -> `_js_out`, the segments of a path joined for a backend
 # Status 2 when a quote never closes. The splitter is the toml reader's.
@@ -140,19 +167,35 @@ _json_segs() {
 
 # _json_ready_for <name> -> status 1 with the reason when nothing can read
 _json_ready_for() {
-    [ "$_JSON_READY" = "1" ] && return 0
-    echo "${1}: ${_JSON_ERROR}" >&2
+    _json_now && [ "$_JSON_READY" = "1" ] && return 0
+    echo "${1}: ${_JSON_ERROR:-no backend ${_JSON_NOW:-}}" >&2
     return 1
 }
 
-# _json_needs_tool <name> -> status 2 with the reason when the selected backend
-# cannot write, which is the one in bash.
+# _json_needs_tool <name> -> status 2 with the reason when the backend this call
+# goes to cannot write, which is the one in bash.
 _json_needs_tool() {
-    case "$_JSON_IMPL" in
+    _json_now
+    case "$_JSON_NOW" in
         jq|python|perl) return 0 ;;
     esac
     echo "${1}: needs jq, python or perl, and this machine has none" >&2
     return 2
+}
+
+# _json_read <op> <name> <json> <path> -> what the op prints, from the floor
+# where it answers and from the backend otherwise
+_json_read() {
+    local op="$1" name="$2" json="${3:-}" rc
+    [ -z "$json" ] && return 1
+    _json_segs "${4:-}" || return 2
+    if [ -z "$_JSON_IMPL" ] && [ "${#json}" -le "$_JSON_FLOOR_MAX" ] \
+        && type _json_floor >/dev/null 2>&1; then
+        rc=0; _json_floor "$op" "$json" "$_js_out" || rc=$?
+        [ "$rc" -le 1 ] && return "$rc"
+    fi
+    _json_ready_for "$name" || return 1
+    "_json_${op}_${_JSON_NOW}" "$json" "$_js_out"
 }
 
 # -----------------------------------------------------------------------------
@@ -166,36 +209,14 @@ _json_needs_tool() {
 # Usage: json_get '[1,2,3]' "1" -> "2"
 # Usage: json_get '{"k.d":{"z":1}}' '"k.d".z' -> "1"
 # Returns: The value at the path; status 1 when there is none
-json_get() {
-    local json="${1:-}"
-    [ -z "$json" ] && return 1
-    _json_ready_for json_get || return 1
-    _json_segs "${2:-}" || return 2
-    case "$_JSON_IMPL" in
-        jq)     _json_get_jq "$json" "$_js_out" ;;
-        python) _json_get_python "$json" "$_js_out" ;;
-        perl)   _json_get_perl "$json" "$_js_out" ;;
-        bash)   _json_get_bash "$json" "$_js_out" ;;
-    esac
-}
+json_get() { _json_read get json_get "$@"; }
 
 #[pub]
 # Get all keys at a path in JSON
 # Usage: json_keys '{"a":1,"b":2}' -> prints "a" and "b" on separate lines
 # Usage: json_keys '{"x":{"y":1}}' "x" -> prints "y"
 # Returns: Keys, one per line
-json_keys() {
-    local json="${1:-}"
-    [ -z "$json" ] && return 1
-    _json_ready_for json_keys || return 1
-    _json_segs "${2:-}" || return 2
-    case "$_JSON_IMPL" in
-        jq)     _json_keys_jq "$json" "$_js_out" ;;
-        python) _json_keys_python "$json" "$_js_out" ;;
-        perl)   _json_keys_perl "$json" "$_js_out" ;;
-        bash)   _json_keys_bash "$json" "$_js_out" ;;
-    esac
-}
+json_keys() { _json_read keys json_keys "$@"; }
 
 #[pub]
 # Check if JSON is valid
@@ -205,13 +226,9 @@ json_keys() {
 json_valid() {
     local json="${1:-}"
     [ -z "$json" ] && return 1
+    _json_now || return 1
     [ "$_JSON_READY" != "1" ] && return 1
-    case "$_JSON_IMPL" in
-        jq)     _json_valid_jq "$json" ;;
-        python) _json_valid_python "$json" ;;
-        perl)   _json_valid_perl "$json" ;;
-        bash)   _json_valid_bash "$json" ;;
-    esac
+    "_json_valid_${_JSON_NOW}" "$json"
 }
 
 #[pub]
@@ -223,47 +240,28 @@ json_valid() {
 # Usage: json_type 'true' -> "boolean"
 # Usage: json_type 'null' -> "null"
 # Returns: "object", "array", "string", "number", "boolean", or "null"
-json_type() {
-    local json="${1:-}"
-    [ -z "$json" ] && return 1
-    _json_ready_for json_type || return 1
-    _json_segs "${2:-}" || return 2
-    case "$_JSON_IMPL" in
-        jq)     _json_type_jq "$json" "$_js_out" ;;
-        python) _json_type_python "$json" "$_js_out" ;;
-        perl)   _json_type_perl "$json" "$_js_out" ;;
-        bash)   _json_type_bash "$json" "$_js_out" ;;
-    esac
-}
+json_type() { _json_read type json_type "$@"; }
 
 #[pub]
 # Get the length of a JSON array or object
 # Usage: json_length '[1,2,3]' -> "3"
 # Usage: json_length '{"a":1,"b":2}' -> "2"
 # Returns: Length as number
-json_length() {
-    local json="${1:-}"
-    [ -z "$json" ] && return 1
-    _json_ready_for json_length || return 1
-    _json_segs "${2:-}" || return 2
-    case "$_JSON_IMPL" in
-        jq)     _json_length_jq "$json" "$_js_out" ;;
-        python) _json_length_python "$json" "$_js_out" ;;
-        perl)   _json_length_perl "$json" "$_js_out" ;;
-        bash)   _json_length_bash "$json" "$_js_out" ;;
-    esac
-}
+json_length() { _json_read length json_length "$@"; }
 
 #[pub]
 # Check if a path exists in JSON
 # Usage: json_has '{"a":{"b":1}}' "a.b" -> returns 0 (exists)
 # Usage: json_has '{"a":1}' "b" -> returns 1 (not found)
-# Returns: 0 if path exists, 1 otherwise
+# Returns: 0 if path exists and is neither null nor empty, 1 otherwise
 json_has() {
-    local json="${1:-}"
-    local path="${2:-}"
-
-    local result
+    local json="${1:-}" path="${2:-}" result rc
+    [ -z "$json" ] && return 1
+    if [ -z "$_JSON_IMPL" ] && [ "${#json}" -le "$_JSON_FLOOR_MAX" ] \
+        && type _json_floor >/dev/null 2>&1 && _json_segs "$path" 2>/dev/null; then
+        rc=0; _json_floor has "$json" "$_js_out" || rc=$?
+        [ "$rc" -le 1 ] && return "$rc"
+    fi
     result=$(json_get "$json" "$path" 2>/dev/null)
     [ -n "$result" ] && [ "$result" != "null" ]
 }
@@ -302,11 +300,7 @@ json_set() {
     _json_needs_tool json_set || return 2
     [ -z "$json" ] && return 1
     _json_segs "${2:-}" || return 2
-    case "$_JSON_IMPL" in
-        jq)     _json_set_jq "$json" "$_js_out" "$value" ;;
-        python) _json_set_python "$json" "$_js_out" "$value" ;;
-        perl)   _json_set_perl "$json" "$_js_out" "$value" ;;
-    esac
+    "_json_set_${_JSON_NOW}" "$json" "$_js_out" "$value"
 }
 
 #[pub]
@@ -317,11 +311,7 @@ json_delete() {
     local json="${1:-}"
     _json_needs_tool json_delete || return 2
     _json_segs "${2:-}" || return 2
-    case "$_JSON_IMPL" in
-        jq)     _json_delete_jq "$json" "$_js_out" ;;
-        python) _json_delete_python "$json" "$_js_out" ;;
-        perl)   _json_delete_perl "$json" "$_js_out" ;;
-    esac
+    "_json_delete_${_JSON_NOW}" "$json" "$_js_out"
 }
 
 #[pub]
@@ -331,11 +321,7 @@ json_delete() {
 json_merge() {
     local json1="${1:-\{\}}" json2="${2:-\{\}}"
     _json_needs_tool json_merge || return 2
-    case "$_JSON_IMPL" in
-        jq)     _json_merge_jq "$json1" "$json2" ;;
-        python) _json_merge_python "$json1" "$json2" ;;
-        perl)   _json_merge_perl "$json1" "$json2" ;;
-    esac
+    "_json_merge_${_JSON_NOW}" "$json1" "$json2"
 }
 
 #[pub]
@@ -346,11 +332,7 @@ json_pretty() {
     local json="${1:-}"
     _json_needs_tool json_pretty || return 2
     [ -z "$json" ] && return 1
-    case "$_JSON_IMPL" in
-        jq)     _json_pretty_jq "$json" ;;
-        python) _json_pretty_python "$json" ;;
-        perl)   _json_pretty_perl "$json" ;;
-    esac
+    "_json_pretty_${_JSON_NOW}" "$json"
 }
 
 #[pub]
@@ -361,11 +343,7 @@ json_compact() {
     local json="${1:-}"
     _json_needs_tool json_compact || return 2
     [ -z "$json" ] && return 1
-    case "$_JSON_IMPL" in
-        jq)     _json_compact_jq "$json" ;;
-        python) _json_compact_python "$json" ;;
-        perl)   _json_compact_perl "$json" ;;
-    esac
+    "_json_compact_${_JSON_NOW}" "$json"
 }
 
 #[pub]
@@ -395,6 +373,55 @@ json_read() {
     cat "$file"
 }
 
+#[pub]
+# Create a simple JSON object from key-value pairs, with no tool
+# Usage: json_object "key1" "value1" "key2" "value2" -> '{"key1":"value1","key2":"value2"}'
+# Returns: JSON object
+json_object() {
+    use super::json::build || return 1
+    _json_object_build "$@"
+}
+
+#[pub]
+# Create a JSON array from values, with no tool
+# Usage: json_array "a" "b" "c" -> '["a","b","c"]'
+# Returns: JSON array
+json_array() {
+    use super::json::build || return 1
+    _json_array_build "$@"
+}
+
+#[pub]
+# Run a jq program over a document, through jq, gojq or jaq, whichever `deps`
+# finds first that has every option the call uses. Strings come back bare and
+# everything else compact, so `json_query '.a | length' "$doc"` prints `3`.
+# The document is the operand after the filter, or stdin when there is none.
+# Options, before or after the filter; `--` ends them, so a filter or a
+# document that starts with `-` follows a `--`:
+#   -r  strings bare (already the default)    --json  strings as JSON text
+#   -j  join output, no newline after each    -c      compact (the default)
+#   -n  null input        -s  slurp        -R  raw input
+#   -e  the status follows the last result (jq's: 1 false or null, 4 none)
+#   --arg <name> <text>   --argjson <name> <json>
+#   --slurpfile <name> <file>   --rawfile <name> <file>
+#   --args  every operand after the filter is a string in `$ARGS.positional`,
+#           and the document is stdin
+#   and the long forms --raw-output --join-output --compact-output
+#   --null-input --slurp --raw-input --exit-status
+# Usage: json_query '.items[] | .name' "$json"
+# Usage: curl -s "$url" | json_query '.total'
+# Usage: json_query -n --arg k "$key" --argjson v "$val" '{($k): $v}'
+# Usage: json_query -n --args '$ARGS.positional' "$a" "$b"
+# Returns: what the program printed. Status 2 is a refusal: no jq family tool
+# is here, or none that has an option the call uses (the refusal names it), an
+# option none of them has, or more operands than a filter and a document. 1
+# for no filter, and for a query the tool failed, its own status 2 included
+# (a file `--slurpfile` cannot open); otherwise the tool's status.
+json_query() {
+    use super::json::query || return 2
+    _json_query_run "$@"
+}
+
 # -----------------------------------------------------------------------------
 # Module Status Functions
 # -----------------------------------------------------------------------------
@@ -403,6 +430,7 @@ json_read() {
 # Check if JSON module can read
 # Usage: json_ready -> returns 0 if it can, 1 if not
 json_ready() {
+    _json_now
     [ "$_JSON_READY" = "1" ]
 }
 
@@ -410,12 +438,14 @@ json_ready() {
 # Get JSON module error (if not ready), or the note that it only reads
 # Usage: json_error -> prints error message
 json_error() {
+    _json_now
     echo "$_JSON_ERROR"
 }
 
 #[pub]
-# Get which JSON implementation is being used
+# Get which JSON implementation a call that needs a tool goes to
 # Usage: json_impl -> "jq" | "python" | "perl" | "bash" | ""
 json_impl() {
-    echo "$_JSON_IMPL"
+    _json_now
+    echo "$_JSON_NOW"
 }

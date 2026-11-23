@@ -28,14 +28,18 @@
 # value, as jq does, in the place of its first. Segments of a path arrive
 # already split by the caller, joined by the unit separator, and the first path
 # that does not lead anywhere is a miss with status 1.
+#
+# `_JB_ODDN` says the document has a number jq may print another way than it
+# was written (a fraction, an exponent, more digits than a double keeps), and
+# `_JB_ODDS` a string it would not (a NUL, a surrogate with no pair).
 
 [ -n "${_NUTSHELL_JSON_IMPL_BASH_PARSE_SH:-}" ] && return 0
 _NUTSHELL_JSON_IMPL_BASH_PARSE_SH=1
 
-declare -gA _JB_T=() _JB_V=() _JB_C=() _JB_CH=() _JB_KY=() _JB_KI=()
+declare -gA _JB_T=() _JB_V=() _JB_C=() _JB_CH=() _JB_KY=() _JB_KI=() _JB_UC=()
 declare -ga _jb_stk=()
 _JB_SRC="" _JB_SO=0 _JB_LEN=0 _jb_s="" _jb_key=""
-_JB_ID=0 _JB_TEXT="" _JB_RC=1 _JB_CHUNK=256 _JB_DEPTH=400
+_JB_ID=0 _JB_TEXT="" _JB_RC=1 _JB_CHUNK=256 _JB_DEPTH=400 _JB_ODDN=0 _JB_ODDS=0 _JB_MAXN=0
 _JB_US=$'\x1f'
 _JB_WS=$' \t\n\r'
 _JB_RE_STR=$'^"[^"\\\\\x01-\x1f]*(\\\\.[^"\\\\\x01-\x1f]*)*"'
@@ -79,42 +83,59 @@ _jb_utf8() {
 # _jb_decode <body> -> `_jb_str`, a string's body with its escapes decoded; rc
 # 1 for an escape JSON does not have
 _jb_decode() {
-    local m="$1" c h lo
+    local m="$1" h lo seg dg i n f="" IFS
+    local -a part
     _jb_str=""
-    while [[ "$m" == *\\* ]]; do
-        _jb_str+="${m%%\\*}"
-        m="${m#*\\}"
-        c="${m:0:1}" m="${m:1}"
-        case "$c" in
-            '"'|'\'|/) _jb_str+="$c" ;;
-            b) _jb_str+=$'\b' ;;
-            f) _jb_str+=$'\f' ;;
-            n) _jb_str+=$'\n' ;;
-            r) _jb_str+=$'\r' ;;
-            t) _jb_str+=$'\t' ;;
-            u)
-                h="${m:0:4}"
-                [[ "$h" =~ ^[0-9A-Fa-f]{4}$ ]] || return 1
-                m="${m:4}" h=$(( 16#$h ))
-                if (( h >= 0xD800 && h < 0xDC00 )); then
-                    lo="${m:2:4}"
-                    if [[ "${m:0:2}" == '\u' && "$lo" =~ ^[0-9A-Fa-f]{4}$ ]] \
-                        && (( 16#$lo >= 0xDC00 && 16#$lo < 0xE000 )); then
-                        h=$(( 0x10000 + (h - 0xD800) * 0x400 + 16#$lo - 0xDC00 ))
-                        m="${m:6}"
-                    else
-                        h=0xFFFD
-                    fi
-                elif (( h >= 0xDC00 && h < 0xE000 )); then
-                    h=0xFFFD
-                fi
-                (( h )) || continue
-                _jb_utf8 "$h"
-                _jb_str+="$_jb_u" ;;
-            *) return 1 ;;
-        esac
+    if [[ "$m" != *\\* ]]; then _jb_str="$m"; return 0; fi
+    # Every escape by a substitution over the whole body, a pass in C each:
+    # one at a time, each cut copied the rest, and a 2 KB command with a
+    # hundred escapes took 5ms. A literal backslash is held as 0x01 meanwhile,
+    # a byte a JSON string cannot hold raw, so `\\n` stays a backslash and an
+    # `n`; it is put back in the text between the `\u`s, never in what a `\u`
+    # decodes to. Each `\u` becomes 0x02, which splits the body into the text
+    # before the first and, for each, its four digits and the text after.
+    m="${m//\\\\/$'\x01'}"
+    m="${m//\\\"/\"}" m="${m//\\\//\/}"
+    m="${m//\\b/$'\b'}" m="${m//\\f/$'\f'}" m="${m//\\n/$'\n'}"
+    m="${m//\\r/$'\r'}" m="${m//\\t/$'\t'}"
+    m="${m//\\u/$'\x02'}"
+    [[ "$m" == *\\* || "$m" == *$'\x02' ]] && return 1
+    if [[ "$m" != *$'\x02'* ]]; then _jb_str="${m//$'\x01'/\\}"; return 0; fi
+    [[ "$-" == *f* ]] && f=1
+    set -f; IFS=$'\x02'; part=($m); IFS=$' \t\n'
+    [[ -n "$f" ]] || set +f
+    _jb_str="${part[0]//$'\x01'/\\}"
+    n=${#part[@]}
+    for (( i = 1; i < n; i++ )); do
+        seg="${part[i]}" h="${part[i]:0:4}"
+        # What a code point outside the surrogates decodes to is kept, by its
+        # digits: a command repeats the same few escapes.
+        if [[ -n "${_JB_UC[$h]+x}" ]]; then
+            seg="${seg:4}"; _jb_str+="${_JB_UC[$h]}${seg//$'\x01'/\\}"
+            continue
+        fi
+        [[ "$h" == [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f] ]] || return 1
+        seg="${seg:4}" dg="$h" h=$(( 16#$h ))
+        if (( h >= 0xD800 && h < 0xDC00 )); then
+            lo="${part[i+1]-}"; lo="${lo:0:4}"
+            if [[ -z "$seg" && "$lo" =~ ^[0-9A-Fa-f]{4}$ ]] \
+                && (( 16#$lo >= 0xDC00 && 16#$lo < 0xE000 )); then
+                h=$(( 0x10000 + (h - 0xD800) * 0x400 + 16#$lo - 0xDC00 ))
+                i=$(( i + 1 )); seg="${part[i]:4}"
+            else
+                h=0xFFFD _JB_ODDS=1
+            fi
+        elif (( h >= 0xDC00 && h < 0xE000 )); then
+            h=0xFFFD _JB_ODDS=1
+        fi
+        if (( h )); then
+            _jb_utf8 "$h"; _jb_str+="$_jb_u"
+            (( 16#$dg >= 0xD800 && 16#$dg < 0xE000 )) || _JB_UC[$dg]="$_jb_u"
+        else
+            _JB_ODDS=1
+        fi
+        _jb_str+="${seg//$'\x01'/\\}"
     done
-    _jb_str+="$m"
 }
 
 # _jb_string -> `_jb_str`, the string at the front of the buffer, decoded and
@@ -158,6 +179,7 @@ _jb_parse() {
     local st=v c m p d
     _jb_stk=() _jb_s=""
     while :; do
+        (( ! _JB_MAXN || _JB_ID <= _JB_MAXN )) || return 3
         (( ${#_jb_s} >= 64 )) || _jb_more
         if [[ "$_jb_s" == [$_JB_WS]* ]]; then
             _jb_s="${_jb_s#"${_jb_s%%[!$_JB_WS]*}"}"
@@ -208,7 +230,8 @@ _jb_parse() {
                 m="${BASH_REMATCH[0]}"
                 _jb_s="${_jb_s:${#m}}"
                 _jb_place
-                _JB_T[$_jb_n]=number _JB_V[$_jb_n]="$m" ;;
+                _JB_T[$_jb_n]=number _JB_V[$_jb_n]="$m"
+                [[ "$m" == *[.eE]* || ${#m} -gt 15 ]] && _JB_ODDN=1 ;;
             [vV][tfn])
                 case "${_jb_s:0:5}" in
                     true*)  m=true  _jb_s="${_jb_s:4}"; _jb_place; _JB_T[$_jb_n]=boolean ;;
@@ -227,20 +250,27 @@ _jb_parse() {
     [[ "$st" == e ]]
 }
 
-# _jb_load <text> -> 0 parsed, 1 not JSON. The last document is kept.
+# _jb_load <text> -> 0 parsed, 1 not JSON, 3 more than `_JB_MAXN` values where
+# that is set above zero (the caller then asks a tool). The last document is
+# kept.
 # The toml module reads its tools' JSON with it, so it is the library's.
 #[pub(lib)]
 _jb_load() {
     local LC_ALL=C
     [[ "$_JB_TEXT" == "$1" && -n "$1" ]] && return "$_JB_RC"
     _JB_T=() _JB_V=() _JB_C=() _JB_CH=() _JB_KY=() _JB_KI=()
-    _JB_SRC="$1" _JB_LEN=${#1} _JB_SO=0 _JB_ID=0 _JB_RC=0
-    _jb_parse || _JB_RC=1
+    _JB_SRC="$1" _JB_LEN=${#1} _JB_SO=0 _JB_ID=0 _JB_RC=0 _JB_ODDN=0 _JB_ODDS=0
+    _jb_parse || _JB_RC=$?
     _JB_SRC="" _jb_s="" _JB_TEXT="$1"
+    # Past the budget is no answer about the document, so it is not kept.
+    if (( _JB_RC == 3 )); then _JB_TEXT=""; return 3; fi
+    (( _JB_RC == 0 )) || _JB_RC=1
     return "$_JB_RC"
 }
 
-# _jb_find <path> -> `_jb_node`, the node a path names; rc 1 for none
+# _jb_find <path> -> `_jb_node`, the node a path names; rc 1 for none. With
+# `_JB_JQ_PATH` set, rc 3 where jq reads the path another way: a segment of
+# digits it takes for an index on an object, any other on an array.
 #[pub(super)]
 _jb_find() {
     local rest="${1:-}" seg node=0 i
@@ -250,10 +280,12 @@ _jb_find() {
         [[ -n "$seg" ]] || continue
         case "${_JB_T[$node]}" in
             array)
+                if [[ -n "${_JB_JQ_PATH:-}" && "$seg" == *[!0-9]* ]]; then return 3; fi
                 [[ "$seg" =~ ^[0-9]{1,9}$ ]] || return 1
                 (( 10#$seg < _JB_C[$node] )) || return 1
                 node="${_JB_CH[$node.$(( 10#$seg ))]}" ;;
             object)
+                if [[ -n "${_JB_JQ_PATH:-}" && "$seg" != *[!0-9]* ]]; then return 3; fi
                 i="${_JB_KI[$node$_JB_US$seg]-}"
                 [[ -n "$i" ]] || return 1
                 node="${_JB_CH[$node.$i]}" ;;

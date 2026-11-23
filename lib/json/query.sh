@@ -4,24 +4,26 @@
 # Part of nutshell - Everything you need, in a nutshell.
 # https://github.com/orgrinrt/nutshell
 #
-# `json_query` and the options it passes on. Loaded by `lib/json.sh`, which is
-# where a caller gets it from.
+# `json_query` and the options it passes on. Loaded by `lib/json.sh` at the
+# first call, which is where a caller gets it from.
 #
 # The options are the ones the workspace's scripts call jq with: variables
 # (`--arg`, `--argjson`, `--slurpfile`, `--rawfile`), the shape of the input
-# (`-n`, `-s`, `-R`) and of the output (`-r`, `-j`, `-c`, `--json`), and `-e`.
+# (`-n`, `-s`, `-R`) and of the output (`-r`, `-j`, `-c`, `--json`), `-e`, and
+# `--args`, which makes the operands after the filter `$ARGS.positional`.
 # A short option may be clustered (`-nc`, `-Rs`). An option may stand before or
 # after the filter, as jq takes them, and `--` ends the options.
 #
 # Written with `case` and positional parameters, not arrays, so a shell with
 # neither still loads it.
 #
-# Which tool has an option is read from the tool: `-e`, `--slurpfile` and
-# `--rawfile` are not in every version of each (jq has no `--rawfile` before
-# 1.6), so the first call that needs one asks the tool for its `--help` and
-# looks for the option's long name there, once per process for each tool. The
-# rest every jq, gojq and jaq takes. A tool whose help lacks an option is
-# passed over for the next that has it, or the call is refused.
+# Which tool has an option is read from the tool: `-e`, `--slurpfile`,
+# `--rawfile` and `--args` are not in every version of each (jq has neither
+# `--rawfile` nor `--args` before 1.6), so the first call that needs one asks
+# the tool for its `--help` and looks for the option's long name there, once
+# per process for each tool. The rest every jq, gojq and jaq takes. A tool
+# whose help lacks an option is passed over for the next that has it, or the
+# call is refused.
 # =============================================================================
 
 [ -n "${_NUTSHELL_JSON_QUERY_SH:-}" ] && return 0
@@ -45,7 +47,7 @@ _json_q_lacks() {
     local flag="$2" _jqh
     case "$2" in
         -e) flag="--exit-status" ;;
-        --slurpfile | --rawfile) ;;
+        --slurpfile | --rawfile | --args) ;;
         *) return 1 ;;
     esac
     _json_q_help "$1"
@@ -53,6 +55,20 @@ _json_q_lacks() {
         *"$flag"*) return 1 ;;
     esac
     return 0
+}
+
+# _json_q_sq <text> -> `_jqs`, the text single-quoted for an `eval`, so the
+# positionals of `--args` are kept with no array, as the rest of this file is.
+_json_q_sq() {
+    local r="$1"
+    _jqs=""
+    while :; do
+        case "$r" in
+            *"'"*) _jqs="${_jqs}${r%%"'"*}'\\''"; r="${r#*"'"}" ;;
+            *)     _jqs="${_jqs}${r}"; break ;;
+        esac
+    done
+    _jqs="'${_jqs}'"
 }
 
 # _json_q_refuse <option...> -> says why no tool here can make the call
@@ -71,31 +87,12 @@ _json_q_refuse() {
     echo "json_query: needs jq, gojq or jaq, and this machine has none" >&2
 }
 
-#[pub]
-# Run a jq program over a document, through jq, gojq or jaq, whichever `deps`
-# finds first that has every option the call uses. Strings come back bare and
-# everything else compact, so `json_query '.a | length' "$doc"` prints `3`.
-# The document is the operand after the filter, or stdin when there is none.
-# Options, before or after the filter; `--` ends them, so a filter or a
-# document that starts with `-` follows a `--`:
-#   -r  strings bare (already the default)    --json  strings as JSON text
-#   -j  join output, no newline after each    -c      compact (the default)
-#   -n  null input        -s  slurp        -R  raw input
-#   -e  the status follows the last result (jq's: 1 false or null, 4 none)
-#   --arg <name> <text>   --argjson <name> <json>
-#   --slurpfile <name> <file>   --rawfile <name> <file>
-#   and the long forms --raw-output --join-output --compact-output
-#   --null-input --slurp --raw-input --exit-status
-# Usage: json_query '.items[] | .name' "$json"
-# Usage: curl -s "$url" | json_query '.total'
-# Usage: json_query -n --arg k "$key" --argjson v "$val" '{($k): $v}'
-# Returns: what the program printed. Status 2 is a refusal: no jq family tool
-# is here, or none that has an option the call uses (the refusal names it), an
-# option none of them has, or more operands than a filter and a document. 1
-# for no filter, and for a query the tool failed, its own status 2 included
-# (a file `--slurpfile` cannot open); otherwise the tool's status.
-json_query() {
+# What `json_query` in `lib/json.sh` runs, where its documentation is.
+# Usage: _json_query_run [options] <filter> [document | positional...]
+#[pub(super)]
+_json_query_run() {
     local raw=1 join="" nullin="" slurp="" rawin="" want_e="" needs="" flags
+    local argsmode="" pos="" posdash="" _jqs
     local a rest ch u filter="" doc="" havedoc="" nops=0 t tool="" bin nm v rc
     local opts=1
     u=$#
@@ -124,6 +121,7 @@ json_query() {
                 --slurp)          slurp=1; a="" ;;
                 --raw-input)      rawin=1; a="" ;;
                 --exit-status)    want_e=1; needs="${needs} -e"; a="" ;;
+                --args)           argsmode=1; needs="${needs} --args"; a="" ;;
                 --*)
                     echo "json_query: no option ${a} here" >&2
                     return 2 ;;
@@ -150,8 +148,14 @@ json_query() {
                 shift; u=$((u - 1)); continue
             fi
         fi
-        # An operand: the filter, then the document.
+        # An operand: the filter, then the document, or after `--args` each
+        # one positional.
         nops=$((nops + 1))
+        if [ "$nops" -gt 1 ] && [ -n "$argsmode" ]; then
+            _json_q_sq "$a"; pos="${pos} ${_jqs}"
+            case "$a" in -*) posdash=1 ;; esac
+            shift; u=$((u - 1)); continue
+        fi
         case "$nops" in
             1) filter="$a" ;;
             2) doc="$a"; havedoc=1 ;;
@@ -192,6 +196,12 @@ json_query() {
     [ -n "$want_e" ] && flags="${flags} -e"
     # shellcheck disable=SC2086
     set -- $flags "$@" "$filter"
+    if [ -n "$argsmode" ]; then
+        set -- "$@" --args
+        # A positional led by a dash would be read as an option.
+        [ -z "$posdash" ] || set -- "$@" --
+        eval "set -- \"\$@\" $pos"
+    fi
     if [ -n "$havedoc" ]; then
         printf '%s\n' "$doc" | "$bin" "$@"
     else

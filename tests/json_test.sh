@@ -239,6 +239,8 @@ it_tells_a_json_literal_from_a_string() {
     # in either direction: too loose and a string gets injected into the jq
     # program unquoted, too tight and a number arrives quoted.
     deps_has jq || { skip "jq is not on this machine"; return 0; }
+    # A read alone loads no backend; a call that needs jq loads it.
+    json_valid '{}'
 
     for v in 1 -1 0 1.5 -1.5 10 -0.25 true false null '[1]' '[]' '{}' '{"a":1}'; do
         assert_ok _jq_is_json_literal "$v"
@@ -258,6 +260,7 @@ it_builds_a_path_that_tells_an_index_from_a_name() {
     # 0.1, not the second element. Bracket form for both, and a name quoted so
     # a key holding a dash or a space stays one segment.
     deps_has jq || { skip "jq is not on this machine"; return 0; }
+    json_valid '{}'
 
     # Segments arrive already split, joined by the unit separator, so a key
     # holding a dot is one segment.

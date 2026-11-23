@@ -6,7 +6,7 @@
 #
 # `json_object` and `json_array`: text assembled and escaped in the shell, so
 # they work on a machine with none of jq, python and perl. Loaded by
-# `lib/json.sh`, which is where a caller gets them from.
+# `lib/json.sh` at the first call of either, which is where a caller gets them.
 
 [ -n "${_NUTSHELL_JSON_BUILD_SH:-}" ] && return 0
 _NUTSHELL_JSON_BUILD_SH=1
@@ -28,11 +28,10 @@ fi
 
 # -----------------------------------------------------------------------------
 
-#[pub]
-# Create a simple JSON object from key-value pairs
-# Usage: json_object "key1" "value1" "key2" "value2" -> '{"key1":"value1","key2":"value2"}'
-# Returns: JSON object
-json_object() {
+# What `json_object` in `lib/json.sh` prints, where its documentation is.
+# Usage: _json_object_build "key1" "value1" ... -> the object
+#[pub(super)]
+_json_object_build() {
     local result="{"
     local first=1
 
@@ -58,11 +57,10 @@ json_object() {
     echo "$result"
 }
 
-#[pub]
-# Create a JSON array from values
-# Usage: json_array "a" "b" "c" -> '["a","b","c"]'
-# Returns: JSON array
-json_array() {
+# What `json_array` in `lib/json.sh` prints.
+# Usage: _json_array_build "a" "b" ... -> the array
+#[pub(super)]
+_json_array_build() {
     local result="["
     local first=1
 

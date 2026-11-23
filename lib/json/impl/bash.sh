@@ -131,3 +131,71 @@ _json_length_bash() {
         *)            return 1 ;;
     esac
 }
+
+# -----------------------------------------------------------------------------
+# Answering on jq's behalf
+# -----------------------------------------------------------------------------
+#
+# `lib/json.sh` asks the floor first for a plain path of a small document, with
+# jq or another tool behind it, so a hook reading one field of its payload
+# runs no tool at all. The floor answers only where its text is the tool's to
+# the byte; anything else it hands back. The document has to parse; a string
+# in it has to be one jq prints as written (valid UTF-8, no NUL, no lone
+# surrogate); a number in the answer has to be one jq prints as written; and
+# the path has to mean to the floor what it means to jq.
+
+# _jb_utf8_ok <text> -> rc 0 where the text is UTF-8 throughout. Each well
+# formed sequence is replaced by one ASCII byte, so two fragments of a bad one
+# never meet, and any byte above 0x7f left over is bad. The last answer is
+# kept with its text.
+_JB_U8_TEXT="" _JB_U8_RC=0
+_jb_utf8_ok() {
+    local LC_ALL=C s="$1" c=$'[\x80-\xbf]'
+    [[ "$s" == "$_JB_U8_TEXT" ]] && return "$_JB_U8_RC"
+    s="${s//$'\xf0'[$'\x90'-$'\xbf']$c$c/.}"
+    s="${s//[$'\xf1'-$'\xf3']$c$c$c/.}"
+    s="${s//$'\xf4'[$'\x80'-$'\x8f']$c$c/.}"
+    s="${s//$'\xe0'[$'\xa0'-$'\xbf']$c/.}"
+    s="${s//[$'\xe1'-$'\xec'$'\xee'$'\xef']$c$c/.}"
+    s="${s//$'\xed'[$'\x80'-$'\x9f']$c/.}"
+    s="${s//[$'\xc2'-$'\xdf']$c/.}"
+    _JB_U8_TEXT="$1" _JB_U8_RC=0
+    [[ "$s" == *[$'\x80'-$'\xff']* ]] && _JB_U8_RC=1
+    return "$_JB_U8_RC"
+}
+
+# _json_floor <get|has|type|keys|length> <json> <segments> -> what the tool
+# would print; rc 0 answered, 1 not there, 3 the tool's to answer
+# Usage: _json_floor get "$json" "$segments" -> the value, as jq prints it
+#[pub(super)]
+_json_floor() {
+    local LC_ALL=C op="$1" t s _JB_JQ_PATH=1 rc=0 _JB_MAXN="${_JSON_FLOOR_NODES:-64}"
+    _jb_load "$2" || return 3
+    (( _JB_ODDS )) && [[ "$op" != type ]] && return 3
+    if [[ "$2" == *[$'\x80'-$'\xff']* ]]; then _jb_utf8_ok "$2" || return 3; fi
+    _jb_find "${3:-}" || rc=$?
+    case "$rc" in 0) ;; 1) return 1 ;; *) return 3 ;; esac
+    t="${_JB_T[$_jb_node]}"
+    case "$op:$t" in
+        get:array|get:object)
+            (( _JB_ODDN )) && return 3
+            _jb_acc=""; _jb_render "$_jb_node"; printf '%s\n' "$_jb_acc" ;;
+        get:number)
+            s="${_JB_V[$_jb_node]}"
+            [[ "$s" == *[.eE]* || ${#s} -gt 15 ]] && return 3
+            printf '%s\n' "$s" ;;
+        get:*)        printf '%s\n' "${_JB_V[$_jb_node]}" ;;
+        # What `json_has` meant through a capture of `json_get`: present, and
+        # printing neither nothing nor `null` once trailing newlines are cut.
+        has:null)     return 1 ;;
+        has:string)
+            s="${_JB_V[$_jb_node]}"
+            while [[ "$s" == *$'\n' ]]; do s="${s%$'\n'}"; done
+            [[ -n "$s" && "$s" != null ]] || return 1 ;;
+        has:*)        return 0 ;;
+        type:*)       printf '%s\n' "$t" ;;
+        keys:array|keys:object) _json_keys_bash "$2" "${3:-}" ;;
+        length:array|length:object|length:string|length:null) _json_length_bash "$2" "${3:-}" ;;
+        *)            return 3 ;;
+    esac
+}

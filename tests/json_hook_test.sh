@@ -171,3 +171,18 @@ it_loads_no_tool_backend_writer_or_deps_for_a_read() {
     assert_contains "$out" "deps after a write"
     assert_contains "$out" '{"k":"v"}'
 }
+
+#[test]
+it_hands_a_document_of_more_values_than_the_floor_budget_to_jq() {
+    _jh_spy || return 0
+    local i doc="[" n=$(( _JSON_FLOOR_NODES + 1 ))
+    for (( i = 0; i < n; i++ )); do doc+="$i,"; done
+    doc+="7]"
+    assert_eq "$(json_get "$doc" "$n")" "7"
+    assert_ne "$(_jh_runs)" "0"
+    : > "$_JH_LOG"
+    doc='[1,2,7]'
+    assert_eq "$(json_get "$doc" 2)" "7"
+    assert_eq "$(_jh_runs)" "0"
+    rm -rf "$_JH_DIR"
+}

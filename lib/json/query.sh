@@ -91,6 +91,7 @@ _json_q_refuse() {
 # Usage: _json_query_run [options] <filter> [document | positional...]
 #[pub(super)]
 _json_query_run() {
+    local IFS=$' \t\n'
     local raw=1 join="" nullin="" slurp="" rawin="" want_e="" needs="" flags
     local argsmode="" pos="" posdash="" _jqs
     local a rest ch u filter="" doc="" havedoc="" nops=0 t tool="" bin nm v rc

@@ -453,6 +453,7 @@ reset_counters() {
 # A banner above a whole check.
 # Usage: log_header "POSIX floor"
 log_header() {
+    local IFS=$' \t\n'
     echo ""
     echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════════════${NC}"
     echo -e "${BOLD}${BLUE}  $*${NC}"
@@ -464,6 +465,7 @@ log_header() {
 # A divider inside a check, for its parts.
 # Usage: log_section "the files that parse"
 log_section() {
+    local IFS=$' \t\n'
     echo ""
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────────${NC}"
     echo -e "${CYAN}  $*${NC}"
@@ -474,6 +476,7 @@ log_section() {
 # Names the case about to run. Counts nothing.
 # Usage: log_test "reads every module"
 log_test() {
+    local IFS=$' \t\n'
     echo -e "${BLUE}[TEST]${NC} $*"
 }
 
@@ -481,6 +484,7 @@ log_test() {
 # One case passed. Counts toward run and passed.
 # Usage: log_pass "every module reads"
 log_pass() {
+    local IFS=$' \t\n'
     TESTS_PASSED=$((TESTS_PASSED + 1))
     TESTS_RUN=$((TESTS_RUN + 1))
 
@@ -502,6 +506,7 @@ log_pass() {
 # summary at the end.
 # Usage: log_fail "lib/toml.sh cannot be read"
 log_fail() {
+    local IFS=$' \t\n'
     echo -e "${RED}  ✗${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -512,6 +517,7 @@ log_fail() {
 # One case is worth reporting and does not fail the check.
 # Usage: log_test_warn "lib/toml.sh - 86 uses of [["
 log_test_warn() {
+    local IFS=$' \t\n'
     echo -e "${YELLOW}  ⚠${NC} $*"
     TESTS_WARNED=$((TESTS_WARNED + 1))
     WARNED_TESTS+=("$*")
@@ -521,6 +527,7 @@ log_test_warn() {
 # Something worth saying that is not a verdict. Counts nothing.
 # Usage: log_test_info "checking with dash"
 log_test_info() {
+    local IFS=$' \t\n'
     echo -e "${BLUE}  ℹ${NC} $*"
 }
 
@@ -528,6 +535,7 @@ log_test_info() {
 # One case was not run, and why. Counts nothing.
 # Usage: log_skip "no POSIX shell on this machine"
 log_skip() {
+    local IFS=$' \t\n'
     echo -e "${MAGENTA}  ○${NC} $* (skipped)"
 }
 

@@ -114,6 +114,20 @@ map_new() {
     eval "_map_keys_$1=''"
 }
 
+# A walk of the key list splits on whitespace, whatever IFS the caller holds.
+# POSIX has no `local`, so the caller's IFS is kept here and put back by
+# `_map_ifs_leave`; no function that enters returns between the two.
+_map_ifs_enter() {
+    _map_ifs_set="${IFS+s}"
+    _map_ifs_val="${IFS-}"
+    IFS=' 	
+'
+}
+
+_map_ifs_leave() {
+    if [ -n "$_map_ifs_set" ]; then IFS="$_map_ifs_val"; else unset IFS; fi
+}
+
 #[pub]
 # Forget every key in a map.
 # Usage: map_clear counts
@@ -122,6 +136,7 @@ map_clear() {
     [ -n "${1:-}" ] || return 1
     _mc_k=""
     eval "_mc_all=\"\${_map_keys_$1:-}\""
+    _map_ifs_enter
     for _mc_k in $_mc_all; do
         # Both, because the presence table is what `map_has` and `map_set`
         # read. Unsetting only the value left the key present but unlisted: the
@@ -130,6 +145,7 @@ map_clear() {
         # A key `map_get` returns and `map_len` cannot count.
         eval "unset _map_v_$1_$_mc_k _map_set_$1_$_mc_k"
     done
+    _map_ifs_leave
     eval "_map_keys_$1=''"
 }
 
@@ -196,10 +212,12 @@ map_del() {
     eval "unset _map_v_${_md_n}_${_md_e} _map_set_${_md_n}_${_md_e}"
     _md_new=""
     eval "_md_all=\"\${_map_keys_${_md_n}:-}\""
+    _map_ifs_enter
     for _md_k in $_md_all; do
         [ "$_md_k" = "$_md_e" ] && continue
         _md_new="${_md_new} ${_md_k}"
     done
+    _map_ifs_leave
     eval "_map_keys_${_md_n}=\"\$_md_new\""
 }
 
@@ -211,7 +229,9 @@ map_len() {
     [ -n "${1:-}" ] || return 1
     eval "_ml_all=\"\${_map_keys_$1:-}\""
     _ml_n=0
+    _map_ifs_enter
     for _ml_k in $_ml_all; do _ml_n=$(( _ml_n + 1 )); done
+    _map_ifs_leave
     printf '%s' "$_ml_n"
 }
 
@@ -224,10 +244,12 @@ map_keys() {
     _map_name_ok "${1:-}" || return 1
     [ -n "${1:-}" ] || return 1
     eval "_mk_all=\"\${_map_keys_$1:-}\""
+    _map_ifs_enter
     for _mk_k in $_mk_all; do
         _map_decode "$_mk_k"
         printf '\n'
     done
+    _map_ifs_leave
 }
 
 # The encoding, backwards.

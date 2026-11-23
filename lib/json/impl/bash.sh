@@ -11,8 +11,8 @@
 # What comes back is what the other backends print: a container compact with
 # its keys sorted bytewise (code point order for UTF-8), a string bare, any
 # other scalar as the document wrote it. A number is returned as written, so
-# `1e3` stays `1e3` where jq spells it `1E+3`; that is the one place the
-# backends can differ for a valid document.
+# `1e3` stays `1e3`; the other backends hand a number, and a container with
+# one spelled in a way their own printer would change, to this reader.
 #
 # `lib/json/impl/bash_parse.sh` holds the parser and the path walk.
 
@@ -88,6 +88,7 @@ _jb_at() {
     _jb_find "${2:-}"
 }
 
+#[pub(super)]
 _json_get_bash() {
     local LC_ALL=C
     _jb_at "$1" "${2:-}" || return 1
@@ -141,8 +142,9 @@ _json_length_bash() {
 # runs no tool at all. The floor answers only where its text is the tool's to
 # the byte; anything else it hands back. The document has to parse; a string
 # in it has to be one jq prints as written (valid UTF-8, no NUL, no lone
-# surrogate); a number in the answer has to be one jq prints as written; and
-# the path has to mean to the floor what it means to jq.
+# surrogate); and the path has to mean to the floor what it means to jq. A
+# number is never handed back: every backend prints it as the document wrote
+# it, so the floor's answer is the one they give.
 
 # _jb_utf8_ok <text> -> rc 0 where the text is UTF-8 throughout. Each well
 # formed sequence is replaced by one ASCII byte, so two fragments of a bad one
@@ -179,12 +181,7 @@ _json_floor() {
     t="${_JB_T[$_jb_node]}"
     case "$op:$t" in
         get:array|get:object)
-            (( _JB_ODDN )) && return 3
             _jb_acc=""; _jb_render "$_jb_node"; printf '%s\n' "$_jb_acc" ;;
-        get:number)
-            s="${_JB_V[$_jb_node]}"
-            [[ "$s" == *[.eE]* || ${#s} -gt 15 ]] && return 3
-            printf '%s\n' "$s" ;;
         get:*)        printf '%s\n' "${_JB_V[$_jb_node]}" ;;
         # What `json_has` meant through a capture of `json_get`: present, and
         # printing neither nothing nor `null` once trailing newlines are cut.

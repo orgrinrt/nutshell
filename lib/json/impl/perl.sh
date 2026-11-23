@@ -35,11 +35,17 @@
 [ -n "${_NUTSHELL_JSON_IMPL_PERL_SH:-}" ] && return 0
 _NUTSHELL_JSON_IMPL_PERL_SH=1
 
-# _json_pl <operation> <arguments...>
+# _json_pl <operation> <document> <arguments...>
+#
+# The document goes in on stdin: as an argument the kernel caps it at about
+# 128 KB, and a document past that came back as nothing.
 _json_pl() {
-    "${_TOOL_PATH_perl}" -MJSON::PP -e '
+    local op="$1" doc="$2"
+    shift 2
+    printf '%s' "$doc" | "${_TOOL_PATH_perl}" -MJSON::PP -e '
         use strict;
         use warnings;
+        use B;
 
         # UTF-8 out. Without it a character string is written byte by byte and
         # anything outside ASCII arrives mangled.
@@ -56,6 +62,18 @@ _json_pl() {
 
         my ($op, @args) = @ARGV;
 
+        # The document, which comes on stdin, as the first argument.
+        binmode(STDIN);
+        unshift @args, do { local $/; my $text = <STDIN>; defined $text ? $text : "" };
+
+        # A fraction or an exponent, or a number too long for a native one,
+        # becomes an object so that the read can tell it was one. Only a get
+        # asks, since every float is slower as an object.
+        if ($op eq "get" || $op eq "getn") {
+            $in->allow_bignum;
+            $coder->allow_bignum;
+        }
+
         # Walk a path, its segments joined by the unit separator. Returns (found, value) so an absent key is told
         # apart from one present and holding null, which the caller turns into
         # a status. Answering "null" for both is what the other two backends
@@ -64,7 +82,7 @@ _json_pl() {
             my ($data, $path) = @_;
             for my $part (grep { $_ ne "" } split /\x1f/, $path) {
                 if (ref($data) eq "ARRAY") {
-                    return (0, undef) unless $part =~ /^\d+$/ && $part < scalar(@$data);
+                    return (0, undef) unless $part =~ /^[0-9]+\z/ && $part < scalar(@$data);
                     $data = $data->[$part];
                 } elsif (ref($data) eq "HASH") {
                     return (0, undef) unless exists $data->{$part};
@@ -82,10 +100,26 @@ _json_pl() {
             return "boolean" if JSON::PP::is_bool($v);
             return "object"  if ref($v) eq "HASH";
             return "array"   if ref($v) eq "ARRAY";
-            # A scalar that has been used as a number is one. Perl does not
-            # otherwise distinguish, and the document said which it was.
-            return "number"  if $v =~ /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$/;
+            # Perl keeps what the decoder made a number apart from what it made a
+            # string only in the flags of the scalar, and a number too long for
+            # a native one comes as an object. Reading the text of the value
+            # called the string `"1"` a number.
+            return "number"  if ref($v) =~ /^Math::Big/;
+            my $f = B::svref_2object(\$v)->FLAGS;
+            return "number"  if ($f & (B::SVp_IOK | B::SVp_NOK)) && !($f & B::SVp_POK);
             return "string";
+        }
+
+        # Whether a node is, or holds, a number perl does not print as it was
+        # written: a fraction or an exponent comes back as an object, and `-0`
+        # as 0, which is told from a plain 0 by the text of the document.
+        sub odd {
+            my ($v, $doc) = @_;
+            return 1 if ref($v) =~ /^Math::Big/;
+            if (ref($v) eq "ARRAY") { odd($_, $doc) && return 1 for @$v; return 0; }
+            if (ref($v) eq "HASH")  { odd($_, $doc) && return 1 for values %$v; return 0; }
+            return 0 unless kind($v) eq "number";
+            return $v == 0 && $doc =~ /-0(?![0-9.eE])/ ? 1 : 0;
         }
 
         sub emit {
@@ -107,10 +141,17 @@ _json_pl() {
         exit 1 if $@;
 
         my $path = defined $args[1] ? $args[1] : "";
+        # Keys came out of the decoder as characters, so the path has to be
+        # characters too, or `é` on argv is two bytes that match no key.
+        utf8::decode($path);
 
-        if ($op eq "get") {
+        if ($op eq "get" || $op eq "getn") {
             my ($found, $v) = walk($data, $path);
             exit 1 unless $found;
+            # A number is spelled by the document, and perl respells it, `1e3` as
+            # `1000`, in a container as much as alone. 7 says so where the node
+            # is or holds one, and the caller has it read again.
+            exit 7 if $op eq "get" && odd($v, $args[0]);
             emit($v);
         } elsif ($op eq "keys") {
             my ($found, $v) = walk($data, $path);
@@ -125,9 +166,12 @@ _json_pl() {
         } elsif ($op eq "length") {
             my ($found, $v) = walk($data, $path);
             exit 1 unless $found;
-            if (ref($v) eq "ARRAY")   { print scalar(@$v), "\n"; }
-            elsif (ref($v) eq "HASH") { print scalar(keys %$v), "\n"; }
-            else                      { print length($v), "\n"; }
+            my $k = kind($v);
+            if ($k eq "array")       { print scalar(@$v), "\n"; }
+            elsif ($k eq "object")   { print scalar(keys %$v), "\n"; }
+            elsif ($k eq "string")   { print length($v), "\n"; }
+            elsif ($k eq "null")     { print "0\n"; }
+            else                      { exit 1; }
         } elsif ($op eq "pretty") {
             print JSON::PP->new->canonical->pretty->encode($data);
         } elsif ($op eq "compact") {
@@ -184,10 +228,14 @@ _json_pl() {
             exit 2;
         }
         exit 0;
-    ' "$@" 2>/dev/null
+    ' "$op" "$@" 2>/dev/null
 }
 
+# 7 is a number, or a container holding one, that perl would respell; see
+# `_json_read` in `json.sh`, which has it read again. `getn` keeps perl's own
+# spelling, for a shell without the reader in bash.
 _json_get_perl()     { _json_pl get "$1" "${2:-}"; }
+_json_getn_perl()    { _json_pl getn "$1" "${2:-}"; }
 _json_set_perl()     { _json_pl set "$1" "$2" "$3"; }
 _json_keys_perl()    { _json_pl keys "$1" "${2:-}"; }
 _json_valid_perl()   { _json_pl valid "$1"; }

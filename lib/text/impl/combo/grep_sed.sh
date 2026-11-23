@@ -27,6 +27,7 @@
 _text_grep_sed_filtered_replace_impl() {
     local filter="${1:-}"
     local search="${2:-}"
+    local IFS=$' \t\n'
     local replace="${3:-}"
     local file="${4:-}"
     

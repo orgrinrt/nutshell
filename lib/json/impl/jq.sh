@@ -79,37 +79,76 @@ _jq_is_number() {
     return 0
 }
 
-# _jq_present <json> <segments> -> 0 when the path leads somewhere
+# The reading half of this file, one jq run per call.
 #
-# jq answers `null` both for a key that is absent and for one that is present
-# and holds null, and both with a status of zero. A caller cannot tell those
-# apart, and `json_get_or` has to.
-_jq_present() {
-    local json="$1" segs="${2:-}" parent last answer
-    [ -z "$segs" ] && return 0
+# The document is read as text and parsed by `fromjson`, which takes exactly one
+# value: trailing text, a second value and nothing at all are all "not JSON".
+# jq's own reader is more generous than JSON is (`01`, `.5`, `1.`, `+1`, `NaN`
+# and `Infinity` are all numbers to it), so the text is checked first against
+# what JSON allows, by one anchored pattern with no backtracking. A `gsub` and
+# a `scan` over the text did the same and are quadratic in jq 1.7: a megabyte of
+# small tokens took minutes.
+#
+# A path is walked here, in jq, by what each node is: a segment of digits
+# indexes an array and is just a key on an object, `"0"` included, and any other
+# segment on an array is not there. Building the walk as `.a[0]` made a digit
+# key on an object an error, and a path that leads nowhere an exit of 5, which
+# is jq's own and outside the status this module gives. `halt_error` ends the
+# run with the status chosen: 1 is "not there", 7 is "a number", which
+# `_json_get_jq` hands to the reader in bash so it prints as the document wrote
+# it.
+_JQ_READ_DEFS='
+def strict:
+    test("\\A(?:\"(?:[^\"\\\\]|\\\\.)*+\"|[\\s\\[\\]{},:]++|-?(?:0|[1-9][0-9]*+)(?:\\.[0-9]++)?(?:[eE][+-]?[0-9]++)?(?![0-9.eE+\\-])|true|false|null)*+\\z");
+def step($s):
+    if type == "object" then (if has($s) then .[$s] else empty end)
+    elif type == "array" then
+        (if ($s | test("^[0-9]+\\z")) then
+            (($s | tonumber) as $i | if $i < length then .[$i] else empty end)
+         else empty end)
+    else empty end;
+def at($p): if ($p | length) == 0 then . else (step($p[0]) | at($p[1:])) end;
+def nope: "" | halt_error(1);
+# A digit and then an exponent mark outside a string, in the text of the document
+# and not in what jq prints: jq spells `1e-5` as `0.00001`. One linear pass.
+def hasexp: $raw | test("\\A(?:\"(?:[^\"\\\\]|\\\\.)*+\"|[^\"0-9]|[0-9](?![eE]))*+[0-9][eE]");
+# jq 1.7 keeps the text of a number through `fromjson` and `tojson` except for an
+# exponent; 1.6 turns the number into a double and prints that.
+def keeps: (1.50 | tojson) == "1.50";
+def holds: [.. | numbers] | length > 0;
+def odd:
+    if keeps then (holds and hasexp)
+    else [.. | numbers | tojson | select(test("[.eE]|[0-9]{16}"))] | length > 0 end;
+def doc: if strict then (try fromjson catch nope) else nope end;
+def read(f):
+    ([doc | at($segs | split("\u001f") | map(select(. != "")))]) as $r
+    | if ($r | length) == 0 then nope else $r[0] | f end;
+'
 
-    case "$segs" in
-        *"$_JSON_US"*) last="${segs##*"$_JSON_US"}"; parent="$(_jq_path "${segs%"$_JSON_US"*}")" ;;
-        *)             last="$segs"; parent="." ;;
-    esac
-    _jq_lit "$last"
-
-    answer="$(printf '%s' "$json" | "${_TOOL_PATH_jq}" -r \
-        "${parent} | if type == \"object\" then has(${_jq_e})
-         elif type == \"array\" then ((${_jq_e} | tonumber? // -1) as \$i
-              | \$i >= 0 and \$i < length)
-         else false end" 2>/dev/null)"
-    [ "$answer" = "true" ]
+# _jq_read <json> <segments> <program over the node, in `f`> -> what it prints;
+# status 1 where the document is not one JSON value, the path leads nowhere or
+# the program ends the run, 7 where it did so for a number
+_jq_read() {
+    local rc=0
+    printf '%s\n' "$1" | "${_TOOL_PATH_jq}" -R -s -c -S -r --arg segs "${2:-}" \
+        ". as \$raw | ${_JQ_READ_DEFS} read($3)" 2>/dev/null || rc=$?
+    [ "$rc" -eq 0 ] || [ "$rc" -eq 7 ] || rc=1
+    return "$rc"
 }
 
+# A number is printed as the document wrote it, which jq 1.7 does for everything
+# but an exponent: `1e3` is `1E+3`, in a container as much as alone. So jq ends
+# the run with 7 where the node is, or holds, a number and the document has an
+# exponent outside a string, and `json.sh` has another reader answer. A jq that
+# does not keep the text (1.6) says 7 for a fraction, an exponent or sixteen
+# digits as well. `_json_getn_jq` is what jq prints itself, where there is no
+# other reader, and with it; `_json_getn_jq` is what jq
+# itself prints, for a shell without that reader.
 _json_get_jq() {
-    local json="${1:-}" path="${2:-}" expr
-
-    _jq_present "$json" "$path" || return 1
-
-    expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -c -S -r "$expr" 2>/dev/null
+    _jq_read "${1:-}" "${2:-}" 'if odd then ("" | halt_error(7)) else . end'
 }
+
+_json_getn_jq() { _jq_read "${1:-}" "${2:-}" '.'; }
 
 # Whether the value is already a JSON literal: a keyword, a number, an array or
 # an object. Everything else is a string.
@@ -135,16 +174,16 @@ _json_set_jq() {
 }
 
 _json_keys_jq() {
-    local json="${1:-}" path="${2:-}" expr
-    expr="$(_jq_path "$path")"
     # Status 1 where there is no such path or it holds a scalar, as the other
-    # readers give; jq itself exits 5.
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | if type == \"array\" then range(length) else keys[] end" 2>/dev/null || return 1
+    # readers give.
+    _jq_read "${1:-}" "${2:-}" 'if type == "array" then range(length) elif type == "object" then keys[] else nope end'
 }
 
 _json_valid_jq() {
-    local json="${1:-}"
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -e . >/dev/null 2>&1
+    # One value and no more, and only what JSON allows, as the other readers
+    # have it: `-e` alone says `null` is false and reads a second value as
+    # another document.
+    printf '%s\n' "${1:-}" | "${_TOOL_PATH_jq}" -R -s -e ". as \$raw | ${_JQ_READ_DEFS} strict and (try (fromjson | true) catch false)" >/dev/null 2>&1 || return 1
 }
 
 _json_pretty_jq() {
@@ -158,17 +197,14 @@ _json_compact_jq() {
 }
 
 _json_type_jq() {
-    local json="${1:-}" path="${2:-}" expr
-    _jq_present "$json" "$path" || return 1
-    expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | type" 2>/dev/null || return 1
+    _jq_read "${1:-}" "${2:-}" 'type'
 }
 
+# A string is counted in characters, null is empty, and a number or a boolean has
+# no length: status 1, as the reader in bash gives. jq would count the size of a
+# number and refuse a boolean.
 _json_length_jq() {
-    local json="${1:-}" path="${2:-}" expr
-    _jq_present "$json" "$path" || return 1
-    expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | length" 2>/dev/null || return 1
+    _jq_read "${1:-}" "${2:-}" 'if type == "array" or type == "object" or type == "string" then length elif type == "null" then 0 else nope end'
 }
 
 # `*` recurses into objects where python's `update` and perl's slice assignment

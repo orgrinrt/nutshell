@@ -182,6 +182,7 @@ fail() {
 # from a test body where they are.
 # Usage: skip "jq is not on this machine" ; return 0
 skip() {
+    local IFS=$' \t\n'
     _test_mark s
     printf 'skipped: %s\n' "${*:-no reason given}"
     return 0
@@ -195,6 +196,14 @@ assert_empty() {
     _test_failed "expected nothing, got [$1]" ${2:+"     $2"}
 }
 
+# The words of a command as one line, spaced, whatever IFS the caller holds. A
+# local IFS here and not in the assertions, which run the command and so must
+# leave the IFS it was called under alone.
+_test_words() {
+    local IFS=$' \t\n'
+    printf '%s' "$*"
+}
+
 #[pub]
 # Usage: assert_ok some_command args -> 0 when it succeeds
 assert_ok() {
@@ -202,7 +211,7 @@ assert_ok() {
     local rc=0
     "$@" || rc=$?
     [ "$rc" -eq 0 ] && return 0
-    _test_failed "expected success from [$*], got exit ${rc}"
+    _test_failed "expected success from [$(_test_words "$@")], got exit ${rc}"
 }
 
 #[pub]
@@ -214,7 +223,7 @@ assert_ok() {
 assert_fails() {
     _test_asserted
     if "$@"; then
-        _test_failed "expected failure from [$*], got success"
+        _test_failed "expected failure from [$(_test_words "$@")], got success"
         return 1
     fi
     return 0
@@ -257,7 +266,7 @@ assert_refused() {
     # Loud about which one, since a control that has stopped controlling is
     # indistinguishable from a suite with nothing wrong in it.
     _TEST_QUIET=""
-    _test_failed "expected [$*] to refuse, and it passed"
+    _test_failed "expected [$(_test_words "$@")] to refuse, and it passed"
 }
 
 #[pub]
@@ -272,7 +281,7 @@ assert_exits() {
     local rc=0
     "$@" || rc=$?
     [ "$rc" -eq "$want" ] && return 0
-    _test_failed "expected exit [${want}] from [$*]" "     got exit [${rc}]"
+    _test_failed "expected exit [${want}] from [$(_test_words "$@")]" "     got exit [${rc}]"
 }
 
 # -----------------------------------------------------------------------------

@@ -50,21 +50,48 @@ _json_python_cmd() {
 # _json_py <operation> <arguments...>
 #
 # `-` as the program path means "read the program from stdin", which keeps the
-# program and the document on separate channels.
+# program and the document on separate channels. The document is on a third, fd 3:
+# an argument is capped at about 128 KB by the kernel, and a document past it
+# came back as nothing. The arguments after it are the path and the value.
 _json_py() {
-    local python_cmd
+    local python_cmd op="$1" doc="$2"
     python_cmd="$(_json_python_cmd)"
-    "$python_cmd" - "$@" <<'PYTHON' 2>/dev/null
+    shift 2
+    "$python_cmd" - "$op" "$@" <<'PYTHON' 3<<NUTSHELL_JSON_DOCUMENT 2>/dev/null
 import json
+import os
 import sys
 
 op = sys.argv[1]
-args = sys.argv[2:]
+# The heredoc that carries the document ends it with one newline of its own.
+with os.fdopen(3, "rb") as fd:
+    document = fd.read().decode("utf-8", "surrogateescape")
+if document.endswith("\n"):
+    document = document[:-1]
+args = [document] + sys.argv[2:]
+
+
+# A number as the document spelled it. Python reads `1e3` as 1000.0 and `-0` as 0,
+# so a read that prints a number keeps the text of each one it parses, here, and
+# `dump` and `emit` print it back as it came.
+class Num:
+    __slots__ = ("text",)
+
+    def __init__(self, text):
+        self.text = text
 
 
 def dump(value):
-    return json.dumps(value, separators=(",", ":"), sort_keys=True,
-                      ensure_ascii=False)
+    """Compact, keys sorted, text left as UTF-8; a `Num` as it was written."""
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            json.dumps(k, ensure_ascii=False) + ":" + dump(value[k])
+            for k in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ",".join(dump(v) for v in value) + "]"
+    if isinstance(value, Num):
+        return value.text
+    return json.dumps(value, ensure_ascii=False)
 
 
 def emit(value):
@@ -76,6 +103,8 @@ def emit(value):
         print("true")
     elif value is False:
         print("false")
+    elif isinstance(value, Num):
+        print(value.text)
     elif isinstance(value, str):
         # Bare, the way jq -r gives it, so a string is usable as a shell value
         # without stripping quotes off it first.
@@ -84,20 +113,31 @@ def emit(value):
         print(json.dumps(value))
 
 
+def is_index(part):
+    return part != "" and all(c in "0123456789" for c in part)
+
+
 def walk(data, path):
     """Follow a path, its segments joined by the unit separator.
 
-    Raises when the path does not lead anywhere, which the caller turns into a
-    status of 1: an absent key is absent, and answering `null` cannot be told
-    apart from a key that is present and holds null.
+    A segment of digits indexes an array and is a plain key on an object; any
+    other segment on an array is not there, which a signed or spaced number
+    would otherwise be (`int("-1")` is the last element). Raises when the path
+    does not lead anywhere, which the caller turns into a status of 1: an absent
+    key is absent, and answering `null` cannot be told apart from a key that is
+    present and holds null.
     """
     for part in path.split("\x1f"):
         if not part:
             continue
         if isinstance(data, list):
+            if not is_index(part):
+                raise KeyError(part)
             data = data[int(part)]
-        else:
+        elif isinstance(data, dict):
             data = data[part]
+        else:
+            raise KeyError(part)
     return data
 
 
@@ -121,10 +161,6 @@ def parent_and_last(data, path):
     for part in parts[:-1]:
         current = current[int(part)] if isinstance(current, list) else current[part]
     return current, parts[-1]
-
-
-def is_index(part):
-    return part != "" and all(c in "0123456789" for c in part)
 
 
 def container_for(part):
@@ -159,12 +195,23 @@ def assign(node, parts, value):
     return node
 
 
+def refuse(name):
+    """`NaN` and `Infinity` are not JSON, which python reads unless told not to."""
+    raise ValueError(name)
+
+
+def load(text, keep=False):
+    if keep:
+        return json.loads(text, parse_constant=refuse, parse_int=Num, parse_float=Num)
+    return json.loads(text, parse_constant=refuse)
+
+
 def main():
     if op == "valid":
-        json.loads(args[0])
+        load(args[0])
         return 0
 
-    data = json.loads(args[0])
+    data = load(args[0], op == "get")
     path = args[1] if len(args) > 1 else ""
 
     if op == "get":
@@ -182,7 +229,13 @@ def main():
     elif op == "type":
         print(kind(walk(data, path)))
     elif op == "length":
-        print(len(walk(data, path)))
+        target = walk(data, path)
+        if target is None:
+            print(0)
+        elif isinstance(target, (dict, list, str)):
+            print(len(target))
+        else:
+            return 1
     elif op == "pretty":
         print(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False))
     elif op == "compact":
@@ -190,7 +243,7 @@ def main():
     elif op == "set":
         raw = args[2]
         try:
-            value = json.loads(raw)
+            value = load(raw)
         except ValueError:
             value = raw
         data = assign(data, [p for p in path.split("\x1f") if p], value)
@@ -207,7 +260,7 @@ def main():
         # replaces them, so one call built a different document depending on
         # the tool; the contract is that the right operand replaces a key
         # rather than merging into it.
-        data.update(json.loads(args[1]))
+        data.update(load(args[1]))
         print(dump(data))
     else:
         return 2
@@ -219,6 +272,8 @@ try:
 except (KeyError, IndexError, TypeError, ValueError):
     sys.exit(1)
 PYTHON
+${doc}
+NUTSHELL_JSON_DOCUMENT
 }
 
 _json_get_python()     { _json_py get "$1" "${2:-}"; }

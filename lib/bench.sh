@@ -66,7 +66,7 @@ declare -ga _BENCH_TARGET_MS=()
 # Name the question this bench answers. The first line of every report and of
 # every record it writes.
 # Usage: bench_case "what a map costs without bash arrays"
-bench_case() { BENCH_TITLE="$*"; }
+bench_case() { local IFS=$' \t\n'; BENCH_TITLE="$*"; }
 
 #[pub]
 # How to ask an arm what answer it produced.

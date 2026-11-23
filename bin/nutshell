@@ -90,7 +90,9 @@ source "${_NUTSHELL_HOME}/init" || {
 # names is a stub that loads its module on the first call, the way
 # `nut_lazy_guard` works for `text`, so a script that calls none of them pays
 # for nothing. Defined before the pin block, so a module it loads overwrites
-# the stubs and not the other way round.
+# the stubs and not the other way round. A function the script defines itself
+# in place of a stub is not overwritten by a later `use`: see
+# `_nut_prelude_keep`.
 _nut_prelude() {
     local _np_fn="$2" _np_key="_NUT_PRELUDE_${2}"
     if [[ -n "${!_np_key:-}" ]]; then
@@ -104,11 +106,13 @@ _nut_prelude() {
 }
 
 # All the stubs in one `eval`. `read` without `-r` joins a row's continued
-# lines.
+# lines. The rows are kept for `_nut_prelude_keep`.
+_NUT_PRELUDE_ROWS=""
 _nut_prelude_stubs() {
     local mod fns f src=""
     while read mod fns; do
         case "$mod" in ""|"#"*) continue ;; esac
+        _NUT_PRELUDE_ROWS+="${mod} ${fns}"$'\n'
         for f in $fns; do
             # A function already there is the real one, from a shell that
             # loaded its module before sourcing this file.
@@ -119,6 +123,48 @@ _nut_prelude_stubs() {
     eval "$src"
 }
 _nut_prelude_stubs
+
+# _nut_prelude_keep <file> -> `_NUT_PK`, the definitions to put back after the
+# module at <file> is sourced: each function its row names that is there and
+# is not a stub, so one the script wrote itself.
+#
+# On dev the interpreter loaded `extern` and `log` before the script, so a
+# script's own `log_warn` survived a later `use log`, which loaded nothing.
+# Now that `use` loads the module, it would go over the script's function;
+# `use` calls this first, sources, then evals what it left. One capture of the
+# row's definitions for each first load of a module the table names; a script
+# with no function of its own in the row pays only that.
+_NUT_PRELUDE_FILES=""
+_nut_prelude_keep() {
+    _NUT_PK=""
+    local mod fns f have="" user="" src stub
+    if [[ -z "$_NUT_PRELUDE_FILES" ]]; then
+        # Built at the first load, so a script that loads nothing pays nothing.
+        _NUT_PRELUDE_FILES=$'\n'
+        while read -r mod fns; do
+            [[ -n "$mod" ]] || continue
+            _lib_nut_lookup_to "$_NUTSHELL_HOME" "$mod" any || continue
+            _nut_realpath_to "$_NUT_LK" || continue
+            _NUT_PRELUDE_FILES+="${_nr}"$'\x1f'"${mod} ${fns}"$'\n'
+        done <<< "$_NUT_PRELUDE_ROWS"
+    fi
+    [[ "$_NUT_PRELUDE_FILES" == *$'\n'"$1"$'\x1f'* ]] || return 0
+    fns="${_NUT_PRELUDE_FILES#*$'\n'"$1"$'\x1f'}"
+    fns="${fns%%$'\n'*}"
+    mod="${fns%% *}"; fns="${fns#* }"
+    for f in $fns; do
+        declare -F "$f" >/dev/null && have+=" $f"
+    done
+    [[ -n "$have" ]] || return 0
+    # shellcheck disable=SC2086
+    src="$(declare -f $have)"
+    for f in $have; do
+        stub="${f} () "$'\n'"{ "$'\n'"    _nut_prelude ${mod} ${f} \"\$@\""$'\n'"}"
+        [[ "$src" == *"$stub"* ]] || user+=" $f"
+    done
+    # shellcheck disable=SC2086
+    [[ -z "$user" ]] || _NUT_PK="$(declare -f $user)"
+}
 
 # =============================================================================
 # The engine pin

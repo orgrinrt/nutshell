@@ -288,6 +288,15 @@ use() {
             else
                 _nut_loaded_set LOADED_AS "$mod" "$_real"
             fi
+            # Under `bin/nutshell`, a function the script wrote itself in
+            # place of one of the interpreter's stubs is put back after the
+            # module goes over it, as it stood on dev. `_nut_prelude_keep`
+            # says which; local, as the module's own `use`s come through here.
+            local _pk=""
+            if [[ -n "${_NUT_PRELUDE_ROWS:-}" ]]; then
+                _nut_prelude_keep "$_real"
+                _pk="$_NUT_PK"
+            fi
             if ! source "$mod_path"; then
                 # Failed to load, so it is not loaded. Leaving the mark would
                 # make a later retry silently succeed against a module that was
@@ -297,6 +306,7 @@ use() {
                 _nut_loaded_unset LOADED_AS "${_real}::${mod}"
                 return 1
             fi
+            [[ -z "$_pk" ]] || eval "$_pk"
         else
             echo "nutshell: unknown module '$mod'" >&2
             echo "  Available: $(ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | tr '\n' ' ')" >&2

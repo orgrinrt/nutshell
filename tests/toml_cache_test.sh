@@ -329,3 +329,148 @@ _toml_cache_trusted() {
     rm -rf "$_TC_D"
     assert_eq "$out" "first"
 }
+
+# _tc_tools <dir> <log> -> fake `taplo`, `yq` and `find` in <dir>: the first two
+# answer `--version` and fail every other call, so they can serve no file, and
+# all three log each call that is not a version probe. `find` then runs the
+# real one, on the PATH the test had.
+_tc_tools() {
+    local d="$1" log="$2" t
+    mkdir -p "$d"
+    for t in taplo yq; do
+        printf '#!/bin/sh\ncase "$*" in\n  *--version*) echo "%s 9.9.9" ;;\n  *) echo "%s $*" >> "%s"; exit 1 ;;\nesac\n' \
+            "$t" "$t" "$log" > "$d/$t"
+        chmod +x "$d/$t"
+    done
+    printf '#!/bin/sh\necho "find $*" >> "%s"\nPATH="%s" exec find "$@"\n' "$log" "$PATH" > "$d/find"
+    chmod +x "$d/find"
+}
+
+#[test]
+it_answers_toml_get_from_a_kept_tree_without_running_a_backend() {
+    # Every backend is a fake on PATH that logs being run. A process with a kept
+    # tree for the text answers from it; the same process with no kept tree runs
+    # one, which is the positive control that the fakes are the ones deps finds.
+    _tc_fresh
+    local log="$_TC_D/log" out ctl
+    : > "$log"
+    _tc_tools "$_TC_D/bin" "$log"
+    _tc_read package.name > /dev/null
+    out="$(env -i HOME="$HOME" PATH="$_TC_D/bin:$PATH" XDG_CACHE_HOME="$_TC_D/cache" \
+        bash -c '. "$1" || exit 1; use toml; toml_get "$2/nut.toml" package.name' _ "$INIT" "$_TC_D" 2>&1)"
+    assert_eq "$out" "first"
+    assert_eq "$(grep -c -E '^(taplo|yq) ' "$log")" "0" "a backend ran with a kept tree"
+    ctl="$(env -i HOME="$HOME" PATH="$_TC_D/bin:$PATH" XDG_CACHE_HOME="$_TC_D/other" \
+        bash -c '. "$1" || exit 1; use toml; toml_get "$2/nut.toml" package.name' _ "$INIT" "$_TC_D" 2>&1)"
+    assert_eq "$ctl" "first"
+    [[ "$(grep -c -E '^(taplo|yq) ' "$log")" -gt 0 ]]
+    assert_eq "$?" "0" "the fakes are run where no tree is kept"
+    rm -rf "$_TC_D"
+}
+
+#[test]
+it_answers_toml_to_json_from_a_kept_tree_without_running_a_backend() {
+    _tc_fresh
+    local log="$_TC_D/log" out
+    : > "$log"
+    _tc_tools "$_TC_D/bin" "$log"
+    _tc_read package.name > /dev/null
+    out="$(env -i HOME="$HOME" PATH="$_TC_D/bin:$PATH" XDG_CACHE_HOME="$_TC_D/cache" \
+        bash -c '. "$1" || exit 1; use toml::json; toml_to_json "$2/nut.toml"' _ "$INIT" "$_TC_D" 2>&1)"
+    assert_eq "$out" '{"package":{"name":"first"},"deps":{"paths":{"jq":"/opt/jq"}}}'
+    assert_eq "$(grep -c -E '^(taplo|yq) ' "$log")" "0" "a backend ran with a kept tree"
+    rm -rf "$_TC_D"
+}
+
+# _tc_two <log> <script> -> a process that reads two files, `a.toml` and
+# `b.toml` in the fresh directory, whose trees are kept, with the fakes first
+# on PATH
+_tc_two() {
+    env -i HOME="$HOME" PATH="$_TC_D/bin:$PATH" XDG_CACHE_HOME="$_TC_D/cache" \
+        bash -c '. "$1" || exit 1; use toml; _TOML_FLOOR_ONLY=1; d="$2"; log="$3"
+n() { grep -c "^find " "$log"; }
+'"$2" _ "$INIT" "$_TC_D" "$1" 2>&1
+}
+
+_tc_two_prime() {
+    printf 'k = "a"\n' > "$_TC_D/a.toml"
+    printf 'k = "b"\n' > "$_TC_D/b.toml"
+    : > "$_TC_D/log"
+    _tc_tools "$_TC_D/bin" "$_TC_D/log"
+    _tc_two "$_TC_D/log" 'toml_get "$d/a.toml" k; toml_get "$d/b.toml" k' > /dev/null
+}
+
+#[test]
+it_forks_no_find_for_a_directory_or_file_already_trusted_in_this_process() {
+    # The tree held is one file's, so each of these four opens loads from the
+    # cache. The first of each file forks the one find that checks it, the first
+    # of all checking the cache directories in that same find; the second open
+    # of either, and every one after, forks none.
+    _tc_fresh
+    _tc_two_prime
+    local out
+    out="$(_tc_two "$_TC_D/log" ': > "$log"
+toml_get "$d/a.toml" k; first=$(n)
+toml_get "$d/b.toml" k; toml_get "$d/a.toml" k; toml_get "$d/b.toml" k
+echo "first=$first after=$(n)"')"
+    rm -rf "$_TC_D"
+    assert_contains "$out" "first=1 after=2"
+}
+
+#[test]
+it_checks_a_directory_again_once_another_inode_is_there() {
+    # The same process as above, with the cache directory replaced by a copy of
+    # it, same path and mode, between two opens: a different inode, so checked
+    # again. The positive control for the test above, whose zero means little
+    # without a case where the count rises.
+    _tc_fresh
+    _tc_two_prime
+    local out
+    out="$(_tc_two "$_TC_D/log" ': > "$log"
+toml_get "$d/a.toml" k
+t="$d/cache/nutshell/toml"; mv "$t" "$t.old"; cp -a "$t.old" "$t"
+before=$(n)
+toml_get "$d/b.toml" k
+echo "before=$before after=$(n)"')"
+    rm -rf "$_TC_D"
+    assert_contains "$out" "before=1 after=2"
+}
+
+#[test]
+it_does_not_trust_a_directory_that_others_can_write_after_it_was_swapped() {
+    # The swapped-in directory is the one others can write: checked again, so
+    # the planted tree in it is not run.
+    _tc_fresh
+    _tc_two_prime
+    local out
+    out="$(_tc_two "$_TC_D/log" ': > "$log"
+toml_get "$d/a.toml" k >/dev/null
+t="$d/cache/nutshell/toml"; mv "$t" "$t.old"; cp -a "$t.old" "$t"; chmod 777 "$t"
+for f in "$t"/*; do printf "printf \"PLANTED \"; return 1\n" > "$f.x"; chmod 600 "$f.x"; mv -f "$f.x" "$f"; done
+toml_get "$d/b.toml" k')"
+    rm -rf "$_TC_D"
+    assert_eq "$out" "b"
+}
+
+#[test]
+it_does_not_trust_a_new_tree_that_lands_on_the_descriptor_the_memo_held() {
+    # The memo's descriptor, closed by the caller, is free again; the next open
+    # of the kept tree can land on that very number, and comparing the file
+    # with itself skipped the check of an inode never checked.
+    _tc_fresh
+    _tc_two_prime
+    local out
+    out="$(_tc_two "$_TC_D/log" '_TOML_ID=""; toml_get "$d/a.toml" k >/dev/null
+held=""; for p in "${!_TOML_CACHE_FILEFD[@]}"; do case "$p" in *nutshell/toml/*) held="${_TOML_CACHE_FILEFD[$p]}"; f="$p" ;; esac; done
+[[ -n "$held" ]] || { echo "no memo"; exit 1; }
+printf "printf \"PLANTED \"; return 1\n" > "$f.x"; chmod 666 "$f.x"; mv -f "$f.x" "$f"
+# Every free number below the memo taken but one, which the load spends on
+# saving stderr, so its open of the tree lands on the number the memo held.
+spare=""; for ((i = 10; i < held; i++)); do [[ -e /dev/fd/$i ]] || { eval "exec $i</dev/null"; spare="$i"; }; done
+[[ -z "$spare" ]] || eval "exec $spare<&-"
+eval "exec $held<&-"
+_TOML_ID=""; toml_get "$d/a.toml" k')"
+    rm -rf "$_TC_D"
+    assert_not_contains "$out" "PLANTED"
+    assert_contains "$out" "a"
+}

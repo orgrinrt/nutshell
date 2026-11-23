@@ -231,3 +231,80 @@ it_reads_the_file_past_a_corrupt_kept_tree() {
         assert_eq "$out" "first" "kept tree: $body"
     done
 }
+
+#[test]
+it_does_not_run_a_kept_tree_that_is_a_link() {
+    # A link to a tree that would be trusted where it lies.
+    local out
+    _tc_fresh
+    _tc_place
+    mkdir -p "${_TC_AT%/*}" "$_TC_D/elsewhere"
+    chmod 700 "$_TC_D/elsewhere"
+    printf 'printf "PLANTED "; return 1\n' > "$_TC_D/elsewhere/tree"
+    chmod 600 "$_TC_D/elsewhere/tree"
+    ln -s "$_TC_D/elsewhere/tree" "$_TC_AT"
+    out="$(_tc_read package.name)"
+    rm -rf "$_TC_D"
+    assert_eq "$out" "first"
+}
+
+#[test]
+it_does_not_run_a_kept_tree_under_a_linked_directory() {
+    # The tree's own directory, then the one above it, each a link to a
+    # directory that would be trusted where it lies.
+    local out level
+    for level in 1 2; do
+        _tc_fresh
+        _tc_place
+        local d="${_TC_AT%/*}"
+        [[ "$level" == 2 ]] && d="${d%/*}"
+        mkdir -p "${d%/*}" "$_TC_D/elsewhere"
+        chmod 700 "$_TC_D/elsewhere"
+        if [[ "$level" == 2 ]]; then
+            mkdir -m 700 "$_TC_D/elsewhere/toml"
+            ln -s "$_TC_D/elsewhere" "$d"
+        else
+            ln -s "$_TC_D/elsewhere" "$d"
+        fi
+        printf 'printf "PLANTED "; return 1\n' > "$_TC_AT"
+        chmod 600 "$_TC_AT"
+        out="$(_tc_read package.name)"
+        rm -rf "$_TC_D"
+        assert_eq "$out" "first" "a link $level directories up"
+    done
+}
+
+#[test]
+it_does_not_run_a_kept_tree_under_any_directory_others_can_write() {
+    # Each directory from the tree's up to the cache root: one that others can
+    # write is one where the tree, or a directory on its way, can be swapped.
+    local out level d
+    for level in 2 3; do
+        _tc_fresh
+        _tc_plant 600 700
+        d="$_TC_AT"
+        for (( i = 0; i < level; i++ )); do d="${d%/*}"; done
+        chmod 777 "$d"
+        out="$(_tc_read package.name)"
+        chmod 700 "$d"
+        rm -rf "$_TC_D"
+        assert_eq "$out" "first" "mode 777 $level directories up: $d"
+    done
+}
+
+#[test]
+it_runs_the_tree_it_read_and_checked_not_one_swapped_in_after_the_check() {
+    # The check is wrapped so the kept tree is swapped, for one others could
+    # write, the moment it passes. What runs must be what was checked.
+    local wrap out
+    _tc_fresh
+    _tc_read package.name >/dev/null
+    wrap='src="$(declare -f _toml_cache_trusted)"; eval "_tc_real${src#_toml_cache}"
+_toml_cache_trusted() {
+    _tc_real_trusted "$@" || return 1
+    printf "printf \"PLANTED \"; return 1\n" > "$1.x"; chmod 666 "$1.x"; mv -f "$1.x" "$1"
+}'
+    out="$(_tc_read package.name "$wrap")"
+    rm -rf "$_TC_D"
+    assert_eq "$out" "first"
+}

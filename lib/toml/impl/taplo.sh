@@ -23,3 +23,18 @@ _TOML_TOOL_REWRITES="float dt"
 _toml_tool_json() {
     _tt_json="$(printf '%s' "$1" | "$_TOML_TOOL" get -o json 2>/dev/null)"
 }
+
+# _toml_tool_compact <text> -> `_tt_json`, the text as compact JSON; non-zero where taplo refuses it
+# taplo prints the document indented, one token to a line, two spaces a level,
+# and `": ` after a key. Taking that apart in bash costs more than taplo takes to
+# read the file, so `sed` and `tr` do it where `toml_to_json` has a large file:
+# the indent off every line, the space after a key off, the line ends off. A
+# string never holds a raw line end, and the key is read as a whole JSON string
+# at the line's start, so no string's text is touched.
+#[pub(super)]
+_toml_tool_compact() {
+    _tt_json="$(printf '%s' "$1" | "$_TOML_TOOL" get -o json 2>/dev/null \
+        | LC_ALL=C sed -E 's/^ +//; s/^("([^"\\]|\\.)*"): /\1:/' | LC_ALL=C tr -d '\n'; \
+        exit "${PIPESTATUS[1]}")" || return 1
+    [[ "$_tt_json" == \{* ]]
+}

@@ -42,6 +42,20 @@ _toml_trim_into() {
     printf -v "$1" '%s' "$__toml_v"
 }
 
+_TOML_BOM=$'\xef\xbb\xbf'
+
+# _toml_bom_cut <name> -> the UTF-8 byte order mark cut from the front of that
+# variable's value, where it has one
+# A compare and a slice, never `${v#...}`: pattern removal from a value of a few
+# megabytes is quadratic in bash, whatever the pattern, and cost 200 s on 4 MB
+# where the compare and the slice cost 30 ms.
+#[pub(lib)]
+_toml_bom_cut() {
+    local -n _tbc="$1"
+    [[ "${_tbc:0:3}" == "$_TOML_BOM" ]] && _tbc="${_tbc:3}"
+    return 0
+}
+
 # _toml_seg_show <segment> -> `_ts_out`, the segment as a path would spell it
 #[pub(lib)]
 _toml_seg_show() {

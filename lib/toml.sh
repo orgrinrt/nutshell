@@ -68,10 +68,15 @@ use super::toml::impl::bash super::toml::impl::bash_path super::toml::cache
 
 _TOML_BACKEND=""
 _TOML_FROM=""
-_TOML_RE_WIDE='0x(_?[0-9A-Fa-f]){16}|0o(_?[0-7]){21}|0b(_?[01]){63}|[0-9](_?[0-9]){18}'
+# A number that may be past 64 bits: a run of 19 digits and underscores or more,
+# or a hex, octal or binary one as long as a wide one is. A superset, which only
+# sends a file to the floor. With no group in it on purpose: a pattern with
+# groups finds its match through a slow submatch search, 2 s in 80 KB of text.
+_TOML_RE_WIDE='[0-9_]{19,}|0x[0-9A-Fa-f_]{16,}|0o[0-7_]{21,}|0b[01_]{63,}'
 
 # -----------------------------------------------------------------------------
 # Internal helpers
+
 
 # _toml_node_show <node> -> `_tn_out`, the path that names a node
 _toml_node_show() {
@@ -137,7 +142,8 @@ _toml_open() {
 # whose module rebinds this name, and calls it. `_toml_reset` puts the stub
 # back. Where only the floor serves, it is rebound to rc 3, no JSON. In this
 # shell, never a subshell, or the pick is lost with it and made again on every
-# call.
+# call. With `--choose` as its only argument it picks and runs nothing, for the
+# large-file path, which needs to know the backend before it has anything to ask.
 _toml_tool_pick() {
     nut_lazy_guard _toml_tool_json || return 1
     local _NUT_LAZY__toml_tool_json=1
@@ -163,10 +169,19 @@ _toml_tool_pick() {
         _toml_tool_json() { return 3; }
         _TOML_BACKEND=bash
     fi
-    _toml_tool_json "$@"
+    [[ "${1-}" == --choose ]] || _toml_tool_json "$@"
 }
 
 _toml_tool_json() { _toml_tool_pick "$@"; }
+
+# _toml_taplo_compact <text> -> `_tt_json`, the text as taplo's compact JSON
+# The backend is picked first if it has not been. rc 1 where taplo is not the
+# backend, or refuses the text. For the large-file path of `toml_to_json`, which
+# takes the JSON as it is and builds no tree of it.
+_toml_taplo_compact() {
+    [[ -n "$_TOML_BACKEND" ]] || _toml_tool_pick --choose
+    [[ "$_TOML_BACKEND" == taplo ]] && _toml_tool_compact "$1"
+}
 
 # _toml_reset -> the backend dropped, picked again at the next read through one
 _toml_reset() {
@@ -204,7 +219,8 @@ _toml_open_values() {
     # floor reads all of TOML 1.0.
     [[ "$c" =~ $_TOML_RE_WIDE ]] && { _TOML_FROM=bash; _toml_open "$f"; return; }
     _TOML_ID=""
-    if _toml_tool_json "${c#$'\xef\xbb\xbf'}" && use super::toml::impl::from_json && _toml_json_tree "$f" "$_tt_json"; then
+    local body="$c"; _toml_bom_cut body
+    if _toml_tool_json "$body" && use super::toml::impl::from_json && _toml_json_tree "$f" "$_tt_json"; then
         # Set again: the pick may have had deps read its pins through the floor.
         _TOML_ID="json$_TOML_US$f" _TOML_SRC="$c" _TOML_RC=0 _TOML_FROM=json
         return 0

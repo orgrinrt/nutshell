@@ -550,5 +550,38 @@ export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
 # no-slash argument searches PATH first, so `nutshell test` in a directory
 # holding a script called `test` sourced `/bin/test` and reported that a binary
 # cannot be executed. The file the argument named was right there.
+# A stub called inside `$(...)` loads its module in that subshell and the
+# load is lost with it, so a loop of `x="$(fs_basename "$p")"` paid the whole
+# load on every pass. A function of the table written first in a `$(` of the
+# script's own text has its module loaded here, once, before the script runs,
+# as the interpreter loaded `extern` and `log` before every script on dev. A
+# script with no such call pays one read and one match; a call reached through
+# a pipe or a later word in the `$(` is still lazy, and pays per subshell.
+_nut_prelude_ahead() {
+    local text="" mods="" mod f IFS noglob=""
+    local -a parts
+    IFS= read -r -d '' text < "$1"
+    [[ "$text" == *'$('* ]] || return 0
+    # Each `$(` turned to one byte and the text split on it by the shell's own
+    # field splitting, globbing off: one pass. Only the first 80 bytes of a
+    # piece are read for its first word.
+    [[ "$-" == *f* ]] && noglob=1
+    set -f
+    IFS=$'\x1e'
+    parts=( ${text//'$('/$'\x1e'} )
+    IFS=$' \t\n'
+    [[ -n "$noglob" ]] || set +f
+    for f in "${parts[@]:1}"; do
+        f="${f:0:80}"; f="${f#"${f%%[![:space:]]*}"}"; f="${f%%[!A-Za-z0-9_]*}"
+        [[ -n "$f" && "$_NUT_PRELUDE_ROWS" == *[\ ]"$f"[\ $'\n']* ]] || continue
+        mod="${_NUT_PRELUDE_ROWS%%[\ ]"$f"[\ $'\n']*}"
+        mod="${mod##*$'\n'}"; mod="${mod%% *}"
+        [[ " $mods " == *" $mod "* ]] || mods+=" $mod"
+    done
+    # shellcheck disable=SC2086
+    [[ -z "$mods" ]] || use $mods
+}
+[[ "${_IS_COMMAND:-0}" -eq 1 ]] || _nut_prelude_ahead "$NUTSHELL_SCRIPT"
+
 # shellcheck source=/dev/null
 source "$NUTSHELL_SCRIPT"

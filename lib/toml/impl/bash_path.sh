@@ -94,7 +94,7 @@ _toml_path_push() {
 }
 
 # _toml_lookup -> `_tl_node`, the node `_tp_pseg` names; rc 1 when there is none
-#[pub(super)]
+#[pub(lib)]
 _toml_lookup() {
     local node=R seg t n
     for seg in "${_tp_pseg[@]}"; do

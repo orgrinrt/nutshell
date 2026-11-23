@@ -68,7 +68,10 @@ Core: may use the two above
                 toml/impl/, which needs nothing; toml/cache.sh keeps that
                 reader's tree between processes, under the user's cache
                 directory and only where nobody else can write it;
-                toml/write.sh edits in place, toml/json.sh converts to JSON
+                toml/write.sh edits in place, rows of an array of tables
+                included, toml/json.sh converts to JSON, toml/find.sh names
+                the files of many where a key holds a value, toml/comment.sh
+                gives a key's comments
   xdg.sh      - XDG directories (uses os, validate)
 ```
 

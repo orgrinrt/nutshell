@@ -47,6 +47,7 @@ set -uo pipefail
 
 # The shebang line names whatever is on PATH, which is normally a symlink into
 # a checkout. Follow it to the real file, because the library sits next to it.
+# Into `_SELF`, in this shell: the loop forks only where there is a link to follow.
 _resolve_path() {
     local path="$1" dir
     while [[ -L "$path" ]]; do
@@ -54,12 +55,24 @@ _resolve_path() {
         path="$(readlink "$path")"
         [[ "$path" != /* ]] && path="$dir/$path"
     done
-    printf '%s' "$path"
+    _SELF="$path"
 }
 
-_SELF="$(_resolve_path "${BASH_SOURCE[0]}")"
-_NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-_NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)"
+_resolve_path "${BASH_SOURCE[0]}"
+# Its own directory and the checkout above it, taken as written where the path
+# is absolute with no `.` or `..` in it, which is what an exec through PATH
+# hands over: each capture is a fork, and this runs before every script.
+# `_nut_caller_dir` in `init` is the same test for every file `use` loads;
+# this one runs before `init` can be found.
+case "$_SELF" in
+    */./*|*/../*|*//*) _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)" ;;
+    /?*/*) _NUTSHELL_BIN_DIR="${_SELF%/*}" ;;
+    *) _NUTSHELL_BIN_DIR="$(cd "$(dirname "$_SELF")" && pwd)" ;;
+esac
+case "$_NUTSHELL_BIN_DIR" in
+    /?*/*) _NUTSHELL_HOME="${_NUTSHELL_BIN_DIR%/*}" ;;
+    *) _NUTSHELL_HOME="$(cd "${_NUTSHELL_BIN_DIR}/.." && pwd)" ;;
+esac
 
 # shellcheck source=/dev/null
 source "${_NUTSHELL_HOME}/init" || {
@@ -67,11 +80,94 @@ source "${_NUTSHELL_HOME}/init" || {
     exit 1
 }
 
-# Before the pin block, so the pin can use the modules that already solve
-# caching rather than growing a fourth copy of them. Costs one redundant init
-# in the pinned case, since the exec re-runs it in the pinned copy.
-use extern log
+# Nothing is loaded here for the interpreter itself. The pin block below loads
+# `toml` when there is a manifest to read, and `extern` and `log` only when the
+# manifest pins an engine: they were loaded before every script, 22 files and
+# about 230ms, so a script that asked for no module paid for all of them, and
+# a hook on every tool call paid it every time.
+#
+# What that load put in reach stays in reach: each function `prelude.nut`
+# names is a stub that loads its module on the first call, the way
+# `nut_lazy_guard` works for `text`, so a script that calls none of them pays
+# for nothing. Defined before the pin block, so a module it loads overwrites
+# the stubs and not the other way round. A function the script defines itself
+# in place of a stub is not overwritten by a later `use`: see
+# `_nut_prelude_keep`.
+_nut_prelude() {
+    local _np_fn="$2" _np_key="_NUT_PRELUDE_${2}"
+    if [[ -n "${!_np_key:-}" ]]; then
+        printf '[ERROR] %s: use %s loaded but did not define it\n' "$2" "$1" >&2
+        return 1
+    fi
+    local "${_np_key}=1"
+    use "$1" || return 1
+    shift 2
+    "$_np_fn" "$@"
+}
 
+# All the stubs in one `eval`. `read` without `-r` joins a row's continued
+# lines. The rows are kept for `_nut_prelude_keep`.
+_NUT_PRELUDE_ROWS=""
+_nut_prelude_stubs() {
+    local mod fns f src=""
+    while read mod fns; do
+        case "$mod" in ""|"#"*) continue ;; esac
+        _NUT_PRELUDE_ROWS+="${mod} ${fns}"$'\n'
+        for f in $fns; do
+            # A function already there is the real one, from a shell that
+            # loaded its module before sourcing this file.
+            declare -F "$f" >/dev/null && continue
+            src+="${f}() { _nut_prelude ${mod} ${f} \"\$@\"; }"$'\n'
+        done
+    done < "${_NUTSHELL_HOME}/prelude.nut"
+    eval "$src"
+}
+_nut_prelude_stubs
+
+# _nut_prelude_keep <file> -> `_NUT_PK`, the definitions to put back after the
+# module at <file> is sourced: each function its row names that is there and
+# is not a stub, so one the script wrote itself.
+#
+# On dev the interpreter loaded `extern` and `log` before the script, so a
+# script's own `log_warn` survived a later `use log`, which loaded nothing.
+# Now that `use` loads the module, it would go over the script's function;
+# `use` calls this first, sources, then evals what it left. Only names in
+# `_NUT_PRELUDE_OWN`, the table's functions the script's text defines, are
+# looked at, and `use` calls this only where there is one, so a script that
+# defines none pays nothing: a capture is a fork, and this runs on the first
+# load of every module the table names.
+_NUT_PRELUDE_FILES=""
+_nut_prelude_keep() {
+    _NUT_PK=""
+    local mod fns f have="" user="" src stub
+    if [[ -z "$_NUT_PRELUDE_FILES" ]]; then
+        # Built at the first load, so a script that loads nothing pays nothing.
+        _NUT_PRELUDE_FILES=$'\n'
+        while read -r mod fns; do
+            [[ -n "$mod" ]] || continue
+            _lib_nut_lookup_to "$_NUTSHELL_HOME" "$mod" any || continue
+            _nut_realpath_to "$_NUT_LK" || continue
+            _NUT_PRELUDE_FILES+="${_nr}"$'\x1f'"${mod} ${fns}"$'\n'
+        done <<< "$_NUT_PRELUDE_ROWS"
+    fi
+    [[ "$_NUT_PRELUDE_FILES" == *$'\n'"$1"$'\x1f'* ]] || return 0
+    fns="${_NUT_PRELUDE_FILES#*$'\n'"$1"$'\x1f'}"
+    fns="${fns%%$'\n'*}"
+    mod="${fns%% *}"; fns="${fns#* }"
+    for f in $fns; do
+        [[ "$_NUT_PRELUDE_OWN" == *" $f "* ]] || continue
+        declare -F "$f" >/dev/null && have+=" $f"
+    done
+    [[ -n "$have" ]] || return 0
+    # shellcheck disable=SC2086
+    src="$(declare -f $have)"
+    for f in $have; do
+        stub="${f} () "$'\n'"{ "$'\n'"    _nut_prelude ${mod} ${f} \"\$@\""$'\n'"}"
+        [[ "$src" == *"$stub"* ]] || user+=" $f"
+    done
+    # shellcheck disable=SC2086
+    [[ -z "$user" ]] || _NUT_PK="$(declare -f $user)"
+}
 
 # =============================================================================
 # The engine pin
@@ -123,9 +219,17 @@ _NUT_PIN_TTL="${NUTSHELL_PIN_TTL:-3600}"
 # unbounded walk reached /tmp on macOS, where anyone can plant a nut.toml and
 # silently choose which engine another user's scripts run.
 _nut_manifest() {
+    _nut_manifest_to "$1" || return 1
+    printf '%s' "$_nut_mf"
+}
+
+# The same, into `_nut_mf`, in this shell: the interpreter asks it before every
+# script, and the capture around the printing form was a fork.
+_nut_manifest_to() {
     local dir="$1"
+    _nut_mf=""
     while [[ -n "$dir" && "$dir" != "/" ]]; do
-        [[ -f "$dir/nut.toml" ]] && { printf '%s' "$dir/nut.toml"; return 0; }
+        [[ -f "$dir/nut.toml" ]] && { _nut_mf="$dir/nut.toml"; return 0; }
         [[ -e "$dir/.git" ]] && return 1
         [[ "$dir" == "$HOME" ]] && return 1
         dir="${dir%/*}"
@@ -144,6 +248,7 @@ _nut_manifest() {
 _nut_pin_v=""
 _nut_pin() {
     local file="$1" key="$2"
+    use toml || return 1
     # The floor alone. The script's manifest is not known yet, and a backend
     # picked now would be the one deps finds without the script's pins, kept
     # for the rest of the run.
@@ -197,6 +302,7 @@ _nut_age() {
 
 # One repository, so the fetch and the reset refer to the same thing.
 _nut_advance_mirror() {
+    use log
     local dir="$1" ref="$2"
     git -C "$dir" fetch --quiet --depth 1 origin "$ref" 2>/dev/null || return 0
     git -C "$dir" reset --quiet --hard FETCH_HEAD 2>/dev/null ||
@@ -206,6 +312,7 @@ _nut_advance_mirror() {
 
 _nut_pinned_root() {
     local ref="$1" url="$2" dir age
+    use extern log || return 1
     dir="$(_extern_mirror nutshell "$url" "$ref")" || return 1
     age="$(_nut_age "$dir")"
     if (( age >= _NUT_PIN_TTL )); then
@@ -239,6 +346,7 @@ _nut_pinned_root() {
 # that project's own `dev` branch out into the nutshell cache.
 _nut_origin() {
     local home="$1" url
+    use extern || return 1
     _extern_is_repo "$home" || return 1
     [[ -f "$home/init" && -d "$home/lib" ]] || return 1
     url="$(git -C "$home" remote get-url origin 2>/dev/null)" || url=""
@@ -249,16 +357,16 @@ _nut_origin() {
 # it resolves. Only the second is an error worth failing on.
 _nut_declared() {
     local dir manifest
-    dir="$(cd "$(dirname "$1")" && pwd)" || return 1
-    manifest="$(_nut_manifest "$dir")" || return 1
+    _nut_caller_dir "$1"; dir="$_ncd"; [[ -n "$dir" ]] || return 1
+    _nut_manifest_to "$dir" || return 1; manifest="$_nut_mf"
     _nut_pin "$manifest" nutshell_branch >/dev/null && return 0
     _nut_pin "$manifest" nutshell_version >/dev/null
 }
 
 _nut_resolve_pin() {
     local script="$1" dir manifest ref url root
-    dir="$(cd "$(dirname "$script")" && pwd)" || return 1
-    manifest="$(_nut_manifest "$dir")" || return 1
+    _nut_caller_dir "$script"; dir="$_ncd"; [[ -n "$dir" ]] || return 1
+    _nut_manifest_to "$dir" || return 1; manifest="$_nut_mf"
 
     # Called here and not captured, so the manifest is read once in this shell
     # and the value comes back in `_nut_pin_v`.
@@ -267,6 +375,7 @@ _nut_resolve_pin() {
     else return 1
     fi
 
+    use log
     _nut_ref_ok "$ref" || {
         log_error "nutshell: '${ref}' in ${manifest} is not a usable git ref"
         return 1
@@ -431,10 +540,85 @@ if [[ "${_IS_COMMAND:-0}" -eq 1 ]]; then
     NUTSHELL_SCRIPT="$_SCRIPT"
     NUTSHELL_SCRIPT_DIR="$PWD"
 else
-    NUTSHELL_SCRIPT="$(cd "$(dirname "$_SCRIPT")" && pwd)/$(basename "$_SCRIPT")"
+    _nut_caller_dir "$_SCRIPT"
+    NUTSHELL_SCRIPT="${_ncd}/${_SCRIPT##*/}"
     NUTSHELL_SCRIPT_DIR="${NUTSHELL_SCRIPT%/*}"
 fi
 export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
+
+# What the script's own text says, read once before it runs.
+#
+# A stub called inside `$(...)` loads its module in that subshell and the load
+# is lost with it, so a loop of `x="$(fs_basename "$p")"` paid the whole load
+# on every pass. A function of the table written first in a `$(` of the text
+# has its module loaded here, once, before the script runs, as the interpreter
+# loaded `extern` and `log` before every script on dev. A call reached through
+# a pipe, a later word in the `$(` or a file the script sources is still lazy,
+# and pays the load in each subshell.
+#
+# And the functions of the table the text defines, `name()`, `name ()` or
+# `function name`, go in `_NUT_PRELUDE_OWN` for `_nut_prelude_keep`. One
+# defined in a file the script sources is not seen, and a later `use` of its
+# module goes over it.
+#
+# The text is cut at each `(` and at each `function ` by the shell's own field
+# splitting, globbing off, one pass each; only 80 bytes at the edge of a piece
+# are read for a word, so a long piece costs no more than a short one.
+_NUT_PRELUDE_OWN=""
+declare -A _NUT_PRELUDE_OWNER=()
+_nut_prelude_owner() {
+    _npo=""
+    [[ -n "$1" ]] || return 1
+    # A table built at the first question: a glob or a regex over the rows
+    # costs about 100us a question, and a text asks one for each definition.
+    if [[ ${#_NUT_PRELUDE_OWNER[@]} -eq 0 ]]; then
+        local mod fns f
+        while read -r mod fns; do
+            for f in $fns; do _NUT_PRELUDE_OWNER[$f]="$mod"; done
+        done <<< "$_NUT_PRELUDE_ROWS"
+    fi
+    _npo="${_NUT_PRELUDE_OWNER[$1]:-}"
+    [[ -n "$_npo" ]]
+}
+_nut_prelude_scan() {
+    local text="" mods="" own=" " f prev="" p IFS noglob="" _npo
+    local word_end='(^|[^A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*$'
+    local word_start='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)'
+    local -a parts defs
+    IFS= read -r -d '' text < "$1"
+    [[ "$text" == *'('* || "$text" == *'function '* ]] || return 0
+    [[ "$-" == *f* ]] && noglob=1
+    set -f
+    IFS='('
+    parts=( $text )
+    IFS=$'\x1e'
+    defs=( ${text//'function '/$'\x1e'} )
+    IFS=$' \t\n'
+    [[ -n "$noglob" ]] || set +f
+    for p in "${parts[@]}"; do
+        if [[ "${prev: -1}" == '$' ]]; then
+            # `$(` then its first word: a call in a capture.
+            f=""; [[ "${p:0:80}" =~ $word_start ]] && f="${BASH_REMATCH[1]}"
+            _nut_prelude_owner "$f" && [[ " $mods " != *" $_npo "* ]] && mods+=" $_npo"
+        elif [[ "$p" =~ ^[[:space:]]*\) ]]; then
+            # `name (` then `)`: a definition.
+            f="$prev"; (( ${#f} > 80 )) && f="${f: -80}"
+            [[ "$f" =~ $word_end ]] || { prev="$p"; continue; }
+            f="${BASH_REMATCH[2]}"
+            _nut_prelude_owner "$f" && own+="${f} "
+        fi
+        prev="$p"
+    done
+    for p in "${defs[@]:1}"; do
+        [[ "${p:0:80}" =~ $word_start ]] || continue
+        f="${BASH_REMATCH[1]}"
+        _nut_prelude_owner "$f" && own+="${f} "
+    done
+    [[ "$own" == " " ]] || _NUT_PRELUDE_OWN="$own"
+    # shellcheck disable=SC2086
+    [[ -z "$mods" ]] || use $mods
+}
+[[ "${_IS_COMMAND:-0}" -eq 1 ]] || _nut_prelude_scan "$NUTSHELL_SCRIPT"
 
 # Sourced, not executed, so the script runs in this environment with `use`
 # already defined.

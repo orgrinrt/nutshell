@@ -12,6 +12,12 @@
 # from its visibility, and what a function's usage says from `attr`: this
 # module scans nothing of its own.
 #
+# An internal module a public one loads, and whose name sits under it, is part
+# of it: what its file marks `#[pub]` is listed under the public module, since
+# a `use` of that module is what puts it in reach. `json_query` is written in
+# `json/query.sh` and listed under `json`. An internal module no public one
+# loads is listed nowhere.
+#
 # Sorted by byte order and written the same way every time, so a listing can
 # be committed and a later run diffed against it. A function with no usage
 # line is listed by name alone, which is what a reader of the file should see.
@@ -59,14 +65,47 @@ _api_internal() {
     ! _lib_nut_lookup "$1" "$2" public >/dev/null 2>&1
 }
 
+# _api_parts <root> <module> -> the module, then each internal module under its
+# name that it loads, and those that load further, one per line. What those
+# files mark `#[pub]` is in reach after a `use` of the module, so it is listed
+# under it: `json_query` sits in `json::query`, which only `json` loads.
+_api_parts() {
+    local root="$1" mod="$2" seen=" $2 " queue="$2" m d
+    printf '%s\n' "$mod"
+    while [[ -n "$queue" ]]; do
+        m="${queue%% *}"
+        [[ "$queue" == *" "* ]] && queue="${queue#* }" || queue=""
+        for d in $(modgraph_declares "$m"); do
+            [[ "$d" == "${mod}::"* ]] || continue
+            [[ "$seen" == *" ${d} "* ]] && continue
+            seen+="${d} "
+            _api_internal "$root" "$d" || continue
+            printf '%s\n' "$d"
+            queue="${queue:+${queue} }${d}"
+        done
+    done
+}
+
 # _api_entries <root> <module> -> its public functions, one `usage` per line,
-# sorted by function name; a function with no usage line is its bare name.
+# sorted by function name; a function with no usage line is its bare name. A
+# name the module and one of its internal files both define is listed once,
+# from the module's own file.
 _api_entries() {
-    local root="$1" mod="$2" file fn usages tab line found
+    local root="$1" mod="$2" part file fn tab line found pairs="" seen=" " i=0
+    local -a usages=()
     tab="$(printf '\t')"
-    file="$(_api_file "$root" "$mod")" || return 1
-    usages="$(attr_usages "$file")"
-    while IFS= read -r fn; do
+    while IFS= read -r part; do
+        file="$(_api_file "$root" "$part")" || { [[ "$part" == "$mod" ]] && return 1; continue; }
+        usages[i]="$(attr_usages "$file")"
+        while IFS= read -r fn; do
+            [[ -n "$fn" && "$seen" != *" ${fn} "* ]] || continue
+            seen+="${fn} "
+            pairs+="${fn}${tab}${i}"$'\n'
+        done < <(modgraph_public "$part")
+        i=$((i + 1))
+    done < <(_api_parts "$root" "$mod")
+
+    while IFS="$tab" read -r fn i; do
         [[ -n "$fn" ]] || continue
         # Every usage line of the function, in file order, or its name.
         found=0
@@ -74,9 +113,9 @@ _api_entries() {
             [[ "${line%%"$tab"*}" == "$fn" ]] || continue
             printf '%s\n' "${line#*"$tab"}"
             found=1
-        done <<< "$usages"
+        done <<< "${usages[i]}"
         [[ "$found" -eq 1 ]] || printf '%s\n' "$fn"
-    done < <(modgraph_public "$mod" | LC_ALL=C sort)
+    done < <(printf '%s' "$pairs" | LC_ALL=C sort -t "$tab" -k1,1)
 }
 
 # _api_walk <root> <module-or-empty> <emit> -> calls `<emit> <module> <entries>`

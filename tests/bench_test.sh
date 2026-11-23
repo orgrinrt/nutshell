@@ -380,3 +380,115 @@ it_reads_a_clock_that_only_goes_forward() {
     # asks for `%N`: a second-resolution clock would make every arm zero.
     assert_ok test "${#a}" -ge 18
 }
+
+# --- a target an arm is held to -----------------------------------------------
+#
+# A bench answers which arm is faster; a target answers whether one is fast
+# enough, which is a different question and the one a performance goal asks. The
+# run still prints and keeps every number, because a missed target is a result
+# and its numbers are what says by how much.
+
+#[test]
+it_passes_a_run_whose_arm_is_under_its_target() {
+    _bench_fresh
+    _pin_runs 5 5 20 20
+    bench_case "under the line"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_target _arm_b 30
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    local m; m="$(cat "$BENCH_RESULTS"/*.meta 2>/dev/null)"
+    _bench_done
+    assert_eq "$rc" "0"
+    assert_contains "$out" "b: 20ms against a target of 30ms, met"
+    assert_contains "$m" "target    b 30 met"
+}
+
+#[test]
+it_fails_a_run_whose_arm_misses_its_target_and_keeps_the_numbers() {
+    _bench_fresh
+    _pin_runs 5 5 20 20
+    bench_case "over the line"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_target _arm_b 10
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    local c m
+    c="$(cat "$BENCH_RESULTS"/*.csv 2>/dev/null)"
+    m="$(cat "$BENCH_RESULTS"/*.meta 2>/dev/null)"
+    _bench_done
+    assert_eq "$rc" "1"
+    assert_contains "$out" "b: 20ms against a target of 10ms, missed"
+    assert_contains "$c" "b,20,20,"
+    assert_contains "$m" "target    b 10 missed"
+}
+
+#[test]
+it_refuses_a_target_on_an_arm_the_bench_does_not_have() {
+    # A target naming a function no arm runs would otherwise hold nothing to
+    # anything and pass, which is the quiet way a goal stops being checked.
+    _bench_fresh
+    _pin_runs 5 5 20 20
+    bench_case "a target on nothing"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_target _arm_nosuch 10
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    _bench_done
+    assert_eq "$rc" "1"
+    assert_contains "$out" "_arm_nosuch"
+}
+
+#[test]
+it_clears_the_targets_with_the_arms() {
+    _bench_fresh
+    bench_case "the first question"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_target _arm_b 1
+    bench_reset
+    assert_eq "${#_BENCH_TARGET_FN[@]}" "0"
+    assert_eq "${#_BENCH_TARGET_MS[@]}" "0"
+    _bench_done
+}
+
+#[test]
+it_meets_a_target_its_arm_lands_on_exactly() {
+    # The target is a ceiling the arm may reach: 20ms against 20 is met.
+    _bench_fresh
+    _pin_runs 5 5 20 20
+    bench_case "on the line"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_target _arm_b 20
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    local m; m="$(cat "$BENCH_RESULTS"/*.meta 2>/dev/null)"
+    _bench_done
+    assert_eq "$rc" "0"
+    assert_contains "$out" "b: 20ms against a target of 20ms, met"
+    assert_contains "$m" "target    b 20 met"
+}
+
+#[test]
+it_fails_a_run_whose_targeted_arm_was_not_run() {
+    # An arm left out at this size has no number to meet its target with, and
+    # a target nobody measured is not met.
+    _bench_fresh
+    bench_case "too big to hold to anything"
+    bench_size 100
+    bench_verify _answer_of
+    bench_arm "a"       _arm_a
+    bench_arm "too big" _arm_b 10
+    bench_target _arm_b 50
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    local m; m="$(cat "$BENCH_RESULTS"/*.meta 2>/dev/null)"
+    _bench_done
+    assert_eq "$rc" "1"
+    assert_contains "$out" "too big: -ms against a target of 50ms, not run"
+    assert_contains "$m" "target    too big 50 not run"
+}

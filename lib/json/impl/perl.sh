@@ -136,17 +136,39 @@ _json_pl() {
             exit 1 unless @parts;
             my $last = pop @parts;
             my $current = $data;
-            for my $part (@parts) {
-                if (ref($current) eq "ARRAY") { $current = $current->[$part]; }
-                else                          { $current = $current->{$part}; }
-            }
             if ($op eq "set") {
                 my $raw = $args[2];
                 my $value = eval { $in->decode($raw) };
                 $value = $raw if $@;
-                if (ref($current) eq "ARRAY") { $current->[$last] = $value; }
-                else                          { $current->{$last} = $value; }
+                # Make what is not there, the way jq does: a missing key or a
+                # null becomes an array when the next segment is a number and an
+                # object otherwise, and an array grows, padded with null. A
+                # scalar in the way, or a number segment on an object, is
+                # status 1.
+                my $root = [$data];
+                my $slot = \$root->[0];
+                for my $part (@parts, $last) {
+                    my $is_index = $part =~ /^[0-9]+$/;
+                    $$slot = $is_index ? [] : {} unless defined $$slot;
+                    if (ref($$slot) eq "ARRAY") {
+                        exit 1 unless $is_index;
+                        my $arr = $$slot;
+                        push @$arr, undef while @$arr <= $part;
+                        $slot = \$arr->[$part];
+                    } elsif (ref($$slot) eq "HASH") {
+                        exit 1 if $is_index;
+                        $slot = \$$slot->{$part};
+                    } else {
+                        exit 1;
+                    }
+                }
+                $$slot = $value;
+                $data = $root->[0];
             } else {
+                for my $part (@parts) {
+                    if (ref($current) eq "ARRAY") { $current = $current->[$part]; }
+                    else                          { $current = $current->{$part}; }
+                }
                 if (ref($current) eq "ARRAY") { splice(@$current, $last, 1); }
                 else                          { delete $current->{$last}; }
             }

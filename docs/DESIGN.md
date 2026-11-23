@@ -62,10 +62,13 @@ Core: may use the two above
   array.sh    - Array operations (uses list)
   fs.sh       - Filesystem primitives (uses deps; fs/impl/ per stat variant)
   text.sh     - Text file processing (uses deps; text/impl/ per tool)
-  toml.sh     - TOML reading (uses validate, deps). taplo or mikefarah yq
-                where deps finds one, else the bash reader in toml/impl/, which
-                needs nothing; toml/write.sh edits in place, toml/json.sh
-                converts to JSON
+  toml.sh     - TOML reading (uses key; deps on its first pick of a reader,
+                validate for `toml_is_true`). taplo or
+                mikefarah yq where deps finds one, else the bash reader in
+                toml/impl/, which needs nothing; toml/cache.sh keeps that
+                reader's tree between processes, under the user's cache
+                directory and only where nobody else can write it;
+                toml/write.sh edits in place, toml/json.sh converts to JSON
   xdg.sh      - XDG directories (uses os, validate)
 ```
 
@@ -110,7 +113,9 @@ deps.sh finds tools using this order:
    something that is not an executable file is refused, said once on stderr,
    and never falls through to PATH. A manifest that is not TOML pins nothing,
    and that is said once.
-2. If `which` is available, use it to find tools
+2. Else walk `PATH` element by element, an empty element being the working
+   directory, and take the first `<dir>/<tool>` that is an executable regular
+   file. No `which` and no `command -v`: the walk is in the shell, with no fork
 3. Else check common locations in order:
    - `/usr/bin/<tool>`
    - `/bin/<tool>`
@@ -362,6 +367,55 @@ This enables:
 - Direct testing of impl files
 - Use as standalone scripts if needed
 - Normal sourced operation
+
+## The Interpreter's Prelude Stubs
+
+`bin/nutshell` loads no module for itself. It used to load `extern` and `log`
+before every script, about 230ms and 22 files, and a script that called
+`log_info` or `deps_has` with no `use` worked because of it. `prelude.nut` keeps
+that working: one row per module, the name a `use` writes and then the public
+functions that load put in reach, 165 of them. The table is read with `read`,
+before any module is loaded, so it needs no parser.
+
+For each function in it that is not already defined, the interpreter defines a
+stub, all of them in one `eval`:
+
+```bash
+log_info() { _nut_prelude log log_info "$@"; }
+```
+
+The first call runs `use log`, which overwrites every stub of that module with
+the real function, and then calls the function again by name. Where the `use`
+loaded the module but the name is still the stub, `_nut_prelude` stops with
+`[ERROR] log_info: use log loaded but did not define it` rather than calling
+itself until the stack gives out. A script that calls none of them loads
+nothing; the stubs cost about 2ms a start, measured in `benches/start-cost`.
+
+Before the script runs, the interpreter reads its text once, cut at each `(`
+and at each `function `, for two things the rules below use: the functions of
+the table it defines (`name()`, `name ()`, `function name`), and those it calls
+as the first word of a `$(`. That is about 0.2ms for a short script and 2.5ms
+for a 13KB one. Text in a file the script sources is not read.
+
+Three rules keep a script working as it did when both modules loaded first:
+
+- A function already defined when the interpreter is sourced is the real one,
+  and gets no stub.
+- A function the script defines itself, in place of a stub, is not overwritten
+  by a later `use` of its module, or of a module that loads it. Where the text
+  defines one, `use` asks `_nut_prelude_keep`, before the module is first
+  sourced, which of those are there and are not stubs, and puts them back
+  afterwards; that is one fork. A script that defines none pays nothing. One
+  defined in a sourced file is not seen, and a later `use` goes over it.
+- A stub called inside `$(...)` loads its module in that subshell, and the load
+  is lost with it, so every call pays the whole load again: twenty
+  `$(fs_basename)` calls took 1508ms a start, some 75ms each, where with `fs`
+  loaded first they take a few milliseconds. So a module whose function the
+  text calls first in a `$(` is loaded once before the script runs, and the
+  twenty calls take 79ms (`benches/start-cost`). A call reached through a pipe
+  or a later word in the `$(`, or from a sourced file, is not seen, and still
+  pays the load in each subshell; a script that wants none of this cost writes
+  the `use`.
 
 ## Impl File Contract
 

@@ -13,11 +13,18 @@ _NUTSHELL_JSON_BUILD_SH=1
 
 use string
 
-# A newline and a tab as themselves. There is no `$'\n'` here to write one
-# inline with, and the trailing `.` is because command substitution strips the
-# trailing newline, which is the character being asked for.
-_JSON_NL="$(printf '\n.')"; _JSON_NL="${_JSON_NL%.}"
-_JSON_TAB="$(printf '\t.')"; _JSON_TAB="${_JSON_TAB%.}"
+# A newline and a tab as themselves. There is no `$'\n'` in a POSIX shell to
+# write one inline with, so there they are a capture of `printf`, and the
+# trailing `.` is because command substitution strips the trailing newline,
+# which is the character being asked for. Under bash, the quoting bash has,
+# through `eval` so a POSIX shell never parses it: each capture is a fork, and
+# this file loads with `json`, before a script's first line.
+if [ -n "${BASH_VERSION:-}" ]; then
+    eval "_JSON_NL=\$'\\n' _JSON_TAB=\$'\\t'"
+else
+    _JSON_NL="$(printf '\n.')"; _JSON_NL="${_JSON_NL%.}"
+    _JSON_TAB="$(printf '\t.')"; _JSON_TAB="${_JSON_TAB%.}"
+fi
 
 # -----------------------------------------------------------------------------
 

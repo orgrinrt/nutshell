@@ -30,6 +30,7 @@ http                     lib/http.sh
 key                      lib/key.sh
 json                     lib/json.sh
 json::build              lib/json/build.sh           internal
+json::query              lib/json/query.sh           internal
 json::impl::bash         lib/json/impl/bash.sh        internal
 json::impl::bash_parse   lib/json/impl/bash_parse.sh  internal
 json::impl::jq           lib/json/impl/jq.sh          internal
@@ -83,6 +84,7 @@ toml::impl::bash_path    lib/toml/impl/bash_path.sh   internal
 toml::impl::from_json    lib/toml/impl/from_json.sh   internal
 toml::impl::taplo        lib/toml/impl/taplo.sh       internal
 toml::impl::yq           lib/toml/impl/yq.sh          internal
+toml::cache              lib/toml/cache.sh            internal
 toml::json               lib/toml/json.sh
 toml::write              lib/toml/write.sh
 validate                 lib/validate.sh

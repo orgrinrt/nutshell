@@ -23,7 +23,7 @@ _h_only_path() {
     _deps_find_tool() {
         local d i="$IFS"; IFS=:
         for d in $PATH; do
-            if [ -x "$d/$1" ]; then IFS="$i"; printf '%s\n' "$d/$1"; return 0; fi
+            if [ -x "$d/$1" ]; then IFS="$i"; _DEPS_FOUND="$d/$1"; return 0; fi
         done
         IFS="$i"; return 1
     }

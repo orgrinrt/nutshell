@@ -15,7 +15,9 @@
 # give `1e3` as `1000.0`, `1.50` as `1.5` and `+00:00` as `Z`, and yq `3.0` as
 # `3`, which is what these two fixtures are here to catch.
 
-use deps test toml
+# `toml::impl::from_json` by name, since `toml` loads it on the first read of a
+# tool's JSON and one test below calls its reader directly.
+use deps test toml toml::impl::from_json
 
 FIX="${NUTSHELL_ROOT}/tests/fixtures/toml"
 

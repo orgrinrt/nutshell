@@ -40,6 +40,7 @@
 #   bench_arm "bash declare -A" arm_assoc
 #   bench_arm "eval names"      arm_eval  4000     # ceiling: skip above this
 #   bench_size 9606
+#   bench_target arm_assoc 50           # fail the run above 50ms best
 #   bench_run
 # =============================================================================
 
@@ -58,6 +59,8 @@ declare -ga _BENCH_LABEL=()
 declare -ga _BENCH_FN=()
 declare -ga _BENCH_CEIL=()
 declare -ga _BENCH_NOTE=()
+declare -ga _BENCH_TARGET_FN=()
+declare -ga _BENCH_TARGET_MS=()
 
 #[pub]
 # Name the question this bench answers. The first line of every report and of
@@ -96,6 +99,19 @@ bench_arm() {
 }
 
 #[pub]
+# Hold an arm to a ceiling on its best time, in milliseconds.
+#
+# The other controls say whether the numbers can be compared; this one says
+# whether an arm is fast enough, which is what a stated performance goal asks.
+# A missed target fails the run after the table and the record are written,
+# because the numbers are still good and are what says by how much it missed.
+# Usage: bench_target arm_fn 50
+bench_target() {
+    _BENCH_TARGET_FN+=("$1")
+    _BENCH_TARGET_MS+=("$2")
+}
+
+#[pub]
 # Clear the arms so a second case can be declared in the same file.
 #
 # Two workloads are two questions, and the agreement control is right to refuse
@@ -103,7 +119,7 @@ bench_arm() {
 # A file that wants to ask both declares its arms, runs, resets, and declares
 # the next set.
 #
-# Cleared: the arms, their labels, ceilings and notes, the title, the verify
+# Cleared: the arms, their labels, ceilings, notes and targets, the title, the verify
 # function and the size. So a second case has to name its own question and
 # cannot inherit a baseline from the first by accident.
 #
@@ -114,6 +130,7 @@ bench_arm() {
 # Usage: bench_run; bench_reset; bench_case "the next question"
 bench_reset() {
     _BENCH_LABEL=(); _BENCH_FN=(); _BENCH_CEIL=(); _BENCH_NOTE=()
+    _BENCH_TARGET_FN=(); _BENCH_TARGET_MS=()
     BENCH_TITLE=""; BENCH_VERIFY=""; BENCH_SIZE=0
 }
 
@@ -214,6 +231,9 @@ _bench_record() {
         printf 'bash      %s\n' "${BASH_VERSION:-unknown}"
         printf 'host      %s %s\n' "$(uname -s)" "$(uname -m)"
         printf 'taken     %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        for (( i = 0; i < ${#_BENCH_VERDICT[@]}; i++ )); do
+            printf 'target    %s\n' "${_BENCH_VERDICT[$i]}"
+        done
     } > "${dir}/${stamp}.meta"
 
     printf '%s' "${dir}/${stamp}"
@@ -224,7 +244,7 @@ _bench_record() {
 #
 # Returns 1 when a control refuses, which is a result rather than a failure of
 # the harness: a bench that cannot support its numbers must not print them.
-# Usage: bench_run -> 0 when it measured, 1 when a control refused
+# Usage: bench_run -> 0 when it measured, 1 when a control refused or a target was missed
 bench_run() {
     local i n="${#_BENCH_FN[@]}"
 
@@ -238,8 +258,19 @@ bench_run() {
         printf '  implementation timed against nothing.\n' >&2
         return 1
     fi
+    local t j found
+    for (( t = 0; t < ${#_BENCH_TARGET_FN[@]}; t++ )); do
+        found=0
+        for (( j = 0; j < n; j++ )); do
+            [[ "${_BENCH_FN[$j]}" == "${_BENCH_TARGET_FN[$t]}" ]] && found=1
+        done
+        (( found )) || {
+            printf 'bench: a target on %s, which no arm runs\n' "${_BENCH_TARGET_FN[$t]}" >&2
+            return 1; }
+    done
 
     declare -ga _BENCH_BESTS=() _BENCH_WORSTS=() _BENCH_SKIP=() _BENCH_RATIO=()
+    declare -ga _BENCH_VERDICT=()
     for (( i = 0; i < n; i++ )); do
         if (( _BENCH_CEIL[i] > 0 && BENCH_SIZE > _BENCH_CEIL[i] )); then
             _BENCH_BESTS+=("-"); _BENCH_WORSTS+=("-"); _BENCH_SKIP+=(1); _BENCH_RATIO+=("-")
@@ -296,7 +327,22 @@ bench_run() {
             "${_BENCH_RATIO[$i]}"
     done
 
+    local missed=0 word lines=""
+    for (( t = 0; t < ${#_BENCH_TARGET_FN[@]}; t++ )); do
+        for (( j = 0; j < n; j++ )); do
+            [[ "${_BENCH_FN[$j]}" == "${_BENCH_TARGET_FN[$t]}" ]] && break
+        done
+        if [[ "${_BENCH_SKIP[$j]}" == "1" ]]; then word="not run"; missed=1
+        elif (( _BENCH_BESTS[j] <= _BENCH_TARGET_MS[t] )); then word="met"
+        else word="missed"; missed=1
+        fi
+        _BENCH_VERDICT+=("${_BENCH_LABEL[$j]} ${_BENCH_TARGET_MS[$t]} ${word}")
+        lines+="$(printf '  %s: %sms against a target of %sms, %s' "${_BENCH_LABEL[$j]}" \
+            "${_BENCH_BESTS[$j]}" "${_BENCH_TARGET_MS[$t]}" "$word")"$'\n'
+    done
+    [[ -n "$lines" ]] && printf '\n%s' "$lines"
+
     local where; where="$(_bench_record)"
     [[ -n "$where" ]] && printf '\n  kept at %s.csv and .meta\n' "$where"
-    return 0
+    return "$missed"
 }

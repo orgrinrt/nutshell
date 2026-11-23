@@ -28,6 +28,11 @@ Usage:
   nutshell api --git <url> [--ref <ref>] [<module>]
                                           a library by url, nothing recorded
   nutshell api --md ...                   markdown, a block per module
+
+A module that is not marked internal is listed with the functions it marks
+#[pub], and with those marked in the internal modules under its name that it
+loads, such as json::query under json. An internal module is never listed by
+its own name.
 USAGE
 }
 

@@ -10,7 +10,7 @@
 # Read by `bin/nutshell` before any module is loaded, so it needs no parser.
 
 deps       deps_available deps_can deps_cap deps_caps deps_check deps_forget \
-           deps_has deps_has_all deps_has_any deps_info deps_is_bsd \
+           deps_has deps_has_all deps_has_any deps_hide deps_info deps_is_bsd \
            deps_is_gnu deps_path deps_require deps_require_all \
            deps_require_cap deps_run deps_sed_inplace deps_stat_mtime \
            deps_stat_size deps_variant

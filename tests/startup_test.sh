@@ -203,3 +203,36 @@ nutshell_loaded log && printf "loaded\n" || printf "not loaded\n"')"
     rm -rf "$_ST_D"
     assert_eq "$out" "$(printf '[INFO] hi\nnot loaded')"
 }
+
+#[test]
+it_loads_once_in_the_script_a_module_whose_stub_opens_a_capture() {
+    # A stub called in `$(...)` loads its module in the subshell, and that is
+    # lost with it; where the script's own text opens a `$(` with a function
+    # of the table, the module is loaded before the script runs.
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'nutshell_loaded fs && printf "before "
+for p in /a/b /c/d; do x="$( fs_basename "$p")"; printf "%s " "$x"; done
+nutshell_loaded fs && printf "fs"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "before b d fs"
+}
+
+#[test]
+it_loads_nothing_ahead_for_a_capture_of_a_function_not_in_the_table() {
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'x="$(printf fs_basename)"; y="$(echo log_info)"; printf "[%s]" "$(nutshell_modules | tr "\n" " ")"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "[]"
+}
+
+#[test]
+it_keeps_a_function_the_script_defines_over_one_loaded_ahead() {
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'fs_basename() { printf "mine"; }
+printf "%s\n" "$(fs_basename /a/b)"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "mine"
+}

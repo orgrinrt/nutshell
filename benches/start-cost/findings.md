@@ -104,3 +104,37 @@ umask. It is paid once per manifest text and per user.
 
 **holds for:** this host only, bash 5.2.21, `XDG_CACHE_HOME` writable, warm in
 every arm but the cold one, tools as this container has them.
+
+## Review pass 2, 2026-11-23, runs `results/20261123020608` and `results/20261123021437`
+
+Same host and bash. A new arm, twenty `x="$(fs_basename /a/b)"` with no `use`:
+each `$(...)` is a subshell, so a stub called there loads `fs` in it and the
+load is lost with it. Run `20261123020608` is the tree at f202667, before the
+interpreter loaded such a module ahead and with `_nut_prelude_keep` capturing a
+module's row on every first load; `20261123021437` is the tree after both
+fixes: the module loaded ahead, and the keep asked only where the script's text
+defines a function of the table.
+
+| per start | f202667 ms | after ms |
+|---|---|---|
+| bash, nothing loaded | 3.1 | 3.0 |
+| bash sourcing init | 4.9 | 5.2 |
+| init, use deps | 19.7 | 17.9 |
+| init, use extern log | 60.9 | 56.8 |
+| script, no use, no manifest | 8.0 | 8.7 |
+| script, no use, 300-line manifest | 46.6 | 33.4 |
+| script, use json, no manifest | 95.2 | 62.2 |
+| script, use toml, 300-line manifest | 48.5 | 29.3 |
+| script, no use, 300-line manifest, cold | 137.1 | 121.0 |
+| script, 20 captures of a stub, no manifest | 1508.0 | 79.2 |
+
+The f202667 run missed the json target, 95.2 against 80: a fork on the first
+load of each module the prelude table names, to tell a script's own function
+from a stub, about 3ms a module, and a pin read or a `use json` loads several.
+The text of the script is now read once before it runs, about 0.2ms for a short
+script, and the fork is taken only where the script defines one of the table's
+functions. All three targets met after. The twenty captures went from 1508ms
+to 79ms.
+
+**holds for:** this host only, bash 5.2.21, `XDG_CACHE_HOME` writable, warm in
+every arm but the cold one, tools as this container has them.

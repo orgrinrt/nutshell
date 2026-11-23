@@ -25,7 +25,7 @@ _tbg_file() {
     local f="$1" extra="${2:-}" i body
     body='a note with \"quotes\", a back\\slash, a tab\there,\nand a second line,\n\nand a third, a control \u0001 and \u001f, an é and a smiley \U0001F600.'
     : > "$f"
-    for (( i = 0; i < 110; i++ )); do
+    for (( i = 0; i < 150; i++ )); do
         printf '[[action]]\nkey = "ticket_%d"\nowner = "op"\nnote = "%d: %s %s %s"\n' \
             "$i" "$i" "$body" "$body" "$body" >> "$f"
         (( i % 7 )) || printf 'detail = """\nentry %d, over lines\nwith a "quote" and a fold \\\n   into one.\n"""\n' "$i" >> "$f"
@@ -81,7 +81,7 @@ it_converts_a_large_file_again_once_its_text_changed() {
     canary="$(_tbg_run "taplo yq" "$d/cache" "$_TBG_CANARY" "$d/big.toml")"
     changed="$(_tbg_run "taplo yq" "$d/cache" "" "$d/big.toml")"
     rm -rf "$d"
-    assert_contains "$canary" "treeload"
+    assert_contains "$canary" "parsed"
     assert_contains "$changed" '"key":"ticket_three"'
     assert_not_contains "$changed" '"key":"ticket_3"'
 }
@@ -100,7 +100,7 @@ it_does_not_take_a_kept_json_others_can_write() {
     out="$(_tbg_run "taplo yq" "$d/cache" "$_TBG_CANARY" "$d/big.toml")"
     rm -rf "$d"
     assert_eq "${control:0:11}" '{"action":['
-    assert_contains "$out" "treeload"
+    assert_contains "$out" "parsed"
 }
 
 #[test]

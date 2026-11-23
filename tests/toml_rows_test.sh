@@ -126,6 +126,11 @@ it_refuses_to_open_a_table_under_a_row_by_a_header() {
     assert_eq "$_TR_RC" "2"
     assert_contains "$_TR_ERR" "row"
     assert_eq "$_TR_BODY" $'[[row]]\nid = "a"\nstatus = "open"\n\n[[row]]\nid = "b"\nstatus = "open" # keep'
+    # The last row too: the writer refuses a header under any row, as its
+    # docblock says, and leaves the file as it was.
+    _tr_run "$_TR_ROWS" toml_set row.1.new.k 1
+    assert_eq "$_TR_RC" "2"
+    assert_eq "$_TR_BODY" $'[[row]]\nid = "a"\nstatus = "open"\n\n[[row]]\nid = "b"\nstatus = "open" # keep'
 }
 
 #[test]

@@ -24,6 +24,17 @@ _tq_fixture() {
 }
 
 #[test]
+it_finds_an_array_the_file_spells_over_several_lines() {
+    # `toml_get` prints the array on one line, which is not the text the file
+    # holds, so a text scan for it would rule the file out.
+    local d; d="$(_tq_dir)"
+    printf 'n = [\n  1,\n  2,\n]\n' > "$d/a.toml"
+    local got; got="$(cd "$d" && toml_find n "[1, 2]" a.toml)"
+    rm -rf "$d"
+    assert_eq "$got" "a.toml"
+}
+
+#[test]
 it_finds_the_files_whose_key_holds_the_value() {
     local d; d="$(_tq_dir)"; _tq_fixture "$d"
     local got; got="$(cd "$d" && toml_find id T1 a.toml b.toml c.toml d.toml f.toml i.toml)"

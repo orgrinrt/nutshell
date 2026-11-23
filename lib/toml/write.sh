@@ -39,8 +39,8 @@ _TW_FF=$'\f'
 #
 # Refused, because one line cannot change it without breaking the file:
 #   a key inside an array of tables that the path does not index, `row.status`
-#     where `row.3.status` names one row; a table to open by a header under a row
-#     that is not the last, which a header cannot name;
+#     where `row.3.status` names one row; a table to open by a header under any
+#     row, which a header cannot name by its index;
 #   a key inside an inline table, which is one value on one line;
 #   a key a dotted key made, or one in a table a dotted key made, which is not
 #     on a line of its own and whose table a header would define twice;

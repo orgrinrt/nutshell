@@ -121,10 +121,3 @@ _json_string_into() {
     done
     printf -v "$1" '"%s"' "$__js_o$__js_s"
 }
-
-# _json_string <text> -> prints the text as a JSON string
-_json_string() {
-    local s
-    _json_string_into s "$1"
-    printf '%s' "$s"
-}

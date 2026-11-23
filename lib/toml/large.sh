@@ -25,7 +25,7 @@
 [ -n "${_NUTSHELL_TOML_LARGE_SH:-}" ] && return 0
 _NUTSHELL_TOML_LARGE_SH=1
 
-use super::toml super::toml::cache super::toml::emit
+use super::toml super::toml::impl::bash super::toml::impl::bash_path super::toml::cache super::toml::emit
 
 # The size in bytes from which a file takes this path, measured rather than
 # guessed: `benches/toml-json` prices both routes from 1 KB up, and taplo's
@@ -46,18 +46,24 @@ unset _tj_d _tj_t
 
 # Usage: _tj_large <file> -> the file's JSON printed, rc 0; rc 3 where the file is not
 # for this path and the usual one goes on; rc 2 and the reason where it is not TOML
+# The floor parses the text read here and never the path again, so a file replaced
+# between the two reads cannot leave another text's JSON kept under this one's key.
 #[pub(super)]
 _tj_large() {
-    local f="$1" c="" rc LC_ALL=C
+    local f="$1" c="" by=""
+    local LC_ALL=C
     [[ -f "$f" && -r "$f" ]] || return 3
     ! IFS= read -r -d '' c < "$f" || return 3
     (( ${#c} >= _TOML_JSON_LARGE )) || return 3
     if ! _toml_jcache_load "$f" "$c"; then
-        if ! _tj_tool "$c"; then
-            _toml_read_floor "$f" || return $?
+        if _tj_tool "$c"; then
+            by="$_TOML_TOOL"
+        else
+            _TOML_ID=""
+            _toml_parse_text "$f" "$c" || { printf '%s\n' "$_TOML_ERR" >&2; return 2; }
             _toml_emit_json || { printf 'toml: %s: %s\n' "$f" "$_tj_err" >&2; return 2; }
         fi
-        _toml_jcache_store "$f" "$c" "$_tj_json"
+        _toml_jcache_store "$f" "$c" "$_tj_json" "$by"
     fi
     printf '%s\n' "$_tj_json"
 }
@@ -76,28 +82,30 @@ _tj_tool() {
 }
 
 # _tj_same_wide <text> <json> -> rc 0 where every number the text writes with
-# 19 digits or more, or as a wide hex, octal or binary, is there in the JSON as
-# the same text, in the same order, and no more of them: a number past 64 bits is
-# not refused by every tool, taplo gives -9223372036854775809 as 0, and the
-# digits of a digest inside a string are the same in both. At most 16 are looked
-# at, and a file holding more is the floor's.
+# 19 digits or more is a plain decimal that fits 64 bits, and the JSON holds the
+# same ones in the same order. taplo echoes an integer past 64 bits where the
+# floor refuses it and gives -9223372036854775809 as 0, and a hex, octal or
+# underscored one it respells, so none of those is its to read; the digits of a
+# digest inside a string pass, being the same in the text and in the JSON.
 _tj_same_wide() {
-    local a b
+    local a b m
     _tj_wide "$1" || return 1
     a="$_tj_w"
+    while IFS= read -r m; do
+        [[ -z "$m" ]] && continue
+        [[ "$m" =~ ^[0-9]{19}$ ]] && [[ ! "$m" > 9223372036854775807 ]] || return 1
+    done <<< "$a"
     _tj_wide "$2" || return 1
     b="$_tj_w"
     [[ "$a" == "$b" ]]
 }
 
-# _tj_wide <text> -> `_tj_w`, each wide number in it and a line end after each; rc 1 past 16
+# _tj_wide <text> -> `_tj_w`, each wide number in it on a line of its own
+# One pass of grep over the text, never a regex from the start of a megabyte per
+# number: that is how this was slow. rc 1 where grep fails; none found is no error.
 _tj_wide() {
-    local rest="$1" n=0 m
-    _tj_w=""
-    while [[ "$rest" =~ $_TOML_RE_WIDE ]]; do
-        (( ++n <= 16 )) || return 1
-        m="${BASH_REMATCH[0]}"
-        _tj_w+="$m"$'\n'
-        rest="${rest/"$m"/ }"
-    done
+    local rc
+    _tj_w="$(printf '%s' "$1" | LC_ALL=C grep -oE -- "$_TOML_RE_WIDE"; exit "${PIPESTATUS[1]}")" && return 0
+    rc=$?
+    (( rc == 1 ))
 }

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # greet - a fixture module with two public functions written out of order, one
-# public function with no usage line, and one private function.
+# public function with no usage line, and one private function, and loads
+# an internal module whose public function it lists as its own.
+
+use super::greet::wave
 
 #[pub]
 # Usage: greet_zulu <name> -> prints a farewell

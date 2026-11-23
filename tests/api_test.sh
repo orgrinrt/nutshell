@@ -37,6 +37,7 @@ _api_in() {
 _GREET_TEXT='greet
   greet_alpha <name> -> prints a greeting
   greet_bare
+  greet_wave <name> -> prints a wave
   greet_zulu <name> -> prints a farewell'
 
 #[test]
@@ -208,4 +209,38 @@ it_refuses_two_library_sources_at_once() {
 it_refuses_an_unknown_flag() {
     assert_fails _api_in "$_API_TMP" --no-such-flag
     assert_contains "$(_api_in "$_API_TMP" --no-such-flag 2>&1)" "no-such-flag"
+}
+
+#[test]
+it_lists_json_query_and_the_builders_under_json_from_its_internal_files() {
+    # json::query and json::build are internal rows of lib.nut that json loads;
+    # their functions are json's. The usage lines are the ones written above
+    # each function in lib/json/query.sh and lib/json/build.sh.
+    local out; out="$(cd "$ROOT_DIR" && "$NUTSHELL" api json)"
+    assert_contains "$out" "  json_query '.items[] | .name' \"\$json\""
+    assert_contains "$out" "  json_object \"key1\" \"value1\" \"key2\" \"value2\" -> '{"
+    assert_contains "$out" "  json_array \"a\" \"b\" \"c\" -> '[\"a\""
+    assert_eq "$(cd "$ROOT_DIR" && "$NUTSHELL" api | grep -c '^json::')" "0"
+}
+
+#[test]
+it_lists_a_function_defined_in_the_module_and_an_internal_file_once() {
+    # text.sh and text/impl/combo/grep_sed.sh both define and mark these.
+    local out; out="$(cd "$ROOT_DIR" && "$NUTSHELL" api text)"
+    assert_eq "$(printf '%s\n' "$out" | grep -c '^  text_filtered_replace ')" "1"
+    assert_eq "$(printf '%s\n' "$out" | grep -c '^  text_count_in_matches ')" "1"
+}
+
+#[test]
+it_lists_an_internal_module_no_module_loads_under_nothing() {
+    local out; out="$(_api_in "$_API_TMP" --path "$FIXLIB")"
+    assert_not_contains "$out" "fmt_hidden"
+    assert_contains "$out" "  greet_wave <name> -> prints a wave"
+    assert_not_contains "$out" "greet::wave"
+}
+
+#[test]
+it_says_in_its_help_that_internal_files_list_under_their_module() {
+    local out; out="$("$NUTSHELL" api --help)"
+    assert_contains "$out" "internal"
 }

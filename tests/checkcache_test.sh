@@ -281,22 +281,37 @@ it_refuses_an_entry_written_in_an_older_format() {
 # and behaves the way GNU's does. Prepending would let the machine's real one
 # answer, which is how a stub test comes to prove nothing.
 
+# The stubs answer with the host's real mtime and size, read through whichever
+# `stat` the host has. They were written on BSD and called `stat -f '%m'`
+# outright, which on a GNU host asks about the file system of a file named
+# `%m`, fails, and left every stub answering nothing.
+_stat_stub_prelude() {
+    local real mt sz
+    real="$(type -P stat)" || return 1
+    if "$real" -c '%Y' "$real" >/dev/null 2>&1; then
+        mt="$real -c %Y"; sz="$real -c %s"
+    else
+        mt="$real -f %m"; sz="$real -f %z"
+    fi
+    printf '#!/bin/sh\nMT="%s"\nSZ="%s"\n' "$mt" "$sz"
+}
+
 _stat_stub() {
     local dir="$1" kind="$2"
     mkdir -p "$dir"
+    _stat_stub_prelude > "$dir/stat"
     case "$kind" in
         gnu)
             # `-c` works and expands directives the way GNU does. `-f` exits 0
             # and prints filesystem noise, which is the whole hazard: written
             # against exit status, the chooser picks `-f` here and every stamp
             # on Linux is garbage that compares equal to itself.
-            cat > "$dir/stat" <<'STUB'
-#!/bin/sh
+            cat >> "$dir/stat" <<'STUB'
 if [ "$1" = "-c" ]; then
     shift; fmt="$1"; shift
     for f do
-        m=$(/usr/bin/stat -f '%m' "$f" 2>/dev/null) || exit 1
-        z=$(/usr/bin/stat -f '%z' "$f" 2>/dev/null) || exit 1
+        m=$($MT "$f" 2>/dev/null) || exit 1
+        z=$($SZ "$f" 2>/dev/null) || exit 1
         out=$fmt
         out=$(printf '%s' "$out" | sed -e "s|%Y|$m|g" -e "s|%s|$z|g" -e "s|%n|$f|g")
         printf '%s\n' "$out"
@@ -312,11 +327,16 @@ exit 1
 STUB
             ;;
         bsd)
-            cat > "$dir/stat" <<'STUB'
-#!/bin/sh
+            cat >> "$dir/stat" <<'STUB'
 [ "$1" = "-f" ] || exit 1
 shift; fmt="$1"; shift
-exec /usr/bin/stat -f "$fmt" "$@"
+for f do
+    m=$($MT "$f" 2>/dev/null) || exit 1
+    z=$($SZ "$f" 2>/dev/null) || exit 1
+    out=$(printf '%s' "$fmt" | sed -e "s|%m|$m|g" -e "s|%z|$z|g" -e "s|%N|$f|g")
+    printf '%s\n' "$out"
+done
+exit 0
 STUB
             ;;
         gnu-numeric)
@@ -325,13 +345,12 @@ STUB
             # looks numeric" probe, and the chooser then picks `-f` on a
             # machine where `-f` is not a format flag at all. Nothing here can
             # rule such a `stat` out, so the detection stops depending on it.
-            cat > "$dir/stat" <<'STUB'
-#!/bin/sh
+            cat >> "$dir/stat" <<'STUB'
 if [ "$1" = "-c" ]; then
     shift; fmt="$1"; shift
     for f do
-        m=$(/usr/bin/stat -f '%m' "$f" 2>/dev/null) || exit 1
-        z=$(/usr/bin/stat -f '%z' "$f" 2>/dev/null) || exit 1
+        m=$($MT "$f" 2>/dev/null) || exit 1
+        z=$($SZ "$f" 2>/dev/null) || exit 1
         out=$(printf '%s' "$fmt" | sed -e "s|%Y|$m|g" -e "s|%s|$z|g" -e "s|%n|$f|g")
         printf '%s\n' "$out"
     done

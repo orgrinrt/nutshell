@@ -98,7 +98,7 @@ _nut_hex() {
         M) _nh=4d ;;  N) _nh=4e ;;  O) _nh=4f ;;  P) _nh=50 ;;  Q) _nh=51 ;;  R) _nh=52 ;;
         S) _nh=53 ;;  T) _nh=54 ;;  U) _nh=55 ;;  V) _nh=56 ;;  W) _nh=57 ;;  X) _nh=58 ;;
         Y) _nh=59 ;;  Z) _nh=5a ;;
-        _) _nh=5f ;;
+        _) _nh=5f ;;  /) _nh=2f ;;  " ") _nh=20 ;;  :) _nh=3a ;;  @) _nh=40 ;;
         # Anything left: a byte this table does not name. Two nested command
         # substitutions, which is two subshells per character, and the reason
         # everything above is written out.

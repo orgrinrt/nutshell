@@ -981,3 +981,18 @@ nutshell_available() {
     ls -1 "${_NUTSHELL_ROOT}/lib/"*.sh 2>/dev/null | xargs -n1 basename | sed 's/\.sh$//' | sort
 }
 export -f nutshell_available
+
+# =============================================================================
+# The pins of `[deps.paths]`
+
+# `deps` asks `deps::pins` which path a tool is pinned to, by the names below.
+# That file is bash and reads the manifest through toml, and `deps` loads under
+# a POSIX shell, so `deps` cannot `use` it. Every script reaches nutshell
+# through this file, under bash, so the hand-off is made here: the first pin
+# `deps` asks for loads `deps::pins`, which then takes the names over. A
+# `deps.sh` sourced bare has neither name, pins nothing, and resolves each tool
+# from PATH.
+: "${_DEPS_PIN_GET:=_nut_deps_pin_get}"
+: "${_DEPS_PIN_CHECK:=_nut_deps_pin_check}"
+_nut_deps_pin_get() { use deps::pins || return 1; _deps_pin_get "$@"; }
+_nut_deps_pin_check() { use deps::pins || return 0; _deps_pin_check "$@"; }

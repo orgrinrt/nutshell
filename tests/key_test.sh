@@ -67,3 +67,18 @@ it_keys_a_hyphenated_name_without_forking_per_character() {
     assert_eq "$_nk" "enc_706b672d636f6e666967"
     assert_ok test "$per" -lt 3000
 }
+
+#[test]
+# A module's path is keyed on every `use`, and `/` fell to the forking arm:
+# eight slashes and more per path, about 1ms each. The expected key is `od`'s
+# bytes for the same text, and the bound is the one above.
+it_keys_a_path_without_forking_per_slash() {
+    local t0 t1 per i=0
+    nut_key '/a b:@_'
+    assert_eq "$_nk" "enc_2f6120623a405f"
+    t0="$(date +%s%N 2>/dev/null)" || { skip "no nanosecond clock"; return 0; }
+    while [ "$i" -lt 100 ]; do nut_key /home/user/lib/toml/impl/taplo.sh; i=$((i+1)); done
+    t1="$(date +%s%N)"
+    per=$(( (t1 - t0) / 100 / 1000 ))
+    assert_ok test "$per" -lt 3000
+}

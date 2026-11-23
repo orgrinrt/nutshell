@@ -211,12 +211,15 @@ _unlink_from() {
         link="${dir}/nutshell"
         [[ -L "$link" ]] || continue
         _ours "$link" || { log_warn "left ${link}, which points elsewhere"; continue; }
-        if [[ -w "$dir" ]]; then
-            rm -f "$link" && log_success "removed ${link}"
+        # A writable directory is no promise the link comes out: root passes
+        # `-w` on every directory and is still refused by an immutable one or
+        # a read-only mount, and that refusal was reported as nothing at all.
+        if [[ -w "$dir" ]] && rm -f "$link" 2>/dev/null; then
+            log_success "removed ${link}"
+        elif priv_run "remove ${link}" rm -f "$link"; then
+            log_success "removed ${link}"
         else
-            priv_run "remove ${link}" rm -f "$link" \
-                && log_success "removed ${link}" \
-                || log_warn "left ${link} in place"
+            log_warn "left ${link} in place"
         fi
     done
 }

@@ -31,6 +31,7 @@
 #   modgraph_modules                     # every module name
 #   modgraph_declares  toml              # what toml said it uses
 #   modgraph_defines   string            # what string introduces
+#   modgraph_public    string            # the ones of those marked #[pub]
 #   modgraph_calls     toml              # prefixed functions toml invokes
 #   modgraph_owner     str_trim          # which module defines it
 #
@@ -95,10 +96,15 @@ _MG_ROOT=""
 readonly _MG_SCHEMA=4
 
 _mg_fingerprint() {
-    local dir="$1"
-    { ls -1 "$dir"/*.sh 2>/dev/null | while IFS= read -r f; do
-          printf '%s:%s:%s\n' "${f##*/}" "$(fs_size "$f" 2>/dev/null)" "$(fs_mtime "$f" 2>/dev/null)"
-      done
+    local dir="$1" root="${MODGRAPH_ROOT:-${1%/*}}"
+    # Every file under the directory by content, and the manifest by content.
+    # The scan reads every level and names each file from lib.nut, so a key made
+    # of the top level alone served a stale graph after an edit to anything in
+    # a subdirectory or to the manifest. One `cksum` over all of them: asking
+    # `fs_size` and `fs_mtime` of each file cost two subshells apiece, three
+    # seconds for this library, which is longer than the scan it saves.
+    { find "$dir" -name '*.sh' -type f -exec cksum {} + 2>/dev/null | LC_ALL=C sort -k3
+      [ -r "${root}/lib.nut" ] && printf 'manifest:%s\n' "$(cksum < "${root}/lib.nut")"
       printf 'schema:%s\n' "$_MG_SCHEMA"
       # Which library, not only what is in it. Without this two libraries whose
       # files happen to share names, sizes and modification times resolve to
@@ -488,6 +494,22 @@ modgraph_owner() { printf '%s' "${_MG_OWNER[$1]:-}"; }
 #[pub]
 # Usage: modgraph_visibility str_trim -> prints "pub", "lib", "super", or nothing
 modgraph_visibility() { printf '%s' "${_MG_VIS[$1]:-}"; }
+
+# modgraph_public <module>
+#
+# The functions of that module marked `#[pub]`, in the order it defines them.
+# One call for the whole module, where asking `modgraph_visibility` of each
+# function costs a subshell apiece.
+#
+#[pub]
+# Usage: modgraph_public toml -> prints the functions toml marks #[pub], one per line
+modgraph_public() {
+    local fn
+    for fn in ${_MG_DEFINES[$1]:-}; do
+        [[ "${_MG_VIS[$fn]:-}" == "pub" ]] && printf '%s\n' "$fn"
+    done
+    return 0
+}
 
 # -----------------------------------------------------------------------------
 # Cycles

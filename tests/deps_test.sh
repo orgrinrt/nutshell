@@ -264,7 +264,11 @@ _dt_posix_sh() {
 # on its own.
 _dt_under() {
     local sh="$1" expr="$2"
-    "$sh" -c '. "$1/lib/key.sh" >/dev/null 2>&1
+    # `use` is the module system's, which a bare shell here has not got, so it is
+    # a loader for the parts `deps` is split into and nothing else.
+    "$sh" -c 'use() { for _m in "$@"; do case "$_m" in super::deps::*) . "$_root/lib/deps/${_m#super::deps::}.sh" ;; esac; done; }
+              _root="$1"
+              . "$1/lib/key.sh" >/dev/null 2>&1
               . "$1/lib/os.sh" >/dev/null 2>&1
               . "$1/lib/deps.sh" >/dev/null 2>&1
               eval "$2"' _ "$NUTSHELL_ROOT" "$expr" 2>&1

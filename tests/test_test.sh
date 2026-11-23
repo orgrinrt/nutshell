@@ -466,3 +466,25 @@ it_counts_a_filtered_run_against_what_the_filter_selects() {
     assert_not_contains "$out" "tests it declares"
     assert_not_contains "$out" "it_skip_two"
 }
+
+#[test]
+it_reports_a_skip_with_its_reason_and_counts_it_apart() {
+    # A test that cannot run here says so and why, instead of returning early
+    # and passing having asserted nothing, and the summary counts it apart from
+    # passes and failures.
+    local out
+    out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
+    assert_contains "$out" "[SKIP] it_skips_for_want_of_a_tool" "no skip line"
+    assert_contains "$out" "no frobnicator on this machine" "the reason was not printed"
+    assert_contains "$out" "2 failed, 1 passed, 1 skipped" "the tally did not count the skip separately"
+}
+
+#[test]
+it_does_not_let_a_skip_hide_a_failure_before_or_after_it() {
+    local out
+    out="$(cd "$NUTSHELL_ROOT" 2>/dev/null || cd .; ./test tests/fixtures/skips_test.sh 2>&1)"
+    assert_contains     "$out" "[FAIL] it_fails_before_it_skips"
+    assert_contains     "$out" "[FAIL] it_fails_after_a_skip_and_stays_failed"
+    assert_not_contains "$out" "[SKIP] it_fails_before_it_skips"
+    assert_not_contains "$out" "[SKIP] it_fails_after_a_skip_and_stays_failed"
+}

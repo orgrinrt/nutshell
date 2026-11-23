@@ -27,37 +27,39 @@
 [ -n "${_NUTSHELL_JSON_IMPL_JQ_SH:-}" ] && return 0
 _NUTSHELL_JSON_IMPL_JQ_SH=1
 
-# _jq_path <dotted-path> -> a jq path expression
-#
-# Every function here used to build its own by putting a dot in front of the
-# whole path, which is wrong for any segment that is a number: `.1` is not the
-# second element of an array, it is the number 0.1, so `json_get '[10,20]' 1`
-# answered `0.1`. Bracket form for both kinds, and a name is quoted so a key
-# holding a dash or a space stays one segment.
-_jq_path() {
-    local dotted="${1:-}" expr="." seg oldifs oldf
-    case "$dotted" in .*) dotted="${dotted#.}" ;; esac
-    [ -z "$dotted" ] && { printf '.'; return 0; }
+use string
 
-    oldifs="$IFS"
-    # `set -f` is restored to what it was rather than turned off. A caller that
-    # had globbing disabled got it back on, which is a change this function has
-    # no business making. The `dev` version used `local IFS` and touched
-    # neither.
-    case "$-" in *f*) oldf=1 ;; *) oldf=0 ;; esac
-    set -f; IFS='.'
-    # shellcheck disable=SC2086
-    for seg in $dotted; do
-        IFS="$oldifs"; [ "$oldf" = 1 ] || set +f
-        if [ -n "$seg" ]; then
-            case "$seg" in
-                *[!0-9]*) expr="${expr}[\"${seg}\"]" ;;
-                *)        expr="${expr}[${seg}]" ;;
-            esac
-        fi
-        set -f; IFS='.'
+# _jq_lit <segment> -> `_jq_e`, the segment as a jq string literal
+# Backslash first, or the quote's backslash is escaped again.
+_jq_lit() {
+    _jq_e="$1"
+    str_replace "$_jq_e" '\' '\\' _jq_e
+    str_replace "$_jq_e" '"' '\"' _jq_e
+    _jq_e="\"${_jq_e}\""
+}
+
+# _jq_path <segments> -> a jq path expression
+#
+# The segments of a path joined by the unit separator, split by the caller
+# (`json.sh`), so a key that holds a dot is one segment. Every function here
+# used to build its own by putting a dot in front of the whole path, which is
+# wrong for any segment that is a number: `.1` is not the second element of an
+# array, it is the number 0.1, so `json_get '[10,20]' 1` answered `0.1`.
+# Bracket form for both kinds, and a name is quoted so a key holding a dash or
+# a space stays one segment.
+_jq_path() {
+    local rest="${1:-}" expr="." seg
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            *"$_JSON_US"*) seg="${rest%%"$_JSON_US"*}"; rest="${rest#*"$_JSON_US"}" ;;
+            *)             seg="$rest"; rest="" ;;
+        esac
+        [ -z "$seg" ] && continue
+        case "$seg" in
+            *[!0-9]*) _jq_lit "$seg"; expr="${expr}[${_jq_e}]" ;;
+            *)        expr="${expr}[${seg}]" ;;
+        esac
     done
-    IFS="$oldifs"; [ "$oldf" = 1 ] || set +f
     printf '%s' "$expr"
 }
 
@@ -77,26 +79,24 @@ _jq_is_number() {
     return 0
 }
 
-# _jq_present <json> <dotted-path> -> 0 when the path leads somewhere
+# _jq_present <json> <segments> -> 0 when the path leads somewhere
 #
 # jq answers `null` both for a key that is absent and for one that is present
 # and holds null, and both with a status of zero. A caller cannot tell those
 # apart, and `json_get_or` has to.
 _jq_present() {
-    local json="$1" dotted="${2:-}" parent last answer
-    case "$dotted" in .*) dotted="${dotted#.}" ;; esac
-    [ -z "$dotted" ] && return 0
+    local json="$1" segs="${2:-}" parent last answer
+    [ -z "$segs" ] && return 0
 
-    last="${dotted##*.}"
-    if [ "$last" = "$dotted" ]; then
-        parent="."
-    else
-        parent="$(_jq_path "${dotted%.*}")"
-    fi
+    case "$segs" in
+        *"$_JSON_US"*) last="${segs##*"$_JSON_US"}"; parent="$(_jq_path "${segs%"$_JSON_US"*}")" ;;
+        *)             last="$segs"; parent="." ;;
+    esac
+    _jq_lit "$last"
 
     answer="$(printf '%s' "$json" | "${_TOOL_PATH_jq}" -r \
-        "${parent} | if type == \"object\" then has(\"${last}\")
-         elif type == \"array\" then ((\"${last}\" | tonumber? // -1) as \$i
+        "${parent} | if type == \"object\" then has(${_jq_e})
+         elif type == \"array\" then ((${_jq_e} | tonumber? // -1) as \$i
               | \$i >= 0 and \$i < length)
          else false end" 2>/dev/null)"
     [ "$answer" = "true" ]

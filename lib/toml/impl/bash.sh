@@ -21,7 +21,8 @@
 #   _TOML_R  every value as written in the file
 #   _TOML_K  the keys of a table in file order, each led by the record separator
 #   _TOML_N  the length of an array or array of tables
-#   _TOML_F  how a table came to be: h header, i implicit, d dotted, X inline
+#   _TOML_F  how a table came to be: h header, i implicit, d dotted, X inline;
+#            on a scalar read from a tool's JSON, L where the tool rewrites its type
 #
 # `_TOML_HDR` lists the tables named by a header, in the order first seen.
 #

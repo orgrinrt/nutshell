@@ -16,6 +16,7 @@
 #
 #   nutshell <script>       run a script with the nutshell environment
 #   nutshell -c <command>   run a command string, as any shell does
+#   nutshell api [<module>] list a library's public functions
 #   nutshell --version      print the version
 #   nutshell --help         what is here
 #
@@ -132,23 +133,28 @@ _nut_manifest() {
     return 1
 }
 
-# A root-level scalar, stopping at the first [table] header.
+# A root-level key, read through the toml module: a key under a table header is
+# that table's and not the document's, and any spelling TOML allows for the key
+# or the string is read. A file that is not TOML is said on stderr by the module
+# and holds no pin.
 #
-# Success means a non-empty value. An empty one used to return 0 and short
-# circuit the version fallback, so a file with a broken branch line and a good
-# version line resolved to no pin at all.
+# Success means a non-empty value, printed and left in `_nut_pin_v`. An empty one
+# used to return 0 and short circuit the version fallback, so a file with a
+# broken branch line and a good version line resolved to no pin at all.
+_nut_pin_v=""
 _nut_pin() {
-    local file="$1" key="$2" line
-    # `|| [[ -n "$line" ]]` so a final line with no trailing newline is read.
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*\[ ]] && return 1
-        if [[ "$line" =~ ^[[:space:]]*"$key"[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
-            [[ -n "${BASH_REMATCH[1]}" ]] || return 1
-            printf '%s' "${BASH_REMATCH[1]}"
-            return 0
-        fi
-    done < "$file"
-    return 1
+    local file="$1" key="$2"
+    # The floor alone. The script's manifest is not known yet, and a backend
+    # picked now would be the one deps finds without the script's pins, kept
+    # for the rest of the run.
+    local _TOML_FLOOR_ONLY=1
+    _nut_pin_v=""
+    # Asked here first so the file is read in this shell, where the module keeps
+    # the tree, and the capture below answers from it rather than reading again.
+    toml_has "$file" "$key" || return 1
+    _nut_pin_v="$(toml_get "$file" "$key")" || { _nut_pin_v=""; return 1; }
+    [[ -n "$_nut_pin_v" ]] || return 1
+    printf '%s' "$_nut_pin_v"
 }
 
 # A ref safe to hand to git.
@@ -254,8 +260,12 @@ _nut_resolve_pin() {
     dir="$(cd "$(dirname "$script")" && pwd)" || return 1
     manifest="$(_nut_manifest "$dir")" || return 1
 
-    ref="$(_nut_pin "$manifest" nutshell_branch)" ||
-        ref="$(_nut_pin "$manifest" nutshell_version)" || return 1
+    # Called here and not captured, so the manifest is read once in this shell
+    # and the value comes back in `_nut_pin_v`.
+    if _nut_pin "$manifest" nutshell_branch >/dev/null; then ref="$_nut_pin_v"
+    elif _nut_pin "$manifest" nutshell_version >/dev/null 2>&1; then ref="$_nut_pin_v"
+    else return 1
+    fi
 
     _nut_ref_ok "$ref" || {
         log_error "nutshell: '${ref}' in ${manifest} is not a usable git ref"
@@ -266,7 +276,7 @@ _nut_resolve_pin() {
         return 1
     }
     root="$(_nut_pinned_root "$ref" "$url")" || return 1
-    printf '%s' "$root"
+    _nut_pinned="$root"
 }
 
 # Sourced rather than run: the helpers above are defined, and nothing below
@@ -293,7 +303,8 @@ _nut_resolve_pin() {
 # Carrying the resolved root instead makes the guard exact: stop when we are
 # already the answer. That is also true after an exec, so it needs no flag.
 if [[ -f "${1:-}" && "${NUTSHELL_PIN_ROOT:-}" != "$_NUTSHELL_HOME" ]]; then
-    if _nut_pinned="$(_nut_resolve_pin "$1")" && [[ -n "$_nut_pinned" ]]; then
+    _nut_pinned=""
+    if _nut_resolve_pin "$1" && [[ -n "$_nut_pinned" ]]; then
         if [[ "$_nut_pinned" != "$_NUTSHELL_HOME" ]]; then
             export NUTSHELL_PIN_ROOT="$_nut_pinned"
             exec "$_nut_pinned/bin/nutshell" "$@"
@@ -318,6 +329,7 @@ nutshell - Everything you need, in a nutshell.
 Usage:
   nutshell <script>       Run a script with nutshell environment
   nutshell -c <command>   Run a command string, as any shell does
+  nutshell api [<module>] List the public functions of a library (--help)
   nutshell --version      Show version
   nutshell --help         Show this help
 
@@ -369,6 +381,15 @@ case "${1:-}" in
         rm -f "$_tmp"
         _SCRIPT="/dev/fd/${_cfd}"
         _IS_COMMAND=1
+        ;;
+    api)
+        # A command of nutshell's own, which lists a library's public functions
+        # and so has to work from any directory: `test` and `check` are scripts
+        # in a project's root, found by the path rule below, and this is not
+        # one of those. A script called `api` in the working directory is run
+        # as `nutshell ./api`.
+        shift
+        _SCRIPT="${_NUTSHELL_HOME}/bin/nut-api"
         ;;
     -*)
         # An unknown option is a mistake, not a file. Treating it as one

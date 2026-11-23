@@ -438,7 +438,7 @@ _priv_only_path() {
     _deps_find_tool() {
         local d i="$IFS"; IFS=:
         for d in $PATH; do
-            if [ -x "$d/$1" ]; then IFS="$i"; printf '%s\n' "$d/$1"; return 0; fi
+            if [ -x "$d/$1" ]; then IFS="$i"; _DEPS_FOUND="$d/$1"; return 0; fi
         done
         IFS="$i"; return 1
     }
@@ -540,7 +540,7 @@ it_runs_the_runuser_deps_resolved_and_not_the_bare_name() {
     local only; only="$(declare -f _deps_find_tool)"
     eval "_deps_find_only_path${only#_deps_find_tool}"
     _deps_find_tool() {
-        [ "$1" = runuser ] && { printf '%s\n' "$_PIN_DIR/runuser"; return 0; }
+        [ "$1" = runuser ] && { _DEPS_FOUND="$_PIN_DIR/runuser"; return 0; }
         _deps_find_only_path "$@"
     }
     _PIN_DIR="$pinned"; deps_forget

@@ -1,0 +1,10 @@
+case      What a nutshell script pays before its first line, 10 starts per arm
+size      10
+repeats   7
+baseline  bash, nothing loaded
+bash      5.2.21(1)-release
+host      Linux x86_64
+taken     2026-11-23T00:35:30Z
+target    script, no use, no manifest 500 missed
+target    script, no use, 300-line manifest 500 missed
+target    script, use json, no manifest 800 missed

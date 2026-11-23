@@ -1,0 +1,10 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash  nothing loaded,33,39,within the noise,yes
+bash sourcing init,51,52,154%,yes
+init  use deps,174,197,527%,yes
+init  use extern log,556,612,1684%,yes
+script  no use  no manifest,82,94,248%,yes
+script  no use  300-line manifest,313,393,948%,yes
+script  use json  no manifest,656,789,1987%,yes
+script  use toml  300-line manifest,297,346,900%,yes
+script  no use  300-line manifest  cold,1267,1586,3839%,yes

@@ -57,9 +57,14 @@ _NUTSHELL_TOML_SH=1
 # Declared, not sourced by path. A hand-rolled `source` loads the module and
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency would be real and unrecorded at once.
-use validate
-use deps
-use super::toml::impl::bash super::toml::impl::bash_path super::toml::impl::from_json
+#
+# The floor and its path language at load, since every question goes through
+# them. `deps`, `validate` and the reader of a tool's JSON where a call first
+# needs them: `deps` to pick a backend, which the floor alone never does, and
+# `validate` for `toml_is_true`. Loaded here they were 30ms of a 50ms load, and
+# the interpreter reads an engine pin through this module before every script
+# that sits beside a manifest.
+use super::toml::impl::bash super::toml::impl::bash_path super::toml::cache
 
 _TOML_BACKEND=""
 _TOML_FROM=""
@@ -112,9 +117,17 @@ _toml_text() {
 }
 
 # _toml_open <file> -> the file read; rc 2 also prints why
+# A tree kept by an earlier process for the same text is taken before parsing,
+# and a tree parsed here is kept for the next one.
 _toml_open() {
-    local rc=0
+    local rc=0 c="" miss=0
+    if [[ -f "$1" && -r "$1" ]] && ! IFS= read -r -d '' c < "$1" \
+        && ! [[ "$_TOML_ID" == "$1" && "$_TOML_SRC" == "$c" ]]; then
+        _toml_cache_load "$1" "$c" && return 0
+        miss=1
+    fi
     _toml_load "$1" || rc=$?
+    (( miss && rc == 0 )) && _toml_cache_store "$1" "$c"
     (( rc == 2 )) && printf '%s\n' "$_TOML_ERR" >&2
     return "$rc"
 }
@@ -127,6 +140,7 @@ _toml_open() {
 _toml_tool_json() {
     nut_lazy_guard _toml_tool_json || return 1
     local _NUT_LAZY__toml_tool_json=1
+    use deps || return 1
     # FIXME(63ac7b74f97a): the variant stands in for `deps_can toml_json_taplo`
     # and `deps_can toml_read`, which scan every tool first, 200 ms on the first
     # read; a tool that then fails on a file sends it to the floor all the same.
@@ -172,7 +186,7 @@ _toml_open_values() {
     # floor reads all of TOML 1.0.
     [[ "$c" =~ $_TOML_RE_WIDE ]] && { _TOML_FROM=bash; _toml_open "$f"; return; }
     _TOML_ID=""
-    if _toml_tool_json "${c#$'\xef\xbb\xbf'}" && _toml_json_tree "$f" "$_tt_json"; then
+    if _toml_tool_json "${c#$'\xef\xbb\xbf'}" && use super::toml::impl::from_json && _toml_json_tree "$f" "$_tt_json"; then
         # Set again: the pick may have had deps read its pins through the floor.
         _TOML_ID="json$_TOML_US$f" _TOML_SRC="$c" _TOML_RC=0 _TOML_FROM=json
         return 0
@@ -446,6 +460,7 @@ toml_tables() {
 # Check if a TOML value is true (handles various boolean representations)
 # Usage: toml_is_true "file.toml" "key" -> returns 0 (true) or 1 (false)
 toml_is_true() {
+    use validate || return 1
     _toml_value "${1:-}" "${2:-}" || return 1
     is_truthy "$_tx_out"
 }

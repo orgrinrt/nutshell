@@ -15,23 +15,27 @@ _NUTSHELL_DEPS_CONFIG_SH=1
 # directory, each searched upward. A script's tool paths belong to the script,
 # so one run against another repository still reads its own `[deps.paths]`.
 # Nutshell's own manifest is the last resort.
-# Usage: _deps_find_config -> prints the path of the nut.toml that applies, rc 1 when there is none
+#
+# Into a variable rather than printed: the capture around it was a fork on the
+# first tool question of every process.
+# Usage: _deps_find_config -> `_DEPS_FOUND_CONFIG`, the nut.toml that applies, rc 1 when there is none
 #[pub(super)]
 _deps_find_config() {
     local start dir
+    _DEPS_FOUND_CONFIG=""
     for start in "${_NUT_ASKING_FROM:-}" "${NUTSHELL_SCRIPT_DIR:-}" "${PWD}"; do
         [ -n "$start" ] || continue
         dir="$start"
         while [ -n "$dir" ] && [ "$dir" != "/" ]; do
             if [ -f "${dir}/nut.toml" ]; then
-                printf '%s\n' "${dir}/nut.toml"
+                _DEPS_FOUND_CONFIG="${dir}/nut.toml"
                 return 0
             fi
             case "$dir" in */*) dir="${dir%/*}" ;; *) break ;; esac
         done
     done
     if [ -n "${NUTSHELL_ROOT:-}" ] && [ -f "${NUTSHELL_ROOT}/nut.toml" ]; then
-        printf '%s\n' "${NUTSHELL_ROOT}/nut.toml"
+        _DEPS_FOUND_CONFIG="${NUTSHELL_ROOT}/nut.toml"
         return 0
     fi
     return 1
@@ -43,18 +47,24 @@ _deps_find_config() {
 
 # Find tool path using resolution order:
 # 1. User config (nut.toml [deps.paths])
-# 2. which (if available)
+# 2. The first executable file of that name on PATH, as `which` finds it
 # 3. Common locations, verified for executability
 #
 # Returns 1 for a tool that is not there and 2 for an entry in `[deps.paths]`
 # that names something which is not an executable file. The second is a fault
 # in the manifest, said once on stderr, and it never falls through to PATH: an
 # override that silently pins nothing is worse than having none.
-# Usage: _deps_find_tool <tool> <config file> -> prints the path, rc 1 when absent, rc 2 on a refused pin
+#
+# The answer goes into a variable, and PATH is walked here rather than by
+# running `which`: `deps_has` captured this, so each tool a process asked about
+# cost a fork and an exec, and the first one also loaded `deps::pins` and read
+# the manifest inside the capture, where all of it was thrown away.
+# Usage: _deps_find_tool <tool> <config file> -> `_DEPS_FOUND`, rc 1 when absent, rc 2 on a refused pin
 #[pub(super)]
 _deps_find_tool() {
     local tool="$1"
     local config_file="$2"
+    _DEPS_FOUND=""
 
     # 1. Check user config first
     if [ -n "$config_file" ]; then
@@ -64,7 +74,7 @@ _deps_find_tool() {
         if [ "$rc" -eq 0 ]; then
             user_path="$_DEPS_PIN"
             if [ -f "$user_path" ] && [ -x "$user_path" ]; then
-                echo "$user_path"
+                _DEPS_FOUND="$user_path"
                 return 0
             fi
             printf '[ERROR] deps: [deps.paths] %s = "%s" is not an executable file (%s)\n' \
@@ -72,29 +82,29 @@ _deps_find_tool() {
             return 2
         fi
     fi
-    
-    # 2. Try which if available (using command -v to check for which itself)
-    if command -v which >/dev/null 2>&1; then
-        local found
-        found="$(which "$tool" 2>/dev/null)"
-        if [ -n "$found" ] && [ -x "$found" ]; then
-            echo "$found"
+
+    # 2. PATH, element by element. An empty element is the working directory.
+    local rest="${PATH:-}:" dir
+    while [ -n "$rest" ]; do
+        dir="${rest%%:*}"; rest="${rest#*:}"
+        [ -n "$dir" ] || dir="."
+        if [ -f "${dir}/${tool}" ] && [ -x "${dir}/${tool}" ]; then
+            _DEPS_FOUND="${dir}/${tool}"
             return 0
         fi
-    fi
-    
+    done
+
     # 3. Check common locations
     # The prefixes rather than the joined paths, so the list is words with no
     # spaces in any of them and splitting it is safe. A tool name with a space
     # in it is not a tool name.
-    local dir
     for dir in /usr/bin /bin /usr/local/bin /opt/homebrew/bin; do
         if [ -x "${dir}/${tool}" ]; then
-            echo "${dir}/${tool}"
+            _DEPS_FOUND="${dir}/${tool}"
             return 0
         fi
     done
-    
+
     # Not found
     return 1
 }

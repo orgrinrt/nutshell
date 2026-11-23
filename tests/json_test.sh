@@ -305,3 +305,70 @@ it_escapes_a_lone_backslash_exactly_once() {
     local got; got="$(json_object k '\')"
     assert_eq "$got" '{"k":"\\"}'
 }
+
+# -----------------------------------------------------------------------------
+# json_set creates a missing parent, the way jq does
+# -----------------------------------------------------------------------------
+#
+# jq's `.a.b.c = 1` on `{}` makes `{"a":{"b":{"c":1}}}`, a null on the way is
+# replaced, and a number segment makes an array, padded with null. Python
+# answered 1 and perl answered `{}`, so the same call built a document or none
+# by whichever tool was installed. The literals are what jq 1.7 printed.
+
+# _has_impl <name> -> 0 when this machine has that backend
+_has_impl() {
+    case "$1" in
+        jq)     deps_has jq ;;
+        python) deps_has python3 || deps_has python ;;
+        perl)   deps_has perl ;;
+    esac
+}
+
+# _set_creates <backend> -> asserts the parents are made, or skips by name
+_set_creates() {
+    local impl="$1"
+    if ! _has_impl "$impl"; then skip "${impl} is not on this machine"; return 0; fi
+    _JSON_IMPL="$impl"
+    assert_eq "$(json_set '{}' a.b.c 1)" '{"a":{"b":{"c":1}}}' "three missing levels, under ${impl}"
+    assert_eq "$(json_set '{}' a.b x)" '{"a":{"b":"x"}}' "a string value, under ${impl}"
+    assert_eq "$(json_set '{"a":{"x":1}}' a.y.z 2)" '{"a":{"x":1,"y":{"z":2}}}' "beside a sibling, under ${impl}"
+    assert_eq "$(json_set '{"a":null}' a.b 1)" '{"a":{"b":1}}' "a null on the way, under ${impl}"
+    assert_eq "$(json_set '{}' a.b.1 x)" '{"a":{"b":[null,"x"]}}' "a number segment makes an array, under ${impl}"
+    assert_eq "$(json_set '{"a":[1]}' a.3 9)" '{"a":[1,null,null,9]}' "an array grows, under ${impl}"
+    assert_eq "$(json_set '[1]' 3 9)" '[1,null,null,9]' "a top-level array grows, under ${impl}"
+    assert_eq "$(json_set '{"a":{"b":1}}' a.b 9)" '{"a":{"b":9}}' "an existing key is still replaced, under ${impl}"
+}
+
+#[test]
+it_sets_through_missing_parents_under_jq() { _set_creates jq; }
+
+#[test]
+it_sets_through_missing_parents_under_python() { _set_creates python; }
+
+#[test]
+it_sets_through_missing_parents_under_perl() { _set_creates perl; }
+
+#[test]
+it_refuses_a_set_through_a_scalar_on_every_backend() {
+    local impl out
+    for impl in jq python perl; do
+        _has_impl "$impl" || continue
+        _JSON_IMPL="$impl"
+        out="$(json_set '{"a":5}' a.b 1 2>/dev/null)"
+        assert_fails json_set '{"a":5}' a.b 1
+        assert_eq "$out" "" "no document is printed, under ${impl}"
+    done
+}
+
+#[test]
+it_builds_the_same_document_from_missing_parents_on_every_backend() {
+    local impl first="" seen=0 got
+    for impl in jq python perl; do
+        _has_impl "$impl" || { skip "${impl} is not on this machine"; continue; }
+        _JSON_IMPL="$impl"
+        got="$(json_set '{"k":{"z":1}}' k.a.b.0.c true 2>&1)"
+        if [ "$seen" -eq 0 ]; then first="$got"; seen=1
+        else assert_eq "$got" "$first" "${impl} against the first backend"; fi
+    done
+    assert_eq "$first" '{"k":{"a":{"b":[{"c":true}]},"z":1}}'
+}

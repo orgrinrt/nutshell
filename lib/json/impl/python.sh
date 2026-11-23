@@ -123,6 +123,42 @@ def parent_and_last(data, path):
     return current, parts[-1]
 
 
+def is_index(part):
+    return part != "" and all(c in "0123456789" for c in part)
+
+
+def container_for(part):
+    """What a missing parent is made of, as jq makes it: an array when the
+    next segment is a number, an object otherwise."""
+    return [] if is_index(part) else {}
+
+
+def assign(node, parts, value):
+    """Set value at parts under node and return the node, making what is not
+    there: a missing key or a null becomes a container, and an array grows,
+    padded with null, the way jq's `.a[3] = x` does. A scalar in the way, or a
+    number segment on an object, raises, which is status 1."""
+    if not parts:
+        return value
+    part, rest = parts[0], parts[1:]
+    if node is None:
+        node = container_for(part)
+    if isinstance(node, list):
+        if not is_index(part):
+            raise TypeError(part)
+        i = int(part)
+        if i >= len(node):
+            node.extend([None] * (i + 1 - len(node)))
+        node[i] = assign(node[i], rest, value)
+    elif isinstance(node, dict):
+        if is_index(part):
+            raise TypeError(part)
+        node[part] = assign(node.get(part), rest, value)
+    else:
+        raise TypeError(part)
+    return node
+
+
 def main():
     if op == "valid":
         json.loads(args[0])
@@ -150,16 +186,12 @@ def main():
     elif op == "compact":
         print(dump(data))
     elif op == "set":
-        current, last = parent_and_last(data, path)
         raw = args[2]
         try:
             value = json.loads(raw)
         except ValueError:
             value = raw
-        if isinstance(current, list):
-            current[int(last)] = value
-        else:
-            current[last] = value
+        data = assign(data, [p for p in path.split("\x1f") if p], value)
         print(dump(data))
     elif op == "delete":
         current, last = parent_and_last(data, path)

@@ -284,3 +284,47 @@ it_does_not_let_a_plain_comment_carry_a_gate() {
     assert_contains "$(_lib_nut_lookup "$_MF_DIR" demo 2>/dev/null)" "gated.sh"
     _mf_done
 }
+
+# --- the directory a file sits in ----------------------------------------------
+#
+# `_nut_caller_dir` stands in for `cd "$(dirname f)" && pwd`. The expected
+# directories are the ones each test made, not anything the function said.
+
+# _icd <path> <working directory> -> `_ncd` for the path, asked from that directory
+_icd() {
+    local init; init="$(cd "${INIT%/init}" && pwd)/init"
+    env -i PATH="$PATH" HOME="$HOME" bash -c 'cd "$3" || exit 1; . "$1" || exit 1; _nut_caller_dir "$2"; printf "[%s]" "$_ncd"' \
+        _ "$init" "$1" "$2"
+}
+
+#[test]
+it_finds_root_as_the_directory_of_a_file_at_root() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nut-icd.XXXXXX")"
+    local out; out="$(_icd /x.sh "$d")"
+    rm -rf "$d"
+    assert_eq "$out" "[/]"
+}
+
+#[test]
+it_finds_the_working_directory_for_a_bare_name() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nut-icd.XXXXXX")"
+    d="$(cd "$d" && pwd -P)"
+    local out; out="$(_icd x.sh "$d")"
+    rm -rf "$d"
+    assert_eq "$out" "[$d]"
+}
+
+#[test]
+it_finds_the_directory_of_a_relative_path() {
+    local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nut-icd.XXXXXX")"
+    d="$(cd "$d" && pwd -P)"
+    mkdir -p "$d/sub/deeper"
+    local a b c
+    a="$(_icd sub/x.sh "$d")"
+    b="$(_icd ./sub/deeper/../x.sh "$d")"
+    c="$(_icd deeper/x.sh "$d/sub")"
+    rm -rf "$d"
+    assert_eq "$a" "[$d/sub]"
+    assert_eq "$b" "[$d/sub]"
+    assert_eq "$c" "[$d/sub/deeper]"
+}

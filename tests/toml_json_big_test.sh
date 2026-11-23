@@ -232,3 +232,135 @@ it_converts_a_large_file_to_the_same_text_through_every_reader() {
     fi
     rm -rf "$d"
 }
+
+# _tbg_sized <path> <bytes> -> a file of exactly that many bytes, one key
+_tbg_sized() {
+    local pad; printf -v pad '%*s' "$(( $2 - 7 ))" ''
+    printf 'a = "%s"\n' "${pad// /x}" > "$1"
+}
+
+#[test]
+it_takes_the_large_path_from_4096_bytes_and_the_tree_route_below() {
+    # The kept JSON is what the large path leaves and the tree route does not.
+    local d n first second; d="$(mktemp -d)"
+    for n in 4095 4096; do
+        _tbg_sized "$d/f$n.toml" "$n"
+        first="$(_tbg_run "taplo yq" "$d/c$n" "" "$d/f$n.toml")"
+        second="$(_tbg_run "taplo yq" "$d/c$n" "$_TBG_CANARY" "$d/f$n.toml")"
+        if (( n == 4096 )); then assert_eq "$second" "$first" "4096 bytes is kept"
+        else assert_contains "$second" "treeload" "4095 bytes is not"; fi
+    done
+    rm -rf "$d"
+}
+
+#[test]
+it_refuses_an_integer_past_64_bits_on_both_sides_of_the_threshold_through_taplo() {
+    # taplo echoes 9223372036854775808 and 18446744073709551615, which no
+    # reader may hold; the floor refuses them, so every path does, and a refusal
+    # is never kept to be answered later with taplo out of reach.
+    _tbg_taplo || { skip "taplo absent: no taplo that prints TOML as json here"; return 0; }
+    local d t big out; d="$(mktemp -d)"
+    _tbg_proxy "$d"
+    for t in 'b = 9223372036854775808
+' 'b = 18446744073709551615
+' 'b = [1, 9223372036854775808]
+'; do
+        for big in 0 1; do
+            if (( big )); then _tbg_file "$d/f.toml" "$t"; else printf '%s' "$t" > "$d/f.toml"; fi
+            rm -rf "$d/c"
+            _tbg_run "yq" "$d/c" "" "$d/f.toml" "$d/bin" > "$d/out"; out="$(cat "$d/out")"
+            assert_eq "$_tbg_rc" "2" "taplo, big=$big, $t"
+            assert_contains "$out" "out of range"
+            _tbg_run "taplo yq" "$d/c" "" "$d/f.toml" > "$d/out"
+            assert_eq "$_tbg_rc" "2" "taplo hidden after, big=$big"
+        done
+    done
+    _tbg_file "$d/f.toml" 'b = 9223372036854775807
+'
+    out="$(_tbg_run "yq" "$d/c2" "" "$d/f.toml" "$d/bin")"
+    rm -rf "$d"
+    assert_contains "$out" '"b":9223372036854775807}'
+}
+
+#[test]
+it_converts_the_text_it_read_where_the_file_is_swapped_for_another_meanwhile() {
+    # taplo is refused, so the floor reads, and between the first read and the
+    # second the file is replaced: the JSON kept under the first text must be the
+    # first text's, never the second's.
+    local d ref swapped again; d="$(mktemp -d)"
+    _tbg_file "$d/f.toml"
+    cp "$d/f.toml" "$d/orig.toml"
+    ref="$(_tbg_run "taplo yq" "$d/ref" "" "$d/f.toml")"
+    swapped="$(_tbg_run "taplo yq" "$d/c" '_tj_tool() { printf "swapped = 1\n" > "'"$d"'/f.toml"; return 1; }' "$d/f.toml")"
+    cp "$d/orig.toml" "$d/f.toml"
+    again="$(_tbg_run "taplo yq" "$d/c" "" "$d/f.toml")"
+    rm -rf "$d"
+    assert_eq "$swapped" "$ref"
+    assert_eq "$again" "$ref"
+}
+
+#[test]
+it_converts_again_where_the_taplo_that_wrote_the_kept_json_was_replaced() {
+    _tbg_taplo || { skip "taplo absent: no taplo that prints TOML as json here"; return 0; }
+    local d calls; d="$(mktemp -d)"
+    _tbg_file "$d/f.toml"
+    _tbg_proxy "$d"
+    _tbg_run "yq" "$d/c" "" "$d/f.toml" "$d/bin" > /dev/null
+    _tbg_run "yq" "$d/c" "" "$d/f.toml" "$d/bin" > /dev/null
+    calls="$(grep -c get "$d/log")"
+    assert_eq "$calls" "1" "kept while taplo is the one that wrote it"
+    touch -d "now + 10 seconds" "$d/bin/taplo"
+    _tbg_run "yq" "$d/c" "" "$d/f.toml" "$d/bin" > /dev/null
+    calls="$(grep -c get "$d/log")"
+    rm -rf "$d"
+    assert_eq "$calls" "2" "taplo is asked again once its binary is newer"
+}
+
+#[test]
+it_refuses_what_the_floor_refuses_on_the_large_path_through_taplo() {
+    # A NUL escape, a key holding the unit separator, inf and nan: taplo takes
+    # each, and the floor does not, so the file is the floor's.
+    _tbg_taplo || { skip "taplo absent: no taplo that prints TOML as json here"; return 0; }
+    local d t out; d="$(mktemp -d)"
+    _tbg_proxy "$d"
+    for t in 'n = "x\u0000y"
+' '"k\u001fz" = 1
+' 'x = inf
+' 'y = nan
+'; do
+        _tbg_file "$d/f.toml" "$t"
+        _tbg_run "yq" "$d/c$RANDOM" "" "$d/f.toml" "$d/bin" > "$d/out"
+        assert_eq "$_tbg_rc" "2" "$t"
+    done
+    rm -rf "$d"
+}
+
+#[test]
+it_cuts_a_byte_order_mark_on_the_large_path() {
+    _tbg_taplo || { skip "taplo absent: no taplo that prints TOML as json here"; return 0; }
+    local d plain bom; d="$(mktemp -d)"
+    _tbg_file "$d/plain.toml"
+    { printf '\xef\xbb\xbf'; cat "$d/plain.toml"; } > "$d/bom.toml"
+    plain="$(_tbg_run "yq" "$d/c1" "" "$d/plain.toml")"
+    bom="$(_tbg_run "yq" "$d/c2" "" "$d/bom.toml")"
+    rm -rf "$d"
+    assert_eq "${plain:0:12}" '{"zero":0,":'
+    assert_eq "$bom" "$plain"
+}
+
+#[test]
+it_does_not_take_a_kept_json_that_is_a_link_or_sits_in_a_directory_others_can_write() {
+    local d at first; d="$(mktemp -d)"
+    _tbg_file "$d/f.toml"
+    first="$(_tbg_run "taplo yq" "$d/c" "" "$d/f.toml")"
+    at="$(find "$d/c" -type f -name '*.json' | head -n 1)"
+    assert_eq "$(_tbg_run "taplo yq" "$d/c" "$_TBG_CANARY" "$d/f.toml")" "$first" "the control"
+    cp "$at" "$d/copy"; rm -f "$at"; ln -s "$d/copy" "$at"
+    assert_contains "$(_tbg_run "taplo yq" "$d/c" "$_TBG_CANARY" "$d/f.toml")" "parsed"
+    rm -f "$at"
+    _tbg_run "taplo yq" "$d/c" "" "$d/f.toml" > /dev/null
+    chmod 775 "${at%/*}"
+    assert_contains "$(_tbg_run "taplo yq" "$d/c" "$_TBG_CANARY" "$d/f.toml")" "parsed"
+    chmod 700 "${at%/*}"
+    rm -rf "$d"
+}

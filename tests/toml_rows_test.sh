@@ -141,7 +141,7 @@ it_appends_a_table_after_the_tables_under_the_last_row() {
     _tr_run '[[row]]\na = 1\n[row.sub]\nk = 1\n[other]\nx = 1\n' toml_append_table row
     assert_eq "$_TR_RC" "0"
     assert_eq "$_TR_OUT" "row.1"
-    assert_eq "$_TR_BODY" $'[[row]]\na = 1\n[row.sub]\nk = 1\n\n[[row]]\n\n[other]\nx = 1'
+    assert_eq "$_TR_BODY" $'[[row]]\na = 1\n[row.sub]\nk = 1\n\n[[row]]\n[other]\nx = 1'
 }
 
 #[test]
@@ -212,4 +212,12 @@ it_refuses_to_append_to_a_file_the_reader_refuses() {
     _tr_run 'a = 1\na = 2\n' toml_append_table row
     assert_eq "$_TR_RC" "2"
     assert_contains "$_TR_ERR" "defined twice"
+}
+
+#[test]
+it_keeps_the_line_endings_of_a_file_that_ends_its_lines_with_carriage_returns() {
+    _tr_run '[[row]]\r\na = 1\r\n' toml_append_table row
+    assert_eq "$_TR_BODY" $'[[row]]\r\na = 1\r\n\r\n[[row]]\r'
+    _tr_run '[[row]]\r\na = 1\r\n[[row]]\r\na = 2\r\n' toml_set row.0.b 3
+    assert_eq "$_TR_BODY" $'[[row]]\r\na = 1\r\nb = 3\r\n[[row]]\r\na = 2\r'
 }

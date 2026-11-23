@@ -84,8 +84,10 @@ _jq_is_number() {
 # The document is read as text and parsed by `fromjson`, which takes exactly one
 # value: trailing text, a second value and nothing at all are all "not JSON".
 # jq's own reader is more generous than JSON is (`01`, `.5`, `1.`, `+1`, `NaN`
-# and `Infinity` are all numbers to it), so every token outside a string is
-# checked first against what JSON allows.
+# and `Infinity` are all numbers to it), so the text is checked first against
+# what JSON allows, by one anchored pattern with no backtracking. A `gsub` and
+# a `scan` over the text did the same and are quadratic in jq 1.7: a megabyte of
+# small tokens took minutes.
 #
 # A path is walked here, in jq, by what each node is: a segment of digits
 # indexes an array and is just a key on an object, `"0"` included, and any other
@@ -97,9 +99,7 @@ _jq_is_number() {
 # it.
 _JQ_READ_DEFS='
 def strict:
-    gsub("\"(?:[^\"\\\\]|\\\\.)*\""; "0")
-    | [scan("[^\\s\\[\\]{},:]+")]
-    | all(.[]; test("^(?:-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null)$"));
+    test("\\A(?:\"(?:[^\"\\\\]|\\\\.)*+\"|[\\s\\[\\]{},:]++|-?(?:0|[1-9][0-9]*+)(?:\\.[0-9]++)?(?:[eE][+-]?[0-9]++)?(?![0-9.eE+\\-])|true|false|null)*+\\z");
 def step($s):
     if type == "object" then (if has($s) then .[$s] else empty end)
     elif type == "array" then
@@ -109,6 +109,7 @@ def step($s):
     else empty end;
 def at($p): if ($p | length) == 0 then . else (step($p[0]) | at($p[1:])) end;
 def nope: "" | halt_error(1);
+def odd: [.. | numbers | tojson | select(test("[.eE]|[0-9]{16}"))] | length > 0;
 def doc: if strict then (try fromjson catch nope) else nope end;
 def read(f):
     ([doc | at($segs | split("\u001f") | map(select(. != "")))]) as $r
@@ -127,16 +128,13 @@ _jq_read() {
 }
 
 # A number is printed as the document wrote it, which jq does not do: it prints
-# `1e3` as `1E+3`, in a container as much as alone. So jq ends the run with 7 for
-# a number, and for a container with a fraction, an exponent or sixteen digits
-# in it (the text of a string that looks like one is only a slower answer), and
-# `json.sh` has the reader in bash answer instead; `_json_getn_jq` is what jq
+# `1e3` as `1E+3`, in a container as much as alone. So jq ends the run with 7
+# where the node is, or holds, a number with a fraction, an exponent or sixteen
+# digits (judged on the numbers alone, never on a string that looks like one),
+# and `json.sh` has the reader in bash answer instead; `_json_getn_jq` is what jq
 # itself prints, for a shell without that reader.
 _json_get_jq() {
-    _jq_read "${1:-}" "${2:-}" 'if type == "number" then ("" | halt_error(7))
-        elif (type == "array" or type == "object") and (tojson | test("[0-9][.eE]|[0-9]{16}"))
-            then ("" | halt_error(7))
-        else . end'
+    _jq_read "${1:-}" "${2:-}" 'if odd then ("" | halt_error(7)) else . end'
 }
 
 _json_getn_jq() { _jq_read "${1:-}" "${2:-}" '.'; }

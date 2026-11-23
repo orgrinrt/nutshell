@@ -29,9 +29,10 @@
 # already split by the caller, joined by the unit separator, and the first path
 # that does not lead anywhere is a miss with status 1.
 #
-# `_JB_ODDS` says the document has a string jq would not print as written (a
-# NUL, a surrogate with no pair), and `_JB_ODDH` a high surrogate with no low one after it, which jq refuses the
-# whole document for, so that even `type` is the tool's to answer.
+# `_JB_ODDS` says the document has a string jq would not print as written
+# (a NUL, a surrogate with no pair), and `_JB_ODDH` a high surrogate with no
+# low one after it, which jq refuses the whole document for, so that even
+# `type` is the tool's to answer.
 
 [ -n "${_NUTSHELL_JSON_IMPL_BASH_PARSE_SH:-}" ] && return 0
 _NUTSHELL_JSON_IMPL_BASH_PARSE_SH=1

@@ -93,6 +93,18 @@ _json_pl() {
             return "string";
         }
 
+        # Whether a node is, or holds, a number perl does not print as it was
+        # written: a fraction or an exponent comes back as an object, and `-0`
+        # as 0, which is told from a plain 0 by the text of the document.
+        sub odd {
+            my ($v, $doc) = @_;
+            return 1 if ref($v) =~ /^Math::Big/;
+            if (ref($v) eq "ARRAY") { odd($_, $doc) && return 1 for @$v; return 0; }
+            if (ref($v) eq "HASH")  { odd($_, $doc) && return 1 for values %$v; return 0; }
+            return 0 unless kind($v) eq "number";
+            return $v == 0 && $doc =~ /-0(?![0-9.eE])/ ? 1 : 0;
+        }
+
         sub emit {
             my ($v) = @_;
             if (!defined $v)                { print "null\n"; }
@@ -120,11 +132,9 @@ _json_pl() {
             my ($found, $v) = walk($data, $path);
             exit 1 unless $found;
             # A number is spelled by the document, and perl respells it, `1e3` as
-            # `1000`, in a container as much as alone. 7 says so, and the caller
-            # has it read again. A container is judged by the text of the
-            # document, since what perl prints of it has lost the spelling.
-            exit 7 if $op eq "get" && (kind($v) eq "number"
-                || (ref($v) && $args[0] =~ /[0-9][.eE]|[0-9]{16}/));
+            # `1000`, in a container as much as alone. 7 says so where the node
+            # is or holds one, and the caller has it read again.
+            exit 7 if $op eq "get" && odd($v, $args[0]);
             emit($v);
         } elsif ($op eq "keys") {
             my ($found, $v) = walk($data, $path);
@@ -204,7 +214,7 @@ _json_pl() {
     ' "$@" 2>/dev/null
 }
 
-# 7 is a number, or a container with one in it, that perl would respell; see
+# 7 is a number, or a container holding one, that perl would respell; see
 # `_json_read` in `json.sh`, which has it read again. `getn` keeps perl's own
 # spelling, for a shell without the reader in bash.
 _json_get_perl()     { _json_pl get "$1" "${2:-}"; }

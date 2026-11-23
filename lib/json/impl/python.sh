@@ -56,22 +56,33 @@ _json_py() {
     python_cmd="$(_json_python_cmd)"
     "$python_cmd" - "$@" <<'PYTHON' 2>/dev/null
 import json
-import re
 import sys
 
 op = sys.argv[1]
 args = sys.argv[2:]
 
 
-# A fraction, an exponent or sixteen digits in the document: a number whose
-# spelling python changes (`1e3` is `1000.0`, `1e999` is `Infinity`), judged by
-# the text of the document since what python prints of it has lost the spelling.
-ODD_NUMBER = re.compile(r"[0-9][.eE]|[0-9]{16}")
+# A number as the document spelled it. Python reads `1e3` as 1000.0 and `-0` as 0,
+# so a read that prints a number keeps the text of each one it parses, here, and
+# `dump` and `emit` print it back as it came.
+class Num:
+    __slots__ = ("text",)
+
+    def __init__(self, text):
+        self.text = text
 
 
 def dump(value):
-    return json.dumps(value, separators=(",", ":"), sort_keys=True,
-                      ensure_ascii=False)
+    """Compact, keys sorted, text left as UTF-8; a `Num` as it was written."""
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            json.dumps(k, ensure_ascii=False) + ":" + dump(value[k])
+            for k in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ",".join(dump(v) for v in value) + "]"
+    if isinstance(value, Num):
+        return value.text
+    return json.dumps(value, ensure_ascii=False)
 
 
 def emit(value):
@@ -83,6 +94,8 @@ def emit(value):
         print("true")
     elif value is False:
         print("false")
+    elif isinstance(value, Num):
+        print(value.text)
     elif isinstance(value, str):
         # Bare, the way jq -r gives it, so a string is usable as a shell value
         # without stripping quotes off it first.
@@ -178,12 +191,10 @@ def refuse(name):
     raise ValueError(name)
 
 
-def load(text):
+def load(text, keep=False):
+    if keep:
+        return json.loads(text, parse_constant=refuse, parse_int=Num, parse_float=Num)
     return json.loads(text, parse_constant=refuse)
-
-
-def is_number(value):
-    return kind(value) == "number"
 
 
 def main():
@@ -191,17 +202,11 @@ def main():
         load(args[0])
         return 0
 
-    data = load(args[0])
+    data = load(args[0], op == "get")
     path = args[1] if len(args) > 1 else ""
 
-    if op == "get" or op == "getn":
-        target = walk(data, path)
-        # A number is the document's to spell, which this does not keep: `1e3`
-        # comes back `1000.0`. 7 says so, and the caller has it read again.
-        if op == "get" and (is_number(target) or (
-                isinstance(target, (dict, list)) and ODD_NUMBER.search(args[0]))):
-            return 7
-        emit(target)
+    if op == "get":
+        emit(walk(data, path))
     elif op == "keys":
         target = walk(data, path)
         if isinstance(target, dict):
@@ -260,11 +265,7 @@ except (KeyError, IndexError, TypeError, ValueError):
 PYTHON
 }
 
-# 7 is a number, or a container with one in it, that python would respell; see
-# `_json_read` in `json.sh`, which has it read again. `getn` keeps python's own
-# spelling, for a shell without the reader in bash.
 _json_get_python()     { _json_py get "$1" "${2:-}"; }
-_json_getn_python()    { _json_py getn "$1" "${2:-}"; }
 _json_set_python()     { _json_py set "$1" "$2" "$3"; }
 _json_keys_python()    { _json_py keys "$1" "${2:-}"; }
 _json_valid_python()   { _json_py valid "$1"; }

@@ -60,7 +60,11 @@
 #   - an empty segment is dropped, so a path of nothing but those is the
 #     whole document, and an empty key cannot be reached
 #   - outside it: a string holding a NUL or a lone surrogate, which jq and perl
-#     repair or refuse and python and the reader in bash keep
+#     repair or refuse and python and the reader in bash keep; and a number
+#     jq or perl would respell, where the reader in bash that prints it as
+#     written is absent (a shell without bash) or cannot hold the document
+#     (nested past 400 levels), which comes back in the tool's spelling, `1e3`
+#     as `1E+3` under jq and `1000` under perl, and not as nothing
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -221,15 +225,15 @@ _json_read() {
     rc=0
     "_json_${op}_${_JSON_NOW}" "$json" "$_js_out" || rc=$?
     [ "$rc" -eq 7 ] || return "$rc"
-    # A backend ends a get with 7 where it would print a number in a spelling
-    # of its own, `1e3` as `1E+3` or `1000`, and the document's is the answer:
-    # the reader in bash has it to the byte. A shell without that reader gets
-    # the backend's spelling.
-    if type _json_get_bash >/dev/null 2>&1; then
-        _json_get_bash "$json" "$_js_out"
-    else
-        "_json_getn_${_JSON_NOW}" "$json" "$_js_out"
+    # A backend ends a get with 7 where it would print a number, or a container
+    # holding one, in a spelling of its own, `1e3` as `1E+3` or `1000`, and the
+    # document's is the answer: the reader in bash has it to the byte. Where it
+    # cannot answer, a shell without it or a document nested deeper than it
+    # holds, the backend's spelling is, and a status of 0 beats none.
+    if type _json_get_bash >/dev/null 2>&1 && _json_get_bash "$json" "$_js_out"; then
+        return 0
     fi
+    "_json_getn_${_JSON_NOW}" "$json" "$_js_out"
 }
 
 # -----------------------------------------------------------------------------

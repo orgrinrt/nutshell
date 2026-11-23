@@ -17,6 +17,9 @@
 #   - JSON request/response helpers
 #   - File download/upload
 #   - Response handling (status code, headers, body)
+#   - Options the module writes per tool: --header, --headers-from (a secret,
+#     kept off the command line), --body-file with --content-type, --insecure
+#   - Retries of a transient failure, NUT_HTTP_RETRIES and NUT_HTTP_RETRY_DELAY
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -35,6 +38,9 @@ _NUTSHELL_HTTP_SH=1
 # hides it from the module-contract check, which reads `use` lines, so the
 # dependency was real and unrecorded at once.
 use deps
+use super::http::opts
+use super::http::retry
+use super::http::wget
 
 # -----------------------------------------------------------------------------
 # Module Status
@@ -89,14 +95,13 @@ HTTP_MAX_REDIRECTS=10
 # Internal Implementation - curl
 # -----------------------------------------------------------------------------
 
+# One attempt. The options are in _HTTP_O_REST and _HTTP_X_ARGS, taken by
+# `_http_prepare`, and the tool is _HTTP_CALL_BIN.
 _http_request_curl() {
     local method="${1:-GET}"
     local url="${2:-}"
     local data="${3:-}"
-    shift 3
-    local -a extra_args=("$@")
-    
-    local curl_cmd="${_TOOL_PATH_curl}"
+
     local -a curl_args=(
         -s                              # Silent
         -S                              # Show errors
@@ -106,44 +111,41 @@ _http_request_curl() {
         --max-time "$HTTP_TIMEOUT"      # Timeout
         -A "$HTTP_USER_AGENT"           # User agent
     )
-    
+
     # Follow redirects
     if [[ "$HTTP_FOLLOW_REDIRECTS" == "1" ]]; then
         curl_args+=(-L --max-redirs "$HTTP_MAX_REDIRECTS")
     fi
-    
+
     # Add data if provided
     if [[ -n "$data" ]]; then
         curl_args+=(-d "$data")
     fi
-    
-    # Add extra arguments (headers, etc.)
-    curl_args+=("${extra_args[@]}")
-    
-    # Add URL
-    curl_args+=("$url")
-    
+
+    # The options, then what the caller handed on, then the URL
+    curl_args+=("${_HTTP_X_ARGS[@]}" "${_HTTP_O_REST[@]}" "$url")
+
     # Execute and capture output
     local output
-    output=$("$curl_cmd" "${curl_args[@]}" 2>&1)
+    output=$(_http_curl_run "${curl_args[@]}" 2>&1)
     local exit_code=$?
-    
+    _HTTP_TRY_RC=$exit_code
+    _HTTP_LAST_STATUS=""
+
     if [[ $exit_code -ne 0 ]]; then
-        _HTTP_LAST_STATUS=""
         _HTTP_LAST_HEADERS=""
         _HTTP_LAST_BODY="curl error: $output"
         return 1
     fi
-    
+
     # Parse output: headers, body, status code
     # Format: headers\r\n\r\nbody\nstatus_code
-    
+
     # Extract status code (last line)
     _HTTP_LAST_STATUS="${output##*$'\n'}"
     output="${output%$'\n'*}"
-    
+
     # Split headers and body (separated by blank line)
-    local header_end
     if [[ "$output" == *$'\r\n\r\n'* ]]; then
         _HTTP_LAST_HEADERS="${output%%$'\r\n\r\n'*}"
         _HTTP_LAST_BODY="${output#*$'\r\n\r\n'}"
@@ -154,7 +156,7 @@ _http_request_curl() {
         _HTTP_LAST_HEADERS=""
         _HTTP_LAST_BODY="$output"
     fi
-    
+
     return 0
 }
 
@@ -166,74 +168,56 @@ _http_request_wget() {
     local method="${1:-GET}"
     local url="${2:-}"
     local data="${3:-}"
-    shift 3
-    local -a extra_args=("$@")
-    
-    local wget_cmd="${_TOOL_PATH_wget}"
+
+    # One try: the retries are the module's, so the count means the same on
+    # curl, which has none of its own, and wget, which has twenty.
     local -a wget_args=(
-        -q                              # Quiet
+        -nv                             # Messages on one line each, for the retry test
         -O -                            # Output to stdout
         -S                              # Print headers
+        --tries=1                       # Retrying is `_http_retrying`'s
         --method="$method"              # HTTP method
         --timeout="$HTTP_TIMEOUT"       # Timeout
         --user-agent="$HTTP_USER_AGENT" # User agent
     )
-    
+
     # Follow redirects (wget follows by default, limit with max-redirect)
     if [[ "$HTTP_FOLLOW_REDIRECTS" != "1" ]]; then
         wget_args+=(--max-redirect=0)
     else
         wget_args+=(--max-redirect="$HTTP_MAX_REDIRECTS")
     fi
-    
+
     # Add data if provided
     if [[ -n "$data" ]]; then
         wget_args+=(--body-data="$data")
     fi
-    
-    # Add extra arguments
-    wget_args+=("${extra_args[@]}")
-    
-    # Add URL
-    wget_args+=("$url")
-    
-    # Execute and capture output (stderr has headers, stdout has body)
-    local body headers
-    body=$("$wget_cmd" "${wget_args[@]}" 2>&1)
+
+    # The options, then what the caller handed on, then the URL
+    wget_args+=("${_HTTP_X_ARGS[@]}" "${_HTTP_O_REST[@]}" "$url")
+
+    # Execute and capture output: stdout is the body, stderr the headers and
+    # wget's own messages, kept apart so a body is never read as either.
+    local body errf errtxt
+    errf="$(mktemp "${TMPDIR:-/tmp}/nut-http.XXXXXX")" || {
+        _HTTP_LAST_STATUS=""; _HTTP_LAST_HEADERS=""
+        _HTTP_LAST_BODY="wget error: no temporary file"
+        return 1
+    }
+    body=$("$_HTTP_CALL_BIN" "${wget_args[@]}" 2>"$errf")
     local exit_code=$?
-    
-    # wget puts headers in stderr with -S, but we redirected to stdout
-    # Parse the output - headers start with "  HTTP/" and indented lines
-    _HTTP_LAST_HEADERS=""
-    _HTTP_LAST_BODY=""
-    _HTTP_LAST_STATUS=""
-    
-    local in_headers=0
-    local line
-    while IFS= read -r line; do
-        if [[ "$line" == *"HTTP/"* ]]; then
-            in_headers=1
-            _HTTP_LAST_HEADERS+="$line"$'\n'
-            # Extract status code
-            if [[ "$line" =~ HTTP/[0-9.]+" "([0-9]+) ]]; then
-                _HTTP_LAST_STATUS="${BASH_REMATCH[1]}"
-            fi
-        elif [[ $in_headers -eq 1 && "$line" == "  "* ]]; then
-            _HTTP_LAST_HEADERS+="${line#  }"$'\n'
-        else
-            in_headers=0
-            _HTTP_LAST_BODY+="$line"$'\n'
-        fi
-    done <<< "$body"
-    
-    # Remove trailing newline from body
-    _HTTP_LAST_BODY="${_HTTP_LAST_BODY%$'\n'}"
-    
+    _HTTP_TRY_RC=$exit_code
+    errtxt="$(cat "$errf")"
+    rm -f "$errf"
+
+    _http_wget_parse_err "$errtxt"
+    _HTTP_LAST_BODY="$body"
+
     if [[ $exit_code -ne 0 && -z "$_HTTP_LAST_STATUS" ]]; then
-        _HTTP_LAST_BODY="wget error: $body"
+        _HTTP_LAST_BODY="wget error: $errtxt"
         return 1
     fi
-    
+
     return 0
 }
 
@@ -241,8 +225,9 @@ _http_request_wget() {
 # Internal Request Dispatcher
 # -----------------------------------------------------------------------------
 
+# One attempt, on the tool `_http_prepare` picked for this call.
 _http_request() {
-    case "$_HTTP_IMPL" in
+    case "$_HTTP_CALL_IMPL" in
         curl) _http_request_curl "$@" ;;
         wget) _http_request_wget "$@" ;;
         *)
@@ -254,101 +239,115 @@ _http_request() {
     esac
 }
 
+# _http_call <method> <url> <data> <args...> -> options taken, the request made, retried
+_http_call() {
+    local method="$1" url="$2" data="$3"; shift 3
+    _http_prepare "$data" "$@" || return $?
+    _HTTP_TRY_METHOD="$method"
+    if [[ "$method" == "HEAD" && "$_HTTP_CALL_IMPL" == "curl" ]]; then
+        _HTTP_O_REST=(-I "${_HTTP_O_REST[@]}")
+    fi
+    _http_retrying _http_request "$method" "$url" "$data"
+}
+
+# _http_with_body <method> <url> [data] <args...> -> a request that carries a body
+# The data is the argument after the url unless that is one of the module's
+# options, so a body from a file is `http_post "$url" --body-file "$f"` as well
+# as with an empty data argument.
+_http_with_body() {
+    local method="$1" url="${2:-}" data=""
+    shift 2 2>/dev/null || shift $#
+
+    if [[ $# -gt 0 ]] && ! _http_is_option "$1"; then
+        data="$1"
+        shift
+    fi
+
+    [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
+    [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
+
+    _http_call "$method" "$url" "$data" "$@"
+}
+
 # -----------------------------------------------------------------------------
 # Public API - Core Request Functions
 # -----------------------------------------------------------------------------
+#
+# After the url, and after the data where there is one, come the options in
+# `http/opts.sh`: `--header`, `--headers-from`, `--body-file`, `--content-type`
+# and `--insecure`. Anything else is handed to the tool. A call that fails is
+# tried again where the failure may pass, as `http/retry.sh` says.
 
 #[pub]
 # Perform HTTP GET request
 # Usage: http_get "https://example.com/api" -> stores response in _HTTP_LAST_*
-# Usage: http_get "https://example.com/api" "-H" "Authorization: Bearer token"
-# Returns: 0 on success, 1 on failure. Response in http_body, http_status, http_headers
+# Usage: http_get "https://example.com/api" --header "Authorization: Bearer token"
+# Usage: http_get "https://example.com/api" --headers-from - <<< "Authorization: Bearer $token"
+# Usage: http_get "https://localhost:8443/" --insecure -> test-only, TLS is not verified
+# Returns: 0 on success, 1 on failure, 2 for an option refused. Response in http_body, http_status, http_headers
 http_get() {
     local url="${1:-}"
     shift
-    
+
     [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
     [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
-    
-    _http_request "GET" "$url" "" "$@"
+
+    _http_call "GET" "$url" "" "$@"
 }
 
 #[pub]
 # Perform HTTP POST request
 # Usage: http_post "https://example.com/api" "data=value" -> stores response
-# Usage: http_post "https://example.com/api" '{"key":"value"}' "-H" "Content-Type: application/json"
-# Returns: 0 on success, 1 on failure
+# Usage: http_post "https://example.com/api" '{"key":"value"}' --header "Content-Type: application/json"
+# Usage: http_post "https://example.com/api" --body-file body.json --content-type application/json
+# Returns: 0 on success, 1 on failure, 2 for an option refused
 http_post() {
-    local url="${1:-}"
-    local data="${2:-}"
-    shift 2 2>/dev/null || shift $#
-    
-    [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
-    [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
-    
-    _http_request "POST" "$url" "$data" "$@"
+    _http_with_body "POST" "$@"
 }
 
 #[pub]
 # Perform HTTP PUT request
 # Usage: http_put "https://example.com/api/1" '{"key":"value"}'
-# Returns: 0 on success, 1 on failure
+# Usage: http_put "https://example.com/api/1" --body-file body.json --content-type application/json
+# Returns: 0 on success, 1 on failure, 2 for an option refused
 http_put() {
-    local url="${1:-}"
-    local data="${2:-}"
-    shift 2 2>/dev/null || shift $#
-    
-    [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
-    [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
-    
-    _http_request "PUT" "$url" "$data" "$@"
+    _http_with_body "PUT" "$@"
 }
 
 #[pub]
 # Perform HTTP PATCH request
 # Usage: http_patch "https://example.com/api/1" '{"key":"value"}'
-# Returns: 0 on success, 1 on failure
+# Returns: 0 on success, 1 on failure, 2 for an option refused
 http_patch() {
-    local url="${1:-}"
-    local data="${2:-}"
-    shift 2 2>/dev/null || shift $#
-    
-    [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
-    [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
-    
-    _http_request "PATCH" "$url" "$data" "$@"
+    _http_with_body "PATCH" "$@"
 }
 
 #[pub]
 # Perform HTTP DELETE request
 # Usage: http_delete "https://example.com/api/1"
-# Returns: 0 on success, 1 on failure
+# Returns: 0 on success, 1 on failure, 2 for an option refused
 http_delete() {
     local url="${1:-}"
     shift
-    
+
     [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
     [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
-    
-    _http_request "DELETE" "$url" "" "$@"
+
+    _http_call "DELETE" "$url" "" "$@"
 }
 
 #[pub]
 # Perform HTTP HEAD request (headers only)
 # Usage: http_head "https://example.com" -> stores headers in _HTTP_LAST_HEADERS
-# Returns: 0 on success, 1 on failure
+# Returns: 0 on success, 1 on failure, 2 for an option refused
 http_head() {
     local url="${1:-}"
     shift
-    
+
     [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
     [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
-    
-    if [[ "$_HTTP_IMPL" == "curl" ]]; then
-        _http_request "HEAD" "$url" "" "-I" "$@"
-    else
-        _http_request "HEAD" "$url" "" "$@"
-    fi
+
+    _http_call "HEAD" "$url" "" "$@"
 }
 
 # -----------------------------------------------------------------------------
@@ -428,7 +427,7 @@ http_post_json() {
     local json="${2:-}"
     shift 2 2>/dev/null || shift $#
     
-    http_post "$url" "$json" -H "Content-Type: application/json" -H "Accept: application/json" "$@"
+    http_post "$url" "$json" --header "Content-Type: application/json" --header "Accept: application/json" "$@"
 }
 
 #[pub]
@@ -440,7 +439,7 @@ http_put_json() {
     local json="${2:-}"
     shift 2 2>/dev/null || shift $#
     
-    http_put "$url" "$json" -H "Content-Type: application/json" -H "Accept: application/json" "$@"
+    http_put "$url" "$json" --header "Content-Type: application/json" --header "Accept: application/json" "$@"
 }
 
 #[pub]
@@ -452,7 +451,7 @@ http_patch_json() {
     local json="${2:-}"
     shift 2 2>/dev/null || shift $#
     
-    http_patch "$url" "$json" -H "Content-Type: application/json" -H "Accept: application/json" "$@"
+    http_patch "$url" "$json" --header "Content-Type: application/json" --header "Accept: application/json" "$@"
 }
 
 #[pub]
@@ -463,63 +462,98 @@ http_get_json() {
     local url="${1:-}"
     shift
     
-    http_get "$url" -H "Accept: application/json" "$@"
+    http_get "$url" --header "Accept: application/json" "$@"
 }
 
 # -----------------------------------------------------------------------------
 # Public API - File Operations
 # -----------------------------------------------------------------------------
 
+# One attempt at a download. Leaves the answer's status and headers where there
+# were any, so an error page is told from a network failure and a Retry-After
+# is read. The module's options only: `http_download` refuses the rest.
+_http_download_once() {
+    local url="$1" output="$2" rc raw
+    _HTTP_LAST_STATUS=""
+    _HTTP_LAST_HEADERS=""
+    if [[ "$_HTTP_CALL_IMPL" == "curl" ]]; then
+        raw="$(_http_curl_run -fsS -L -D - -o "$output" -w '%{http_code}' \
+            --max-time "$HTTP_TIMEOUT" \
+            -A "$HTTP_USER_AGENT" \
+            "${_HTTP_X_ARGS[@]}" \
+            "$url")"
+        rc=$?
+        _HTTP_LAST_HEADERS="${raw%???}"
+        raw="${raw: -3}"
+        [[ "$raw" =~ ^[1-5][0-9][0-9]$ ]] && _HTTP_LAST_STATUS="$raw"
+    else
+        raw="$("$_HTTP_CALL_BIN" -nv -S -O "$output" --tries=1 \
+            --timeout="$HTTP_TIMEOUT" \
+            --user-agent="$HTTP_USER_AGENT" \
+            "${_HTTP_X_ARGS[@]}" \
+            "$url" 2>&1 >/dev/null)"
+        rc=$?
+        _http_wget_parse_err "$raw"
+    fi
+    _HTTP_TRY_RC=$rc
+    return $rc
+}
+
 #[pub]
 # Download a file to a local path
 # Usage: http_download "https://example.com/file.zip" "/tmp/file.zip"
+# Usage: http_download "https://example.com/file.zip" "/tmp/file.zip" --header "Accept: application/zip"
 # Returns: 0 on success, non-zero on failure, an error status included, so a
-# 404 page is never saved as though it were the file
+# 404 page is never saved as though it were the file. 2 for an option refused.
+# A 429, 502, 503 or 504 and a connection that failed are tried again.
+# Only the module's own options are taken after the output path: anything else
+# is refused with status 2 naming it, since a curl flag means something else to wget.
 http_download() {
     local url="${1:-}"
     local output="${2:-}"
-    
+
     [[ -z "$url" ]] && return 1
     [[ -z "$output" ]] && return 1
     [[ "$_HTTP_READY" != "1" ]] && return 1
-    
-    if [[ "$_HTTP_IMPL" == "curl" ]]; then
-        "${_TOOL_PATH_curl}" -fsS -L -o "$output" \
-            --max-time "$HTTP_TIMEOUT" \
-            -A "$HTTP_USER_AGENT" \
-            "$url"
-    else
-        "${_TOOL_PATH_wget}" -q -O "$output" \
-            --timeout="$HTTP_TIMEOUT" \
-            --user-agent="$HTTP_USER_AGENT" \
-            "$url"
+    shift 2
+
+    _http_prepare "" "$@" || return $?
+    _http_no_rest http_download || return 2
+    if [[ -n "$_HTTP_O_BODY_FILE" ]]; then
+        _http_opts_fail "--body-file is for a request that sends a body, and a download does not"
+        return 2
     fi
+    _HTTP_TRY_METHOD="GET"
+    _http_retrying _http_download_once "$url" "$output"
 }
 
 #[pub]
 # Upload a file via POST (multipart form data)
 # Usage: http_upload "https://example.com/upload" "/path/to/file" "file"
-# Returns: 0 on success, 1 on failure
+# Takes the module's own options after the field, and refuses anything else.
+# Returns: 0 on success, 1 on failure, 2 for an option or argument refused
 http_upload() {
     local url="${1:-}"
     local file="${2:-}"
     local field="${3:-file}"
     shift 3 2>/dev/null || shift $#
-    
+
     [[ -z "$url" ]] && { _HTTP_LAST_BODY="URL required"; return 1; }
     [[ ! -f "$file" ]] && { _HTTP_LAST_BODY="File not found: $file"; return 1; }
     [[ "$_HTTP_READY" != "1" ]] && { _HTTP_LAST_BODY="$_HTTP_ERROR"; return 1; }
-    
-    if [[ "$_HTTP_IMPL" == "curl" ]]; then
+
+    _http_prepare "" "$@" || return $?
+    _http_no_rest http_upload || return 2
+    if [[ "$_HTTP_CALL_IMPL" == "curl" ]]; then
         local output
-        output=$("${_TOOL_PATH_curl}" -sS -w '\n%{http_code}' \
+        output=$(_http_curl_run -sS -w '\n%{http_code}' \
             -X POST \
             -F "${field}=@${file}" \
             --max-time "$HTTP_TIMEOUT" \
             -A "$HTTP_USER_AGENT" \
-            "$@" \
+            "${_HTTP_X_ARGS[@]}" \
             "$url" 2>&1)
-        
+
         _HTTP_LAST_STATUS="${output##*$'\n'}"
         _HTTP_LAST_BODY="${output%$'\n'*}"
         _HTTP_LAST_HEADERS=""

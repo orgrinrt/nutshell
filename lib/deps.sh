@@ -31,6 +31,10 @@
 [ -n "${_NUTSHELL_DEPS_SH:-}" ] && return 0
 _NUTSHELL_DEPS_SH=1
 
+# The hide list this process was started with, the parent's word: a forget
+# clears what `deps_hide` added here and keeps this.
+_DEPS_ENV_HIDE="${NUT_DEPS_HIDE:-}"
+
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
@@ -158,6 +162,7 @@ deps_hide() {
     done
     export NUT_DEPS_HIDE
     _deps_drop_caps
+    _deps_reset_modules
     return 0
 }
 
@@ -174,7 +179,7 @@ deps_forget() {
         done
         _DEPS_SEEN=""
         _TOOLS_AVAILABLE=""
-        unset NUT_DEPS_HIDE
+        if [ -n "$_DEPS_ENV_HIDE" ]; then NUT_DEPS_HIDE="$_DEPS_ENV_HIDE"; export NUT_DEPS_HIDE; else unset NUT_DEPS_HIDE; fi
     else
         for _t in "$@"; do _deps_unlearn "$_t" || true; done
         for _k in ${NUT_DEPS_HIDE:-}; do
@@ -185,6 +190,7 @@ deps_forget() {
     _deps_drop_caps
     _DEPS_CONFIG=""
     _DEPS_CONFIG_KEY=""
+    _deps_reset_modules
     return 0
 }
 

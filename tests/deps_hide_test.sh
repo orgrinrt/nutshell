@@ -156,7 +156,7 @@ it_moves_json_to_python_when_jq_is_hidden_after_it_picked_jq() {
 }
 
 #[test]
-it_moves_json_to_python_when_jq_is_forgotten_from_the_environment_list() {
+it_moves_json_back_to_jq_after_a_forget_of_the_hidden_jq() {
     deps_has jq || { skip "jq is not on this machine"; return 0; }
     _dh_has_any python3 python || { skip "python is not on this machine"; return 0; }
     json_impl > /dev/null

@@ -133,14 +133,16 @@ _toml_open() {
 }
 
 # _toml_tool_json <text> -> `_tt_json`, the text as JSON from the backend
-# The stub `nut_lazy_guard` keeps: the first call picks the backend, whose
-# module rebinds this name, and calls it. Where only the floor serves, it is
-# rebound to rc 3, no JSON. In this shell, never a subshell, or the pick is
-# lost with it and made again on every call.
-_toml_tool_json() {
+# A stub for `_toml_tool_pick` until the first call, which picks the backend,
+# whose module rebinds this name, and calls it. `_toml_reset` puts the stub
+# back. Where only the floor serves, it is rebound to rc 3, no JSON. In this
+# shell, never a subshell, or the pick is lost with it and made again on every
+# call.
+_toml_tool_pick() {
     nut_lazy_guard _toml_tool_json || return 1
     local _NUT_LAZY__toml_tool_json=1
     use deps || return 1
+    _deps_on_reset _toml_reset
     # FIXME(63ac7b74f97a): the variant stands in for `deps_can toml_json_taplo`
     # and `deps_can toml_read`, which scan every tool first, 200 ms on the first
     # read; a tool that then fails on a file sends it to the floor all the same.
@@ -162,6 +164,16 @@ _toml_tool_json() {
         _TOML_BACKEND=bash
     fi
     _toml_tool_json "$@"
+}
+
+_toml_tool_json() { _toml_tool_pick "$@"; }
+
+# _toml_reset -> the backend dropped, picked again at the next read through one
+_toml_reset() {
+    _toml_tool_json() { _toml_tool_pick "$@"; }
+    _TOML_BACKEND=""
+    [[ "$_TOML_ID" == json* ]] && _TOML_ID=""
+    return 0
 }
 
 # _toml_open_values <file> -> the file read for its values, codes as `_toml_open`

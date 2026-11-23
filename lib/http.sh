@@ -55,6 +55,7 @@ _HTTP_IMPL=""
 # `deps_forget` when a tool has come or gone.
 # Usage: http_detect
 http_detect() {
+    _deps_on_reset http_detect
     _HTTP_READY=0
     _HTTP_IMPL=""
     _HTTP_ERROR=""

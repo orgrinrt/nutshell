@@ -110,6 +110,9 @@ _nut_prelude_stubs() {
     while read mod fns; do
         case "$mod" in ""|"#"*) continue ;; esac
         for f in $fns; do
+            # A function already there is the real one, from a shell that
+            # loaded its module before sourcing this file.
+            declare -F "$f" >/dev/null && continue
             src+="${f}() { _nut_prelude ${mod} ${f} \"\$@\"; }"$'\n'
         done
     done < "${_NUTSHELL_HOME}/prelude.nut"

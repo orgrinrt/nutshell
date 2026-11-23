@@ -94,9 +94,11 @@ with a cache directory of its own per start, so nothing is kept.
 | script, use toml, 300-line manifest | 29.7 |
 | script, no use, 300-line manifest, cold | 126.7 |
 
-All three targets met. The 165 stubs cost about 1ms a start, measured as 6.4
-against 7.5 in a run between the two; the ownership check about 5ms of the
-warm pin read. The cold pin read is 118ms over the bare script against 23ms
+All three targets met. The bare script went from 6.4ms in run
+`20261123010643`, before the stubs, to 8.5 in `20261123012558` and 8.2 here,
+with them: about 2ms a start, which no committed run splits between the 165
+stubs and the other changes. The ownership check is about 5ms of the warm pin
+read. The cold pin read is 118ms over the bare script against 23ms
 warm: the parse, the toml load, and writing the tree in a subshell for its
 umask. It is paid once per manifest text and per user.
 

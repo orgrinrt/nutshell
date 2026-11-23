@@ -83,6 +83,20 @@ _sc_run() {
     printf '%s' "$last"
 }
 
+
+# The same start with nothing kept from an earlier one: each start gets a cache
+# directory of its own that does not exist yet, so the pin read parses the
+# manifest and writes its tree. Named apart per start, since emptying one
+# would be a fork inside the time.
+_SC_COLD="$_SC_TMP/cold"
+_sc_run_cold() {
+    local i last=""
+    for (( i = 0; i < ITERS; i++ )); do
+        last="$(env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+            XDG_CACHE_HOME="${_SC_COLD}/${i}.${SRANDOM:-$RANDOM}.${RANDOM}" "$@" 2>/dev/null)"
+    done
+    printf '%s' "$last"
+}
 # The interpreter alone: a bash that prints and exits.
 arm_bash()          { _sc_run bash -c 'printf ok'; }
 # `init` sourced, no module asked for.
@@ -100,6 +114,8 @@ arm_bare_manifest() { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/unit/none.sh"; }
 arm_json()          { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/bare/json.sh"; }
 # `use toml` beside the 300-line `nut.toml`.
 arm_toml()          { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/unit/toml.sh"; }
+# No `use` beside the manifest, with no tree kept for it.
+arm_bare_cold()     { _sc_run_cold "$ROOT/bin/nutshell" "$_SC_TMP/unit/none.sh"; }
 
 _answer_of() { "$1"; }
 
@@ -115,6 +131,7 @@ bench_arm "script, no use, no manifest"       arm_bare
 bench_arm "script, no use, ${_SC_LINES}-line manifest" arm_bare_manifest
 bench_arm "script, use json, no manifest"     arm_json
 bench_arm "script, use toml, ${_SC_LINES}-line manifest" arm_toml
+bench_arm "script, no use, ${_SC_LINES}-line manifest, cold" arm_bare_cold
 
 bench_target arm_bare          $(( 50 * ITERS ))
 bench_target arm_bare_manifest $(( 50 * ITERS ))
@@ -144,5 +161,6 @@ if (( _sc_rc == 0 || ${#_BENCH_VERDICT[@]} > 0 )); then
     printf '  %-44s %7s ms\n' "the pin read, ${_SC_LINES}-line manifest" "$(_sc_diff 5 4)"
     printf '  %-44s %7s ms\n' "use json"                            "$(_sc_diff 6 4)"
     printf '  %-44s %7s ms\n' "use toml, beyond the pin read"       "$(_sc_diff 7 5)"
+    printf '  %-44s %7s ms\n' "the pin read with no tree kept"      "$(_sc_diff 8 4)"
 fi
 exit "$_sc_rc"

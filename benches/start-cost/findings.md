@@ -73,3 +73,32 @@ What is left, and why:
 
 **holds for:** this host only, bash 5.2.21, `XDG_CACHE_HOME` writable and warm,
 tools as this container has them.
+
+## After review, 2026-11-23, run `results/20261123012558`
+
+Same host and bash. Three changes since the run above: the public functions
+the old preload put in reach are stubs again, loaded on their first call; a
+kept tree is taken only where its file and directory are the reader's and
+nobody else can write them, which `find -perm` answers in one fork; and an arm
+with a cache directory of its own per start, so nothing is kept.
+
+| per start | ms |
+|---|---|
+| bash, nothing loaded | 3.6 |
+| bash sourcing init | 5.3 |
+| init, use deps | 17.3 |
+| init, use extern log | 53.4 |
+| script, no use, no manifest | 8.5 |
+| script, no use, 300-line manifest | 32.7 |
+| script, use json, no manifest | 65.3 |
+| script, use toml, 300-line manifest | 31.2 |
+| script, no use, 300-line manifest, cold | 126.3 |
+
+All three targets met. The 165 stubs cost about 1ms a start, measured as 6.4
+against 7.5 in a run between the two; the ownership check about 5ms of the
+warm pin read. The cold pin read is 118ms over the bare script against 24ms
+warm: the parse, the toml load, and writing the tree in a subshell for its
+umask. It is paid once per manifest text and per user.
+
+**holds for:** this host only, bash 5.2.21, `XDG_CACHE_HOME` writable, warm in
+every arm but the cold one, tools as this container has them.

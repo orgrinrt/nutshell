@@ -17,8 +17,9 @@
 # than it, so a changed parser never answers from an older one's tree.
 #
 # A kept tree is shell, and the reader runs it, so it is taken only where the
-# file and its directory are the reader's own and nobody else can write either:
-# anything else is code somebody else chose. Kept under
+# file and every directory from its own up to the cache root are the reader's
+# own and nobody else can write any of them, and it runs what was read from the
+# file that was checked: anything else is code somebody else chose. Kept under
 # `$XDG_CACHE_HOME/nutshell/toml`, or `$HOME/.cache/nutshell/toml`, beside
 # `checkcache`'s, and written under a umask of 077. With neither variable there
 # is no directory that is the reader's own, so nothing is kept or taken. Where
@@ -34,50 +35,80 @@ use key super::toml::impl::bash
 _TOML_CACHE_FLOOR="${BASH_SOURCE[0]%/*}/impl"
 _TOML_CACHE_SELF="${BASH_SOURCE[0]}"
 
-# _toml_cache_at <file> -> `_tca`, where the tree of a file is kept; rc 1 where
-# it has no place
+# _toml_cache_at <file> -> `_tca`, where the tree of a file is kept, and `_tcr`
+# the cache root it is under; rc 1 where it has no place
 _toml_cache_at() {
     local f="$1" root
-    _tca=""
+    _tca="" _tcr=""
     if [[ "${XDG_CACHE_HOME:-}" == /* ]]; then root="$XDG_CACHE_HOME"
     elif [[ "${HOME:-}" == /* ]]; then root="${HOME}/.cache"
     else return 1
     fi
+    while [[ "$root" == ?*/ ]]; do root="${root%/}"; done
     [[ "$f" == /* ]] || f="${PWD}/${f}"
     nut_key "$f" || return 1
+    _tcr="$root"
     _tca="${root}/nutshell/toml/${_nk}"
 }
 
 # What parsed a kept tree: the floor's directory and the bash that ran it.
 _toml_cache_by() { _tcb="${_TOML_CACHE_FLOOR}|${BASH_VERSION}"; }
 
-# _toml_cache_trusted <file> -> rc 0 where the file and its directory are the
-# reader's own, neither is a link, and neither is group- or other-writable
-# Ownership is bash's own test; the mode has no builtin, and `find -perm` is
-# the POSIX spelling of it. A `find` that fails trusts nothing.
+# _toml_cache_trusted <file> <fd> <root> -> rc 0 where the file open on <fd> is
+# the one at <file>, and it and every directory from its own up to <root> are
+# the reader's own and neither group- nor other-writable, none of them below
+# the root a link
+#
+# The open file is what is checked, by bash's tests on `/dev/fd/N`, which bash
+# answers from the descriptor itself: a plain file, the reader's, and still the
+# one the path names. Its mode is read through `/proc/<pid>/fd/N` where there
+# is one, else through the path, which that same-file test has just tied to it.
+# A directory others can write anywhere on the way is one where the file, or a
+# directory, could be swapped, so each is checked. Ownership is bash's own
+# test; the mode has no builtin, and `find -perm` is the POSIX spelling of it,
+# `-H` so a `/proc` entry is read as the file it opens. A `find` that fails
+# trusts nothing.
 _toml_cache_trusted() {
-    local d="${1%/*}" open
-    [[ -f "$1" && ! -L "$1" && ! -L "$d" && -O "$1" && -O "$d" ]] || return 1
-    open="$(find "$d" "$1" -prune \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" || return 1
+    local p="$1" fd="/dev/fd/$2" root="$3" d open
+    local -a list
+    [[ -f "$fd" && -O "$fd" && ! -L "$p" && "$fd" -ef "$p" ]] || return 1
+    if [[ -e "/proc/${BASHPID:-$$}/fd/$2" ]]; then list=("/proc/${BASHPID:-$$}/fd/$2")
+    else list=("$p")
+    fi
+    d="${p%/*}"
+    while [[ "$d" != "$root" ]]; do
+        [[ "$d" == "$root"/* && -d "$d" && ! -L "$d" && -O "$d" ]] || return 1
+        list+=("$d")
+        d="${d%/*}"
+    done
+    [[ -d "$d" && -O "$d" ]] || return 1
+    list+=("$d")
+    open="$(find -H "${list[@]}" -prune \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" || return 1
     [[ -z "$open" ]]
 }
 
 # The tree kept for a file's text, put in place of the one the floor holds.
 # Usage: _toml_cache_load <file> <text> -> 0 with the tree of that text in place, 1 where
 # none is kept for it
+# Read whole from one open descriptor first, then that descriptor's file
+# checked, then what was read run: a tree swapped in after the check is never
+# the one that runs.
 #[pub(super)]
 _toml_cache_load() {
-    local f="$1" _tc_src="$2" _tcb _tca body g
+    local f="$1" _tc_src="$2" _tcb _tca _tcr body g fd ok=1
     _toml_cache_at "$f" || return 1
     [[ -r "$_tca" ]] || return 1
     for g in "${_TOML_CACHE_FLOOR}/bash.sh" "${_TOML_CACHE_FLOOR}/bash_lex.sh" \
         "${_TOML_CACHE_FLOOR}/bash_path.sh" "$_TOML_CACHE_SELF"; do
         [[ "$_tca" -nt "$g" ]] || return 1
     done
-    _toml_cache_trusted "$_tca" || return 1
+    { exec {fd}< "$_tca"; } 2>/dev/null || return 1
+    IFS= read -r -d '' body <&"$fd"
+    _toml_cache_trusted "$_tca" "$fd" "$_tcr" || ok=0
+    exec {fd}<&-
+    [[ "$ok" == 1 ]] || return 1
     _toml_cache_by
     local _tc_by="$_tcb"
-    IFS= read -r -d '' body < "$_tca"
     # The first line returns from here where the text or the parser differ,
     # before a single array is touched. One cut short or garbled stops part of
     # the way, quietly, and the tree it left half in place is no file's.

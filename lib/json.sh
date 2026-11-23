@@ -50,7 +50,13 @@ use deps
 use super::json::build
 
 # What joins the segments of a path on their way to a backend.
-_JSON_US="$(printf '\037.')"; _JSON_US="${_JSON_US%.}"
+# A capture under a POSIX shell and the quoting bash has under bash, as in
+# `json::build`.
+if [ -n "${BASH_VERSION:-}" ]; then
+    eval "_JSON_US=\$'\\037'"
+else
+    _JSON_US="$(printf '\037.')"; _JSON_US="${_JSON_US%.}"
+fi
 
 # -----------------------------------------------------------------------------
 # Backends

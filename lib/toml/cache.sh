@@ -24,7 +24,7 @@
 [ -n "${_NUTSHELL_TOML_CACHE_SH:-}" ] && return 0
 _NUTSHELL_TOML_CACHE_SH=1
 
-use super::toml::impl::bash
+use key super::toml::impl::bash
 
 _TOML_CACHE_FLOOR="${BASH_SOURCE[0]%/*}/impl"
 
@@ -41,7 +41,8 @@ _toml_cache_at() {
 # What parsed a kept tree: the floor's directory and the bash that ran it.
 _toml_cache_by() { _tcb="${_TOML_CACHE_FLOOR}|${BASH_VERSION}"; }
 
-# _toml_cache_load <file> <text> -> 0 with the tree of that text in place, 1 where
+# The tree kept for a file's text, put in place of the one the floor holds.
+# Usage: _toml_cache_load <file> <text> -> 0 with the tree of that text in place, 1 where
 # none is kept for it
 #[pub(super)]
 _toml_cache_load() {
@@ -61,7 +62,8 @@ _toml_cache_load() {
     return 0
 }
 
-# _toml_cache_store <file> <text>: the tree now in place, kept for that text.
+# The tree now in place, kept for the next process that reads the same text.
+# Usage: _toml_cache_store <file> <text> -> 0 always; the cache is never needed for an answer
 # Written beside its place and moved in, so a reader never sees half of one.
 #[pub(super)]
 _toml_cache_store() {
@@ -69,7 +71,7 @@ _toml_cache_store() {
     _toml_cache_at "$f" || return 0
     _toml_cache_by
     [[ -d "${_tca%/*}" ]] || mkdir -p "${_tca%/*}" 2>/dev/null || return 0
-    tmp="${_tca}.$$"
+    tmp="${_tca}.${BASHPID:-$$}"
     {
         printf '[[ "$_tc_by" == %q && "$_tc_src" == %q ]] || return 1\n' "$_tcb" "$src"
         for a in _TOML_T _TOML_V _TOML_R _TOML_K _TOML_N _TOML_F _TOML_W _TOML_P _TOML_C _TOML_E; do

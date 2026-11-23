@@ -116,18 +116,21 @@ it_still_loads_nothing_for_a_script_that_calls_none_of_them() {
 #[test]
 it_defines_each_stubbed_function_in_the_module_the_stub_names() {
     # A stub naming the wrong module, or a function its module no longer has,
-    # would recurse into the guard at the first call. Each row is checked in a
-    # bash that loaded only that module.
-    local table="${NUT%/bin/nutshell}/lib/prelude.sh" init="${NUT%/bin/nutshell}/init"
-    local rows name mod n=0 bad=""
-    rows="$(sed -n 's/^\([a-z][a-z0-9_]*\)() { _nut_prelude \([a-z:_]*\) .*/\1 \2/p' "$table")"
-    while read -r name mod; do
-        [[ -n "$name" ]] || continue
-        n=$(( n + 1 ))
-        env -i PATH="$PATH" HOME="$HOME" bash -c '. "$1" || exit 1; use "$2" >/dev/null 2>&1; declare -F "$3" >/dev/null' \
-            _ "$init" "$mod" "$name" || bad+=" $name($mod)"
-    done <<< "$rows"
+    # would stop at the guard at the first call. Each row is checked in a bash
+    # that loaded only that module.
+    local table="${NUT%/bin/nutshell}/prelude.nut" init="${NUT%/bin/nutshell}/init"
+    local name mod fns n=0 bad=""
+    [[ -r "$table" ]] || { assert_eq "missing" "$table"; return 0; }
+    while read mod fns; do
+        case "$mod" in ""|"#"*) continue ;; esac
+        for name in $fns; do
+            n=$(( n + 1 ))
+            env -i PATH="$PATH" HOME="$HOME" bash -c '. "$1" || exit 1; use "$2" >/dev/null 2>&1; declare -F "$3" >/dev/null' \
+                _ "$init" "$mod" "$name" || bad+=" $name($mod)"
+        done
+    done < "$table"
     assert_eq "$bad" ""
-    # 165 public functions were reachable on dev with no `use`.
+    # The public functions `use extern log` defined on dev at 2173589, which
+    # is what the interpreter loaded before every script there.
     assert_eq "$n" "165"
 }

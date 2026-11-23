@@ -85,6 +85,37 @@ source "${_NUTSHELL_HOME}/init" || {
 # manifest pins an engine: they were loaded before every script, 22 files and
 # about 230ms, so a script that asked for no module paid for all of them, and
 # a hook on every tool call paid it every time.
+#
+# What that load put in reach stays in reach: each function `prelude.nut`
+# names is a stub that loads its module on the first call, the way
+# `nut_lazy_guard` works for `text`, so a script that calls none of them pays
+# for nothing. Defined before the pin block, so a module it loads overwrites
+# the stubs and not the other way round.
+_nut_prelude() {
+    local _np_fn="$2" _np_key="_NUT_PRELUDE_${2}"
+    if [[ -n "${!_np_key:-}" ]]; then
+        printf '[ERROR] %s: use %s loaded but did not define it\n' "$2" "$1" >&2
+        return 1
+    fi
+    local "${_np_key}=1"
+    use "$1" || return 1
+    shift 2
+    "$_np_fn" "$@"
+}
+
+# All the stubs in one `eval`. `read` without `-r` joins a row's continued
+# lines.
+_nut_prelude_stubs() {
+    local mod fns f src=""
+    while read mod fns; do
+        case "$mod" in ""|"#"*) continue ;; esac
+        for f in $fns; do
+            src+="${f}() { _nut_prelude ${mod} ${f} \"\$@\"; }"$'\n'
+        done
+    done < "${_NUTSHELL_HOME}/prelude.nut"
+    eval "$src"
+}
+_nut_prelude_stubs
 
 # =============================================================================
 # The engine pin

@@ -36,6 +36,8 @@
 #   attr_has  lib/string.sh str_trim pub  # is it marked?
 #   attr_arg  lib/foo.sh    big_fn allow  # the argument, `loc = 400`
 #   attr_find lib/foo.sh    test          # every definition marked #[test]
+#   attr_usage lib/foo.sh   big_fn        # its `# Usage:` lines
+#   attr_usages lib/foo.sh                # every definition's, as `name<TAB>text`
 # =============================================================================
 
 # A guard of its own rather than `nut_once`, which reads `BASH_SOURCE` and so
@@ -359,4 +361,70 @@ attr_find() {
 
         pending=0
     done < "$file"
+}
+
+# attr_usages <file>
+#
+# The `# Usage:` lines of every definition in the file, one per line as the
+# function name, a tab and the text without its marker, in file order. The
+# block is the comments directly above a definition, attributes included, so a
+# usage line may sit before or after `#[pub]` with prose around it. A blank
+# line or a line of code ends the block, which is what keeps a module header's
+# own `# Usage:` from landing on the first function under it, and a marker with
+# no text after it is no usage at all. One pass over the file, for a caller
+# that wants them all.
+#
+#[pub]
+# Usage: attr_usages lib/string.sh -> prints "str_trim<TAB>str_trim <text> -> ..." per usage line
+attr_usages() {
+    local line t block=""
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            [![:space:]]*) t="$line" ;;
+            *) t="${line#"${line%%[![:space:]]*}"}" ;;
+        esac
+
+        case "$t" in
+            '') block=""; continue ;;
+            '#['*) continue ;;
+            '# Usage:'*)
+                t="${t#\# Usage:}"
+                t="${t#"${t%%[![:space:]]*}"}"
+                [ -n "$t" ] && block="${block}${t}${_ATTR_NL}"
+                continue ;;
+            '#'*) continue ;;
+        esac
+
+        _attr_defines_set_t "$t"
+        if [ -n "$_ATTR_DEF" ] && [ -n "$block" ]; then
+            while [ -n "$block" ]; do
+                printf '%s\t%s\n' "$_ATTR_DEF" "${block%%"$_ATTR_NL"*}"
+                block="${block#*"$_ATTR_NL"}"
+            done
+        fi
+        block=""
+    done < "$1"
+}
+
+# attr_usage <file> <function>
+#
+# The `# Usage:` lines of one definition, one per line, without the marker.
+# Fails when there is none, the way `attr_arg` does.
+#
+#[pub]
+# Usage: attr_usage lib/string.sh str_trim -> prints "str_trim <text> -> ..."
+attr_usage() {
+    local out rest one found=""
+    out="$(attr_usages "$1")"
+    rest="$out"
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            *"$_ATTR_NL"*) one="${rest%%"$_ATTR_NL"*}"; rest="${rest#*"$_ATTR_NL"}" ;;
+            *) one="$rest"; rest="" ;;
+        esac
+        [ "${one%%"$_ATTR_TAB"*}" = "$2" ] && found="${found}${one#*"$_ATTR_TAB"}${_ATTR_NL}"
+    done
+    [ -n "$found" ] || return 1
+    printf '%s\n' "${found%"$_ATTR_NL"}"
 }

@@ -4,6 +4,7 @@
 # Read before any module is loaded, so it stays a format that needs
 # no parser: the TOML one is itself a module.
 
+api                      lib/api.sh
 array                    lib/array.sh
 attr                     lib/attr.sh
 bench                    lib/bench.sh
@@ -12,6 +13,11 @@ checkcache               lib/checkcache.sh
 cli                      lib/cli.sh
 color                    lib/color.sh
 deps                     lib/deps.sh
+deps::config             lib/deps/config.sh          internal
+deps::pins               lib/deps/pins.sh
+deps::probe              lib/deps/probe.sh           internal
+deps::state              lib/deps/state.sh           internal
+deps::variants           lib/deps/variants.sh        internal
 extern                   lib/extern.sh
 fs                       lib/fs.sh
 fs::impl::perl_stat      lib/fs/impl/perl_stat.sh     internal
@@ -23,6 +29,9 @@ inuse                    lib/inuse.sh
 http                     lib/http.sh
 key                      lib/key.sh
 json                     lib/json.sh
+json::build              lib/json/build.sh           internal
+json::impl::bash         lib/json/impl/bash.sh        internal
+json::impl::bash_parse   lib/json/impl/bash_parse.sh  internal
 json::impl::jq           lib/json/impl/jq.sh          internal
 json::impl::perl         lib/json/impl/perl.sh        internal
 json::impl::python       lib/json/impl/python.sh      internal
@@ -71,6 +80,9 @@ toml                     lib/toml.sh
 toml::impl::bash         lib/toml/impl/bash.sh        internal
 toml::impl::bash_lex     lib/toml/impl/bash_lex.sh    internal
 toml::impl::bash_path    lib/toml/impl/bash_path.sh   internal
+toml::impl::from_json    lib/toml/impl/from_json.sh   internal
+toml::impl::taplo        lib/toml/impl/taplo.sh       internal
+toml::impl::yq           lib/toml/impl/yq.sh          internal
 toml::json               lib/toml/json.sh
 toml::write              lib/toml/write.sh
 validate                 lib/validate.sh

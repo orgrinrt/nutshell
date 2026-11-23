@@ -120,15 +120,23 @@ it_deletes_a_key() {
 # _agrees <function> <args...>
 #
 # Assert every available backend returns the same text and the same status for
-# that call.
+# that call. `_agrees_read` is the same over the readers, which include the one
+# that needs no tool, the only one that does not write.
 #
 # The arguments are passed through, not assembled into a string and eval'd. The
 # first version of this did eval, and `{"a":1,"b":2}` on a command line is a
 # brace expansion: bash tore the document into words before the function saw
 # it, every backend was handed the same nonsense, they agreed about it, and the
 # test passed with the bug it was written for put back.
-_agrees() {
-    local impl first="" seen=0 got rc
+_agrees() { _agrees_over _impls "$@"; }
+_agrees_read() { _agrees_over _readers "$@"; }
+
+# _readers -> every backend that reads, the floor last
+_readers() { _impls; printf 'bash\n'; }
+
+_agrees_over() {
+    local lister="$1" impl first="" seen=0 got rc
+    shift
     while IFS= read -r impl; do
         _JSON_IMPL="$impl"
         got="$("$@" 2>/dev/null)"; rc=$?
@@ -138,7 +146,7 @@ _agrees() {
         else
             assert_eq "${got}|${rc}" "$first" "${impl} on: $*"
         fi
-    done < <(_impls)
+    done < <("$lister")
     assert_eq "$seen" "1" "at least one backend ran"
 }
 
@@ -153,11 +161,11 @@ it_returns_the_same_text_from_every_backend() {
     # assert over is choosing what not to find out.
     local doc='{"a":1,"b":{"c":[1,2,3]},"d":"x"}'
 
-    _agrees json_get "$doc" b.c
-    _agrees json_get "$doc" d
-    _agrees json_keys "$doc"
-    _agrees json_type "$doc" b
-    _agrees json_length "$doc" b.c
+    _agrees_read json_get "$doc" b.c
+    _agrees_read json_get "$doc" d
+    _agrees_read json_keys "$doc"
+    _agrees_read json_type "$doc" b
+    _agrees_read json_length "$doc" b.c
     _agrees json_delete "$doc" a
     _agrees json_merge "$doc" '{"e":5}'
     _agrees json_compact "$doc"
@@ -171,37 +179,54 @@ it_returns_the_same_text_from_every_backend() {
     # Text outside ASCII. jq emits UTF-8, python escaped it to `\u00e9`, and
     # perl printed the bytes of a character string and produced mojibake.
     _agrees json_compact '{"k":"café"}'
-    _agrees json_get '{"k":"café"}' k
+    _agrees_read json_get '{"k":"café"}' k
 
     # An integer path segment indexes an array. jq built its path by putting a
     # dot in front, and `.1` is not the second element, it is the number 0.1.
-    _agrees json_get '[10,20]' 1
-    _agrees json_get '{"a":[10,20]}' a.1
+    _agrees_read json_get '[10,20]' 1
+    _agrees_read json_get '{"a":[10,20]}' a.1
 
     # An absent key is absent. jq and perl said `null` with a zero status,
     # which cannot be told from a key that is present and null, and python said
     # nothing with a status of 1.
-    _agrees json_get '{"a":1}' zzz
-    _agrees json_get '{"a":{"b":1}}' a.zzz
+    _agrees_read json_get '{"a":1}' zzz
+    _agrees_read json_get '{"a":{"b":1}}' a.zzz
 
     # Scalars come back as JSON, not as whatever the tool's own language
     # prints. Python said `True` and perl said `1`.
-    _agrees json_get '{"a":true}' a
-    _agrees json_get '{"a":false}' a
-    _agrees json_get '{"a":null}' a
-    _agrees json_get '{"a":1.5}' a
+    _agrees_read json_get '{"a":true}' a
+    _agrees_read json_get '{"a":false}' a
+    _agrees_read json_get '{"a":null}' a
+    _agrees_read json_get '{"a":1.5}' a
 
     # A quote inside a string. Python returned nothing at all.
-    _agrees json_get '{"a":"he said \"hi\""}' a
+    _agrees_read json_get '{"a":"he said \"hi\""}' a
 
     # Empty containers, and a value that is one.
     _agrees json_compact '{}'
     _agrees json_compact '[]'
     _agrees json_compact '{"a":[[1,2],[3]]}'
-    _agrees json_type '{"a":null}' a
-    _agrees json_keys '{"a":[1,2]}' a
+    _agrees_read json_type '{"a":null}' a
+    _agrees_read json_keys '{"a":[1,2]}' a
     _agrees json_set '{"a":{"b":1}}' a.b 9
     _agrees json_delete '{"a":{"b":1,"c":2}}' a.b
+}
+
+#[test]
+it_reads_the_dotted_path_language_the_same_on_every_backend() {
+    # A leading dot, an index, and a quoted segment holding a dot: the language
+    # the toml reader speaks, so one path reads a file in either format. The
+    # expected values are written here, from what jq prints for the same path,
+    # so agreement is not agreement on a shared mistake.
+    local doc='{"a":{"b":[7,8,{"c":"deep"}]},"k.d":{"z":1},"x y":2}' impl
+    while IFS= read -r impl; do
+        _JSON_IMPL="$impl"
+        assert_eq "$(json_get "$doc" .a.b.0)" "7" "$impl .a.b.0"
+        assert_eq "$(json_get "$doc" a.b.2.c)" "deep" "$impl a.b.2.c"
+        assert_eq "$(json_get "$doc" '"k.d".z')" "1" "$impl quoted key"
+        assert_eq "$(json_get "$doc" '"x y"')" "2" "$impl quoted key with a space"
+        json_get "$doc" 'k.d.z' >/dev/null 2>&1; assert_eq "$?" "1" "$impl a split that is not there"
+    done < <(_readers)
 }
 
 # --- the jq backend's own classifiers ----------------------------------------
@@ -213,7 +238,7 @@ it_tells_a_json_literal_from_a_string() {
     # floor. A `case` recognising the same shape is easy to get subtly wrong
     # in either direction: too loose and a string gets injected into the jq
     # program unquoted, too tight and a number arrives quoted.
-    deps_has jq || return 0
+    deps_has jq || { skip "jq is not on this machine"; return 0; }
 
     for v in 1 -1 0 1.5 -1.5 10 -0.25 true false null '[1]' '[]' '{}' '{"a":1}'; do
         assert_ok _jq_is_json_literal "$v"
@@ -232,22 +257,22 @@ it_builds_a_path_that_tells_an_index_from_a_name() {
     # dot in front of the whole path gets the first wrong: `.1` is the number
     # 0.1, not the second element. Bracket form for both, and a name quoted so
     # a key holding a dash or a space stays one segment.
-    deps_has jq || return 0
+    deps_has jq || { skip "jq is not on this machine"; return 0; }
 
+    # Segments arrive already split, joined by the unit separator, so a key
+    # holding a dot is one segment.
+    local us; us="$(printf '\037')"
     assert_eq "$(_jq_path '')" "."
-    assert_eq "$(_jq_path '.')" "."
-    assert_eq "$(_jq_path 'a')" '.["a"]'
-    assert_eq "$(_jq_path '.a')" '.["a"]'
-    assert_eq "$(_jq_path 'a.b')" '.["a"]["b"]'
-    assert_eq "$(_jq_path '1')" '.[1]'
-    assert_eq "$(_jq_path 'a.1')" '.["a"][1]'
-    assert_eq "$(_jq_path '1.a')" '.[1]["a"]'
-    assert_eq "$(_jq_path 'a-b')" '.["a-b"]'
-    assert_eq "$(_jq_path 'a..b')" '.["a"]["b"]'
-    # A segment holding a glob character must not be expanded by the split,
-    # which is what `set -f` inside the loop is for.
-    assert_eq "$(_jq_path 'a*b')" '.["a*b"]'
-    assert_eq "$(_jq_path '*')" '.["*"]'
+    assert_eq "$(_jq_path "a")" '.["a"]'
+    assert_eq "$(_jq_path "a${us}b")" '.["a"]["b"]'
+    assert_eq "$(_jq_path "1")" '.[1]'
+    assert_eq "$(_jq_path "a${us}1")" '.["a"][1]'
+    assert_eq "$(_jq_path "1${us}a")" '.[1]["a"]'
+    assert_eq "$(_jq_path "a-b")" '.["a-b"]'
+    assert_eq "$(_jq_path "k.d${us}z")" '.["k.d"]["z"]'
+    assert_eq "$(_jq_path "say \"hi\"")" '.["say \"hi\""]'
+    assert_eq "$(_jq_path "a*b")" '.["a*b"]'
+    assert_eq "$(_jq_path "*")" '.["*"]'
 }
 
 #[test]

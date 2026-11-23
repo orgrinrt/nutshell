@@ -21,8 +21,9 @@ use super::toml
 # reads: tables nest however the file reaches them, an array of tables is an
 # array of objects, an inline table is an object, a dotted key is the nesting
 # it spells, and every string is the decoded value escaped once for JSON.
-# Integers come out in decimal and a date or a time as a string, as yq gives
-# them.
+# Every scalar is the text `lib/toml.sh` names canonical: an integer in
+# decimal, a float as the file spelled it and a JSON number still, so `3.0`
+# stays a float, and a date or a time a string in RFC 3339 spelling.
 #
 # A file the reader refuses is refused here, rc 2 with its reason. So is an
 # infinity or a NaN, which TOML has and JSON has no spelling for.
@@ -30,7 +31,12 @@ use super::toml
 toml_to_json() {
     local file="${1:-}" rc=0
     [[ -n "$file" ]] || return 1
-    _toml_open "$file" || return $?
+    _toml_open_values "$file" || return $?
+    # A value the tool rewrote, `_TOML_JL` of them, is the floor's to write.
+    if [[ "$_TOML_FROM" == json ]] && (( ${_TOML_JL:-0} )); then
+        _TOML_FROM=bash
+        _toml_open "$file" || return $?
+    fi
     _tj_out=""
     _tj_emit R || rc=$?
     if (( rc != 0 )); then

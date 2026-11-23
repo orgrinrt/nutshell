@@ -7,8 +7,9 @@
 #
 # Layer 0 (Core): Depends on deps.sh for tool detection
 #
-# Provides HTTP request functions using lazy-init stubs to select the best
-# available tool (curl > wget > perl).
+# Provides HTTP request functions through curl, or wget where curl is absent.
+# There is no third rung: HTTPS from perl needs modules no base image carries,
+# so a machine with neither refuses, and `http_ready` says which two it wanted.
 #
 # Features:
 #   - GET, POST, PUT, DELETE, PATCH requests
@@ -43,16 +44,25 @@ _HTTP_READY=0
 _HTTP_ERROR=""
 _HTTP_IMPL=""
 
-# Check for available HTTP tools
-if deps_has "curl"; then
-    _HTTP_READY=1
-    _HTTP_IMPL="curl"
-elif deps_has "wget"; then
-    _HTTP_READY=1
-    _HTTP_IMPL="wget"
-else
-    _HTTP_ERROR="No HTTP tool available (need curl or wget)"
-fi
+#[pub]
+# Pick the tool again, from what `deps` knows now. Run at load, and after
+# `deps_forget` when a tool has come or gone.
+# Usage: http_detect
+http_detect() {
+    _HTTP_READY=0
+    _HTTP_IMPL=""
+    _HTTP_ERROR=""
+    if deps_has "curl"; then
+        _HTTP_READY=1
+        _HTTP_IMPL="curl"
+    elif deps_has "wget"; then
+        _HTTP_READY=1
+        _HTTP_IMPL="wget"
+    else
+        _HTTP_ERROR="http: needs curl or wget, and this machine has neither"
+    fi
+}
+http_detect
 
 # -----------------------------------------------------------------------------
 # Response Storage
@@ -637,10 +647,13 @@ http_url() {
 # -----------------------------------------------------------------------------
 
 #[pub]
-# Check if HTTP module is ready
+# Check if HTTP module is ready. Where it is not, the tools it wanted are named
+# on stderr.
 # Usage: http_ready -> returns 0 if ready, 1 if not
 http_ready() {
-    [[ "$_HTTP_READY" == "1" ]]
+    [[ "$_HTTP_READY" == "1" ]] && return 0
+    echo "$_HTTP_ERROR" >&2
+    return 1
 }
 
 #[pub]

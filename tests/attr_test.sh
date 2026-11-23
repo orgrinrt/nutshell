@@ -413,3 +413,72 @@ it_agrees_with_the_regex_about_every_line_in_the_library() {
         assert_eq "$_ATTR_DEF" "$via_regex" "disagreed about [$probe]"
     done
 }
+
+# --- attr_usage ---------------------------------------------------------------
+
+USAGE_FIXTURE="${BASH_SOURCE[0]%/*}/fixtures/usage.sh"
+
+#[test]
+it_reads_a_usage_line_written_after_the_attribute() {
+    assert_eq "$(attr_usage "$USAGE_FIXTURE" after_attr)" "after_attr <a> -> usage written after the attribute"
+}
+
+#[test]
+it_reads_a_usage_line_written_before_the_attribute() {
+    assert_eq "$(attr_usage "$USAGE_FIXTURE" before_attr)" "before_attr <a> -> usage written before the attribute"
+}
+
+#[test]
+it_reads_the_usage_line_out_of_surrounding_prose() {
+    assert_eq "$(attr_usage "$USAGE_FIXTURE" with_prose)" "with_prose <a> -> prose sits above it"
+}
+
+#[test]
+it_reads_every_usage_line_of_a_function_in_file_order() {
+    local want
+    want="two_forms <a> -> the first form"$'\n'"two_forms <a> <b> -> the second form"
+    assert_eq "$(attr_usage "$USAGE_FIXTURE" two_forms)" "$want"
+}
+
+#[test]
+it_finds_no_usage_where_none_is_written() {
+    assert_fails attr_usage "$USAGE_FIXTURE" no_usage
+    assert_empty "$(attr_usage "$USAGE_FIXTURE" no_usage)"
+}
+
+#[test]
+it_does_not_attach_a_comment_across_a_blank_line() {
+    assert_fails attr_usage "$USAGE_FIXTURE" detached
+}
+
+#[test]
+it_does_not_attach_a_comment_across_real_code() {
+    assert_fails attr_usage "$USAGE_FIXTURE" after_code
+}
+
+#[test]
+it_does_not_read_a_comment_inside_a_body_as_usage() {
+    assert_fails attr_usage "$USAGE_FIXTURE" keyword_form
+}
+
+#[test]
+it_ignores_a_usage_marker_with_no_text() {
+    assert_fails attr_usage "$USAGE_FIXTURE" undefined_text
+}
+
+#[test]
+it_finds_no_usage_for_a_function_the_file_does_not_define() {
+    assert_fails attr_usage "$USAGE_FIXTURE" nowhere_to_be_found
+}
+
+#[test]
+it_prints_every_usage_line_of_a_file_as_name_tab_text() {
+    local tab want
+    tab="$(printf '\t')"
+    want="after_attr${tab}after_attr <a> -> usage written after the attribute
+before_attr${tab}before_attr <a> -> usage written before the attribute
+with_prose${tab}with_prose <a> -> prose sits above it
+two_forms${tab}two_forms <a> -> the first form
+two_forms${tab}two_forms <a> <b> -> the second form"
+    assert_eq "$(attr_usages "$USAGE_FIXTURE")" "$want"
+}

@@ -1,0 +1,85 @@
+#!/usr/bin/env nutshell
+# =============================================================================
+# nut-api - List a library's public functions
+# Part of nutshell - Everything you need, in a nutshell.
+# https://github.com/orgrinrt/nutshell
+#
+# Run as `nutshell api`. Every module a library declares and the functions it
+# marks `#[pub]`, each with its `# Usage:` line, sorted and stable so the output
+# can be committed and diffed. The reading is the `api` module's; this is the
+# argument handling and the choice of which library.
+#
+# Usage:
+#   nutshell api [<module>]                 nutshell's own modules
+#   nutshell api --path <dir> [<module>]    the library whose lib.nut is in <dir>
+#   nutshell api --lib <name> [<module>]    a library named in the nearest nut.toml
+#   nutshell api --git <url> [--ref <ref>] [<module>]
+#                                           a library by url, nothing recorded
+#   nutshell api --md ...                   markdown, a block per module
+
+use api extern log
+
+_api_usage() {
+    cat <<'USAGE'
+Usage:
+  nutshell api [<module>]                 nutshell's own modules
+  nutshell api --path <dir> [<module>]    the library whose lib.nut is in <dir>
+  nutshell api --lib <name> [<module>]    a library named in the nearest nut.toml
+  nutshell api --git <url> [--ref <ref>] [<module>]
+                                          a library by url, nothing recorded
+  nutshell api --md ...                   markdown, a block per module
+USAGE
+}
+
+_api_main() {
+    local source="" arg="" ref="" ref_set=0 md=0 module="" root="" title="api"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --path|--lib|--git)
+                [[ -z "$source" ]] || { echo "api: only one of --path, --lib and --git" >&2; return 2; }
+                [[ $# -ge 2 ]] || { echo "api: $1 needs a value" >&2; return 2; }
+                source="${1#--}"; arg="$2"; shift 2 ;;
+            --ref)
+                [[ $# -ge 2 ]] || { echo "api: --ref needs a value" >&2; return 2; }
+                ref="$2"; ref_set=1; shift 2 ;;
+            --md) md=1; shift ;;
+            -h|--help) _api_usage; return 0 ;;
+            -*) echo "api: unknown option: $1" >&2; _api_usage >&2; return 2 ;;
+            *)
+                [[ -z "$module" ]] || { echo "api: one module at a time, got '${module}' and '$1'" >&2; return 2; }
+                module="$1"; shift ;;
+        esac
+    done
+
+    if [[ "$ref_set" -eq 1 && "$source" != "git" ]]; then
+        echo "api: --ref goes with --git" >&2
+        return 2
+    fi
+
+    case "$source" in
+        "")   root="$_NUTSHELL_ROOT"; title="nutshell" ;;
+        path)
+            root="$(cd "$arg" 2>/dev/null && pwd)" || { echo "api: no such directory: ${arg}" >&2; return 1; }
+            title="${root##*/}" ;;
+        lib)
+            # The manifest nearest the working directory, which is where the
+            # person typing this is, not the directory this script lives in.
+            unset _NUT_ASKING_FROM
+            NUTSHELL_SCRIPT_DIR="$PWD"
+            root="$(extern_path "$arg")" || return 1
+            title="$arg" ;;
+        git)
+            root="$(extern_path_url "$arg" "${ref:-HEAD}")" || return 1
+            title="${arg##*/}"; title="${title%.git}" ;;
+    esac
+
+    if [[ "$md" -eq 1 ]]; then
+        api_markdown "$root" "$module" "$title"
+    else
+        api_text "$root" "$module"
+    fi
+}
+
+_api_main "$@"
+exit $?

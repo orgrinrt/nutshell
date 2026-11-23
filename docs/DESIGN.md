@@ -42,31 +42,43 @@ nutshell is a minimal bash utility library providing core primitives for shell s
 
 ### Layered Structure
 
-```
-Layer -1 (Foundation): Zero internal dependencies
-  os.sh      - OS detection (pure bash)
-  log.sh     - Logging (pure bash)
-  deps.sh    - Tool detection, builds environment info
+Every module is declared in `lib.nut`, one row per module, and loaded by `use`.
+The rows below are the base of the stack and what each one `use`s.
 
-Layer 0 (Core): May depend on foundation, uses external tools
-  validate.sh - Input validation (depends on log.sh)
-  string.sh   - String manipulation (pure bash)
-  array.sh    - Array operations (pure bash)
-  fs.sh       - Filesystem primitives (uses stat, etc.)
-  text.sh     - Text file processing (uses sed, grep, awk, perl)
-  toml.sh     - TOML reading in pure bash (depends on validate.sh); the reader
-                is toml/impl/, toml/write.sh edits in place, toml/json.sh
+```
+Foundation: no other module
+  os.sh       - OS detection
+  log.sh      - Logging
+  string.sh   - String manipulation (string.posix.sh where the shell is not bash)
+
+Tools: what is on the machine
+  key.sh      - The name encoding every table here is keyed by
+  deps.sh     - Tool detection and variants (uses os, key); deps/pins.sh reads
+                `[deps.paths]` through toml, loaded by init on the first pin
+                asked for, so deps.sh itself still loads under a POSIX shell
+
+Core: may use the two above
+  validate.sh - Input validation (uses log, deps)
+  array.sh    - Array operations (uses list)
+  fs.sh       - Filesystem primitives (uses deps; fs/impl/ per stat variant)
+  text.sh     - Text file processing (uses deps; text/impl/ per tool)
+  toml.sh     - TOML reading (uses validate, deps). taplo or mikefarah yq
+                where deps finds one, else the bash reader in toml/impl/, which
+                needs nothing; toml/write.sh edits in place, toml/json.sh
                 converts to JSON
-  xdg.sh      - XDG directories (depends on os.sh, validate.sh)
+  xdg.sh      - XDG directories (uses os, validate)
 ```
 
 ### Module File Structure
 
 ```
 nutshell/
-  nutshell.sh              # Main entrypoint
-  core/
-    deps.sh                # Environment detection
+  init                     # Defines `use`; every script sources it
+  nutshell.sh              # Loads every module at once
+  lib.nut                  # Module name to file, with gates
+  lib/
+    deps.sh                # Tool detection
+    deps/                  # config, pins, probe, state, variants
     os.sh
     log.sh
     text.sh                # Public API + stubs
@@ -91,9 +103,15 @@ nutshell/
 
 deps.sh finds tools using this order:
 
-1. Check user config in `nut.toml` for explicit paths
+1. A pin in `[deps.paths]` of the `nut.toml` that applies: the first found
+   walking up from the file asking, then from the script being run, then from
+   the working directory, and nutshell's own as the last resort. The pin is
+   read through the toml module, in any spelling TOML allows. A pin to
+   something that is not an executable file is refused, said once on stderr,
+   and never falls through to PATH. A manifest that is not TOML pins nothing,
+   and that is said once.
 2. If `which` is available, use it to find tools
-3. If `which` is not available, check common locations in order:
+3. Else check common locations in order:
    - `/usr/bin/<tool>`
    - `/bin/<tool>`
    - `/usr/local/bin/<tool>`
@@ -101,47 +119,7 @@ deps.sh finds tools using this order:
 4. Verify the binary exists and is executable before accepting
 5. If not found anywhere, mark as unavailable
 
-```bash
-_find_tool_path() {
-    local tool="$1"
-    local user_path
-    
-    # 1. Check user config first
-    user_path=$(cfg_get_or "deps.paths.${tool}" "")
-    if [[ -n "$user_path" ]] && [[ -x "$user_path" ]]; then
-        echo "$user_path"
-        return 0
-    fi
-    
-    # 2. Try which if available
-    if command -v which &>/dev/null; then
-        local found
-        found=$(which "$tool" 2>/dev/null)
-        if [[ -n "$found" ]] && [[ -x "$found" ]]; then
-            echo "$found"
-            return 0
-        fi
-    fi
-    
-    # 3. Check common locations
-    local locations=(
-        "/usr/bin/${tool}"
-        "/bin/${tool}"
-        "/usr/local/bin/${tool}"
-        "/opt/homebrew/bin/${tool}"
-    )
-    
-    for loc in "${locations[@]}"; do
-        if [[ -x "$loc" ]]; then
-            echo "$loc"
-            return 0
-        fi
-    done
-    
-    # Not found
-    return 1
-}
-```
+`_deps_find_tool` in `lib/deps/config.sh` is the code.
 
 ### Environment Info Structure
 
@@ -703,7 +681,7 @@ nutshell QA
 
 Diagnostics:
 
-  core/
+  lib/
     deps.sh
       ⚠ 421 LOC
         └─ consider splitting or add #[allow(loc = 421)]
@@ -717,8 +695,6 @@ Output level controlled with `--level=error|warn|info|debug`.
 
 ### Potential New Modules
 
-- `http.sh` - curl/wget abstraction
-- `json.sh` - jq/python/perl JSON parsing
 - `semver.sh` - Semantic version parsing and comparison
 
 ### Potential Features

@@ -274,8 +274,11 @@ _tv_scalar() {
         _TOML_T[$p]=inf
         _TOML_V[$p]="$tok"
     elif [[ "$tok" =~ $_TOML_RE_DATE || "$tok" =~ $_TOML_RE_TIME ]]; then
+        # RFC 3339's spelling, the one `lib/toml.sh` names canonical: the
+        # separator a `T`, and `t` and `z` upper case.
+        tok="${tok/ /T}"
         _TOML_T[$p]=dt
-        _TOML_V[$p]="$tok"
+        _TOML_V[$p]="${tok^^}"
     else
         _tp_err "invalid value: ${tok}"
         return 2

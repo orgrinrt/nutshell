@@ -150,9 +150,11 @@ it_reads_a_deps_paths_entry_written_at_the_root_with_padded_dots() {
 }
 
 #[test]
-it_refuses_deps_paths_written_as_an_inline_table() {
-    # Not read, so refused: a pin that is written and not honoured is the
-    # silent fall-through to PATH this exists to prevent.
+it_reads_deps_paths_written_as_an_inline_table() {
+    # Valid TOML, and the same pin as `[deps.paths]` with `sed = ...`. It was
+    # refused while the reader here could not read an inline table; the toml
+    # reader can, so the pin is honoured, and a pin to a file that is not an
+    # executable is refused as it is in any other spelling.
     local t; t="$(mktemp -d)"
     mkdir -p "$t/u/sub"
     printf '[deps]\npaths = { sed = "/nonexistent/sed" }\n' > "$t/u/nut.toml"
@@ -162,7 +164,113 @@ it_refuses_deps_paths_written_as_an_inline_table() {
     err="$(_dv_err "$t/u/sub/s.sh")"
     assert_not_contains "$out" "FOUND"
     assert_contains "$out" "rc=1"
-    assert_contains "$err" "inline table"
+    assert_contains "$err" "[deps.paths]"
+    assert_contains "$err" "/nonexistent/sed"
+    rm -rf "$t"
+}
+
+#[test]
+it_reads_a_deps_paths_entry_with_a_quoted_key() {
+    # `"sed"` and `sed` are one key in TOML.
+    local t; t="$(mktemp -d)"
+    mkdir -p "$t/u/sub"
+    printf '[deps.paths]\n"sed" = "/nonexistent/sed"\n' > "$t/u/nut.toml"
+    printf 'use deps\n%s\n' 'deps_has sed && echo FOUND; deps_path sed; echo "rc=$?"' > "$t/u/sub/s.sh"
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_not_contains "$out" "FOUND"
+    assert_contains "$out" "rc=1"
+    assert_contains "$err" "/nonexistent/sed"
+    rm -rf "$t"
+}
+
+#[test]
+it_reads_a_deps_paths_entry_under_a_quoted_header() {
+    local t; t="$(mktemp -d)"
+    mkdir -p "$t/u/sub"
+    printf '["deps"."paths"]\nsed = "/nonexistent/sed"\n' > "$t/u/nut.toml"
+    printf 'use deps\n%s\n' 'deps_has sed && echo FOUND; deps_path sed; echo "rc=$?"' > "$t/u/sub/s.sh"
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_not_contains "$out" "FOUND"
+    assert_contains "$out" "rc=1"
+    assert_contains "$err" "/nonexistent/sed"
+    rm -rf "$t"
+}
+
+#[test]
+it_reads_a_deps_paths_entry_written_as_a_literal_string() {
+    local t; t="$(mktemp -d)"
+    mkdir -p "$t/u/sub"
+    printf "[deps.paths]\nsed = '/nonexistent/sed'\n" > "$t/u/nut.toml"
+    printf 'use deps\n%s\n' 'deps_has sed && echo FOUND; deps_path sed; echo "rc=$?"' > "$t/u/sub/s.sh"
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_not_contains "$out" "FOUND"
+    assert_contains "$out" "rc=1"
+    assert_contains "$err" "/nonexistent/sed"
+    rm -rf "$t"
+}
+
+#[test]
+it_says_once_that_the_manifest_is_not_toml_and_pins_nothing() {
+    # A manifest this cannot read is said, with its line, and the tools are
+    # still found on PATH: refusing every tool would stop the run that is
+    # reporting the fault.
+    local t; t="$(mktemp -d)"
+    mkdir -p "$t/u/sub"
+    printf '[deps.paths\nsed = "/nonexistent/sed"\n' > "$t/u/nut.toml"
+    printf 'use deps\n%s\n' 'deps_has sed && echo SED-OK; deps_has awk && echo AWK-OK' > "$t/u/sub/s.sh"
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_contains "$out" "SED-OK"
+    assert_contains "$out" "AWK-OK"
+    assert_contains "$err" "nut.toml"
+    assert_eq "$(printf '%s\n' "$err" | grep -c '^\[ERROR\] deps:')" "1" "said once, not once per tool"
+    rm -rf "$t"
+}
+
+#[test]
+it_says_once_that_a_manifest_defining_a_pin_twice_pins_nothing() {
+    # A key set twice is not TOML 1.0. The floor refuses the file, so no pin in
+    # it is honoured and sed comes from PATH, and that is said once.
+    local t; t="$(mktemp -d)"
+    _dv_unit "$t/u" "sed = \"/nonexistent/sed\"
+sed = \"/nonexistent/sed2\"" 'deps_has sed && echo SED-OK'
+    local out err
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_contains "$out" "SED-OK"
+    assert_eq "$(printf '%s\n' "$err" | grep -cxF "[ERROR] deps: no [deps.paths] pin in ${t}/u/nut.toml is read")" "1"
+    # And once where a toml read asked deps first, which it does in a subshell.
+    printf 'a = 1\n' > "$t/f.toml"
+    printf 'use deps toml\ntoml_get "%s" a\n%s\n' "$t/f.toml" 'deps_has sed && echo SED-OK' > "$t/u/sub/s.sh"
+    out="$(_dv_out "$t/u/sub/s.sh")"
+    err="$(_dv_err "$t/u/sub/s.sh")"
+    assert_contains "$out" "SED-OK"
+    assert_eq "$(printf '%s\n' "$err" | grep -cxF "[ERROR] deps: no [deps.paths] pin in ${t}/u/nut.toml is read")" "1" \
+        "said once after a toml read"
+    rm -rf "$t"
+}
+
+#[test]
+it_refuses_a_pin_to_a_missing_file_in_a_script_loaded_through_init() {
+    # A script that sources `init` itself, not run by `bin/nutshell`, has its
+    # pins read all the same.
+    local t; t="$(mktemp -d)"
+    _dv_unit "$t/u" 'sed = "/nonexistent/sed"' 'true'
+    printf 'source "%s/init" || exit 1\nuse deps\n%s\n' "$NUTSHELL_ROOT" \
+        'deps_has sed && echo FOUND; deps_path sed; echo "rc=$?"' > "$t/u/sub/s.sh"
+    local out err
+    out="$( cd "$t/u/sub" && bash s.sh 2>/dev/null )"
+    err="$( cd "$t/u/sub" && bash s.sh 2>&1 >/dev/null )"
+    assert_not_contains "$out" "FOUND"
+    assert_contains "$out" "rc=1"
+    assert_contains "$err" '[ERROR] deps: [deps.paths] sed = "/nonexistent/sed" is not an executable file'
     rm -rf "$t"
 }
 
@@ -267,7 +375,7 @@ it_leaves_command_v_to_deps_alone() {
     # found through `deps_has`, so `[deps.paths]` and the cache apply to it; a
     # function is asked about with `type`, which is not a tool lookup.
     local hits
-    hits="$(grep -rn 'command -v' "${NUTSHELL_ROOT}/lib" | grep -v '/lib/deps\.sh:' || true)"
+    hits="$(grep -rn 'command -v' "${NUTSHELL_ROOT}/lib" | grep -v -e '/lib/deps\.sh:' -e '/lib/deps/' || true)"
     assert_eq "$hits" ""
 }
 
@@ -338,4 +446,40 @@ it_probes_toml_json_taplo_by_what_taplo_emits() {
     assert_eq "$(_dv_out "$t/bad/sub/s.sh")" "0"
     assert_ok test -e "$t/log"
     rm -rf "$t"
+}
+
+# `deps_pinned` reads a manifest for the pin of a tool, whatever the spelling.
+# Each expected path is the literal written into the manifest of the test.
+_dv_pinned() {
+    local t body="$1" tool="${2:-sed}" out rc
+    t="$(mktemp -d)"; printf '%s\n' "$body" > "$t/nut.toml"
+    out="$( ( cd / && "${NUTSHELL_ROOT}/bin/nutshell" -c "use deps::pins; deps_pinned '$t/nut.toml' '$tool'; echo rc=\$?" ) 2>&1)"
+    rm -rf "$t"
+    printf '%s' "$out"
+}
+
+#[test]
+it_reads_a_pin_in_every_spelling_toml_allows() {
+    assert_eq "$(_dv_pinned $'[deps.paths]\nsed = "/opt/a/sed"')" $'/opt/a/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'[deps]\npaths.sed = "/opt/b/sed"')" $'/opt/b/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'deps.paths.sed = "/opt/c/sed"')" $'/opt/c/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'[deps.paths]\n"sed" = \'/opt/d/sed\'')" $'/opt/d/sed\nrc=0'
+    assert_eq "$(_dv_pinned $'deps = { paths = { sed = "/opt/e/sed" } }')" $'/opt/e/sed\nrc=0'
+}
+
+#[test]
+it_reads_the_pin_of_a_tool_whose_name_holds_a_dot() {
+    assert_eq "$(_dv_pinned $'[deps.paths]\n"python3.11" = "/opt/py/python3.11"' python3.11)" $'/opt/py/python3.11\nrc=0'
+}
+
+#[test]
+it_reports_no_pin_for_a_tool_the_manifest_does_not_name() {
+    assert_eq "$(_dv_pinned $'[deps.paths]\nawk = "/opt/a/awk"')" "rc=1"
+}
+
+#[test]
+it_refuses_a_pin_that_is_a_table() {
+    local out; out="$(_dv_pinned $'[deps.paths.sed]\npath = "/opt/a/sed"')"
+    assert_contains "$out" "is a table"
+    assert_contains "$out" "rc=2"
 }

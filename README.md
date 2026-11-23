@@ -23,7 +23,7 @@ use os log
 log_info "building on $(os_name)"
 ```
 
-`use` takes any number of modules and loads each one once. What exists is whatever is in `lib/`, among them `log`, `os`, `fs`, `string`, `array`, `list`, `map`, `json`, `toml`, `http`, `hash`, `prompt`, `git`, `bench` and `test`, and a module is one file with its public functions marked `#[pub]` and its tests beside it.
+`use` takes any number of modules and loads each one once. What exists is whatever is in `lib/`, among them `log`, `os`, `fs`, `string`, `array`, `list`, `map`, `json`, `toml`, `http`, `hash`, `prompt`, `git`, `bench` and `test`, and a module is one file with its public functions marked `#[pub]` and its tests beside it. `nutshell api` lists every module and its public functions with their usage lines, `nutshell api toml` one module, and `--lib <name>`, `--git <url>` or `--path <dir>` another library's; `--md` writes the same as markdown.
 
 To pin a version, put it at the root of `nut.toml`, above the first table, because a bare key after a table header belongs to that table and a pin nobody reads does not complain.
 

@@ -9,7 +9,12 @@ make_repo() {
     git -C "$dir" init -q
     git -C "$dir" config user.email t@t; git -C "$dir" config user.name t
     echo one > "$dir/a.txt"
-    git -C "$dir" add -A; git -C "$dir" commit -qm "feat: the first thing"
+    # The identity is pinned in the environment as well: a GIT_AUTHOR_* or
+    # GIT_COMMITTER_* the machine exports wins over the repository's config,
+    # and the fixture then carries the machine's identity, not its own.
+    git -C "$dir" add -A
+    GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
+        git -C "$dir" commit -qm "feat: the first thing"
     printf '%s' "$dir"
 }
 

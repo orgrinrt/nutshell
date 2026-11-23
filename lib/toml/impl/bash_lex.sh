@@ -260,7 +260,8 @@ _tv_scalar() {
     elif [[ "$tok" =~ $_TOML_RE_DEC ]]; then
         _tv_in_range "$v" || { _tp_err "integer ${tok} is out of range"; return 2; }
         _TOML_T[$p]=int
-        _TOML_V[$p]="${v#+}"
+        v="${v#+}"
+        _TOML_V[$p]="${v/#-0/0}"
     elif [[ "$tok" =~ $_TOML_RE_HEX ]]; then
         _tv_radix "$p" "$tok" 16 "${v:2}" 16 || return 2
     elif [[ "$tok" =~ $_TOML_RE_OCT ]]; then

@@ -333,3 +333,86 @@ it_reads_the_old_short_h_as_a_header_on_curl() {
     assert_contains "$(srv_request "$DIR" 1)" "X-Probe: alpha"
     _end
 }
+
+# -----------------------------------------------------------------------------
+# A secret header under `set -x`: the trace goes to stderr, and into logs.
+
+# _traced <fn> <args...> -> TRACE, what `set -x` printed for the call, and XT_AFTER
+# set to on or off, whether the caller's tracing was still on when it returned
+_traced() {
+    local err; err="$(mktemp)"
+    XT_AFTER="$( { set -x; "$@" >/dev/null; case $- in *x*) printf on ;; *) printf off ;; esac; } 2>"$err" )"
+    TRACE="$(cat "$err")"
+    rm -f "$err"
+}
+
+#[test]
+it_keeps_a_stdin_header_out_of_the_trace_on_curl() {
+    _want curl || return 0
+    _begin 200
+    _traced http_get "http://127.0.0.1:$PORT/x" --headers-from - <<<"Authorization: Bearer trace-secret-91"
+    assert_contains "$TRACE" "http_get" "the trace shows nothing, so its absence proves nothing"
+    assert_not_contains "$TRACE" "trace-secret-91"
+    assert_contains "$(srv_request "$DIR" 1)" "Authorization: Bearer trace-secret-91" "the header was never sent"
+    _end
+}
+
+#[test]
+it_shows_a_plain_header_in_the_trace_as_the_control() {
+    _want curl || return 0
+    _begin 200
+    _traced http_get "http://127.0.0.1:$PORT/x" --header "X-Plain: plain-trace-77"
+    assert_contains "$TRACE" "plain-trace-77" "the trace cannot see header values at all"
+    _end
+}
+
+#[test]
+it_keeps_a_header_from_a_file_out_of_the_trace_on_curl() {
+    _want curl || return 0
+    _begin 200 200
+    TMPF="$(mktemp)"; printf 'X-Token: file-secret-52\n' >"$TMPF"
+    _traced http_get "http://127.0.0.1:$PORT/x" --headers-from "$TMPF"
+    assert_not_contains "$TRACE" "file-secret-52"
+    _traced http_post "http://127.0.0.1:$PORT/x" "a=1" --headers-from "$TMPF"
+    assert_not_contains "$TRACE" "file-secret-52"
+    _end
+}
+
+#[test]
+it_keeps_a_header_out_of_the_trace_of_a_download_on_curl() {
+    _want curl || return 0
+    _begin 200
+    TMPF="$(mktemp)"
+    _traced http_download "http://127.0.0.1:$PORT/x" "$TMPF" --headers-from - <<<"Authorization: Bearer dl-secret-33"
+    assert_contains "$TRACE" "http_download"
+    assert_not_contains "$TRACE" "dl-secret-33"
+    _end
+}
+
+#[test]
+it_keeps_a_header_out_of_the_trace_when_wget_refuses_it() {
+    _want wget || return 0
+    _traced http_get "http://127.0.0.1:9/x" --headers-from - <<<"Authorization: Bearer refuse-secret-18"
+    assert_contains "$TRACE" "http_get"
+    assert_not_contains "$TRACE" "refuse-secret-18"
+}
+
+#[test]
+it_keeps_a_malformed_header_line_out_of_the_trace() {
+    _want curl || return 0
+    _traced http_get "http://127.0.0.1:9/x" --headers-from - <<<"no colon secret-bad-line-64"
+    assert_contains "$TRACE" "http_get"
+    assert_not_contains "$TRACE" "secret-bad-line-64"
+}
+
+#[test]
+it_leaves_the_callers_tracing_as_it_found_it() {
+    _want curl || return 0
+    _begin 200 200
+    _traced http_get "http://127.0.0.1:$PORT/x" --headers-from - <<<"X-A: b"
+    assert_eq "$XT_AFTER" "on" "tracing was on and the call turned it off for good"
+    local out
+    out="$( { http_get "http://127.0.0.1:$PORT/x" --headers-from - <<<"X-A: b" >/dev/null; case $- in *x*) printf on ;; *) printf off ;; esac; } 2>&1 )"
+    assert_eq "$out" "off" "tracing was off and the call turned it on"
+    _end
+}

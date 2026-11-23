@@ -14,6 +14,7 @@
 #   slow:<status>:<body> wait a second and a half, then answer
 #   reset               read the request, then close without answering
 #   hang                read the request and say nothing for three seconds
+#   after:<secs>:<status>  answer with that status and `Retry-After: <secs>`
 #
 # Where `nc` is absent there is nothing to serve from; `srv_available` says so.
 
@@ -35,15 +36,16 @@ srv_port() {
 
 # _srv_answer <status> <body> -> the response, on stdout
 _srv_answer() {
-    printf 'HTTP/1.1 %s Status\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
-        "$1" "${#2}" "$2"
+    # an optional third argument is one more header line
+    printf 'HTTP/1.1 %s Status\r\nContent-Length: %s\r\nConnection: close\r\n%s\r\n%s' \
+        "$1" "${#2}" "${3:+$3$'\r\n'}" "$2"
 }
 
 srv_start() {
     local port="$1" dir="$2"; shift 2
     mkdir -p "$dir"
     (
-        local i=0 b status body
+        local i=0 b status body secs
         for b in "$@"; do
             i=$((i + 1))
             case "$b" in
@@ -52,6 +54,10 @@ srv_start() {
                 slow:*)
                     status="${b#slow:}"; body="${status#*:}"; status="${status%%:*}"
                     { sleep 1.5; _srv_answer "$status" "$body"; } \
+                        | nc -l 127.0.0.1 "$port" >"$dir/req.$i" 2>/dev/null ;;
+                after:*)
+                    status="${b#after:}"; secs="${status%%:*}"; status="${status#*:}"
+                    _srv_answer "$status" "ok" "Retry-After: $secs" \
                         | nc -l 127.0.0.1 "$port" >"$dir/req.$i" 2>/dev/null ;;
                 *)
                     status="${b%%:*}"; body="ok"

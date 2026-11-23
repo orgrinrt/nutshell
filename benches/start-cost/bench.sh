@@ -54,6 +54,11 @@ printf '#!/usr/bin/env nutshell\nprintf ok\n' > "$_SC_TMP/bare/none.sh"
 printf '#!/usr/bin/env nutshell\nuse json\nprintf ok\n' > "$_SC_TMP/bare/json.sh"
 printf '#!/usr/bin/env nutshell\nprintf ok\n' > "$_SC_TMP/unit/none.sh"
 printf '#!/usr/bin/env nutshell\nuse toml\nprintf ok\n' > "$_SC_TMP/unit/toml.sh"
+# What a per-tool-call hook does first: read its payload from stdin, then one
+# plain path out of it. `read -d ""` rather than `$(cat)`, which is a fork.
+printf '#!/usr/bin/env nutshell\nuse json\nIFS= read -r -d "" p || true\njson_get "$p" tool_name >/dev/null || exit 1\nprintf ok\n' > "$_SC_TMP/bare/json_get.sh"
+# The first tool question of a process, with nothing else asked for.
+printf '#!/usr/bin/env nutshell\ndeps_has jq || exit 1\nprintf ok\n' > "$_SC_TMP/bare/deps_jq.sh"
 # Twenty captures of a stub, the shape a loop over paths takes: each `$(...)`
 # is a subshell, and a module loaded in one is lost with it.
 printf '#!/usr/bin/env nutshell\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do x="$(fs_basename /a/b)"; done\nprintf ok\n' > "$_SC_TMP/bare/captures.sh"
@@ -86,6 +91,35 @@ _sc_run() {
     printf '%s' "$last"
 }
 
+# The same, with a file on stdin.
+_sc_run_in() {
+    local in="$1" i last=""; shift
+    for (( i = 0; i < ITERS; i++ )); do
+        last="$(env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" "$@" <"$in" 2>/dev/null)"
+    done
+    printf '%s' "$last"
+}
+# The same, with no HOME in the environment at all.
+_sc_run_nohome() {
+    local i last=""
+    for (( i = 0; i < ITERS; i++ )); do
+        last="$(env -i PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" "$@" 2>/dev/null)"
+    done
+    printf '%s' "$last"
+}
+
+# A hook's payload of about 2 KB, the shape a PreToolUse event has: a few
+# strings at the top and the tool's input below, most of it one long command.
+{
+    printf '{"session_id":"0f8e6a52-5c1e-4d7b-9a43-1f2b3c4d5e6f",'
+    printf '"transcript_path":"/home/someone/.claude/projects/p/0f8e6a52.jsonl",'
+    printf '"cwd":"/home/someone/work","permission_mode":"default",'
+    printf '"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"'
+    for (( _sc_i = 0; _sc_i < 34; _sc_i++ )); do
+        printf 'cd /home/someone/work \\u0026\\u0026 grep -rn \\"needle\\" src | '
+    done
+    printf 'head","description":"Search the sources for the needle","timeout":120000}}\n'
+} > "$_SC_TMP/payload.json"
 
 # The same start with nothing kept from an earlier one: each start gets a cache
 # directory of its own that does not exist yet, so the pin read parses the
@@ -119,6 +153,12 @@ arm_json()          { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/bare/json.sh"; }
 arm_toml()          { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/unit/toml.sh"; }
 # Twenty `$(fs_basename)` with no `use`, no manifest.
 arm_captures()      { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/bare/captures.sh"; }
+# `use json` and one `json_get` of a plain path from a 2 KB payload on stdin.
+arm_json_get()      { _sc_run_in "$_SC_TMP/payload.json" "$ROOT/bin/nutshell" "$_SC_TMP/bare/json_get.sh"; }
+# The first `deps_has jq`, no manifest above the script.
+arm_deps_jq()       { _sc_run "$ROOT/bin/nutshell" "$_SC_TMP/bare/deps_jq.sh"; }
+# The bare script with HOME unset, the way some hook runners start a child.
+arm_no_home()       { _sc_run_nohome "$ROOT/bin/nutshell" "$_SC_TMP/bare/none.sh"; }
 # No `use` beside the manifest, with no tree kept for it.
 arm_bare_cold()     { _sc_run_cold "$ROOT/bin/nutshell" "$_SC_TMP/unit/none.sh"; }
 
@@ -138,18 +178,34 @@ bench_arm "script, use json, no manifest"     arm_json
 bench_arm "script, use toml, ${_SC_LINES}-line manifest" arm_toml
 bench_arm "script, no use, ${_SC_LINES}-line manifest, cold" arm_bare_cold
 bench_arm "script, 20 captures of a stub, no manifest" arm_captures
+bench_arm "script, use json, one json_get of 2 KB stdin" arm_json_get
+bench_arm "script, no use, first deps_has jq"  arm_deps_jq
+# A start that fails with HOME unset has no time worth the name: the table says
+# so, and the arm is left out of the agreement and the timing.
+if [[ "$(_sc_run_nohome "$ROOT/bin/nutshell" "$_SC_TMP/bare/none.sh")" == ok ]]; then
+    bench_arm "script, no use, HOME unset"     arm_no_home
+else
+    arm_no_home() { printf SKIP; }
+    bench_arm "script, no use, HOME unset"     arm_no_home 1 "the start fails with HOME unset"
+fi
 
 bench_target arm_bare          $(( 50 * ITERS ))
 bench_target arm_bare_manifest $(( 50 * ITERS ))
 bench_target arm_json          $(( 80 * ITERS ))
+# Stated before the work on the hook path: a hook that reads one field of its
+# payload under 25ms, and the first tool question within 5ms of a bare start,
+# which is about 9ms.
+bench_target arm_json_get      $(( 25 * ITERS ))
+bench_target arm_deps_jq       $(( 14 * ITERS ))
 
 bench_run; _sc_rc=$?
 
 # Per start, and the differences that say where it went. Only for a run whose
 # controls passed: the verdicts are written after them and not before.
 if (( _sc_rc == 0 || ${#_BENCH_VERDICT[@]} > 0 )); then
-    _sc_per() { printf '%d.%d' $(( $1 / ITERS )) $(( $1 * 10 / ITERS % 10 )); }
+    _sc_per() { [[ "$1" == "-" ]] && { printf "not run"; return; }; printf '%d.%d' $(( $1 / ITERS )) $(( $1 * 10 / ITERS % 10 )); }
     _sc_diff() {
+        [[ "${_BENCH_BESTS[$1]}" == "-" || "${_BENCH_BESTS[$2]}" == "-" ]] && { printf "not run"; return; }
         local d=$(( _BENCH_BESTS[$1] - _BENCH_BESTS[$2] ))
         (( d < 0 )) && { printf -- '-'; d=$(( -d )); }
         _sc_per "$d"
@@ -168,5 +224,8 @@ if (( _sc_rc == 0 || ${#_BENCH_VERDICT[@]} > 0 )); then
     printf '  %-44s %7s ms\n' "use json"                            "$(_sc_diff 6 4)"
     printf '  %-44s %7s ms\n' "use toml, beyond the pin read"       "$(_sc_diff 7 5)"
     printf '  %-44s %7s ms\n' "the pin read with no tree kept"      "$(_sc_diff 8 4)"
+    printf '  %-44s %7s ms\n' "use json and one plain json_get"     "$(_sc_diff 10 4)"
+    printf '  %-44s %7s ms\n' "the first deps_has jq"               "$(_sc_diff 11 4)"
+    printf '  %-44s %7s ms\n' "HOME unset, against HOME set"        "$(_sc_diff 12 4)"
 fi
 exit "$_sc_rc"

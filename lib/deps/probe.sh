@@ -22,7 +22,7 @@ use super::deps::state
 # Usage: _deps_probe_toml <capability> <tool> <arguments> <variant> -> sets the capability to 0 or 1
 #[pub(super)]
 _deps_probe_toml() {
-    local IFS=$' \t\n'
+    local IFS="$_DEPS_WS"
     local _cap="$1" _tool="$2" _args="$3" _want="$4" _p _v _out
     _deps_get _p PATH "$_tool"
     _deps_get _v VARIANT "$_tool"

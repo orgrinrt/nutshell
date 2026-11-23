@@ -56,10 +56,17 @@ _json_py() {
     python_cmd="$(_json_python_cmd)"
     "$python_cmd" - "$@" <<'PYTHON' 2>/dev/null
 import json
+import re
 import sys
 
 op = sys.argv[1]
 args = sys.argv[2:]
+
+
+# A fraction, an exponent or sixteen digits in the document: a number whose
+# spelling python changes (`1e3` is `1000.0`, `1e999` is `Infinity`), judged by
+# the text of the document since what python prints of it has lost the spelling.
+ODD_NUMBER = re.compile(r"[0-9][.eE]|[0-9]{16}")
 
 
 def dump(value):
@@ -84,20 +91,31 @@ def emit(value):
         print(json.dumps(value))
 
 
+def is_index(part):
+    return part != "" and all(c in "0123456789" for c in part)
+
+
 def walk(data, path):
     """Follow a path, its segments joined by the unit separator.
 
-    Raises when the path does not lead anywhere, which the caller turns into a
-    status of 1: an absent key is absent, and answering `null` cannot be told
-    apart from a key that is present and holds null.
+    A segment of digits indexes an array and is a plain key on an object; any
+    other segment on an array is not there, which a signed or spaced number
+    would otherwise be (`int("-1")` is the last element). Raises when the path
+    does not lead anywhere, which the caller turns into a status of 1: an absent
+    key is absent, and answering `null` cannot be told apart from a key that is
+    present and holds null.
     """
     for part in path.split("\x1f"):
         if not part:
             continue
         if isinstance(data, list):
+            if not is_index(part):
+                raise KeyError(part)
             data = data[int(part)]
-        else:
+        elif isinstance(data, dict):
             data = data[part]
+        else:
+            raise KeyError(part)
     return data
 
 
@@ -121,10 +139,6 @@ def parent_and_last(data, path):
     for part in parts[:-1]:
         current = current[int(part)] if isinstance(current, list) else current[part]
     return current, parts[-1]
-
-
-def is_index(part):
-    return part != "" and all(c in "0123456789" for c in part)
 
 
 def container_for(part):
@@ -159,16 +173,35 @@ def assign(node, parts, value):
     return node
 
 
+def refuse(name):
+    """`NaN` and `Infinity` are not JSON, which python reads unless told not to."""
+    raise ValueError(name)
+
+
+def load(text):
+    return json.loads(text, parse_constant=refuse)
+
+
+def is_number(value):
+    return kind(value) == "number"
+
+
 def main():
     if op == "valid":
-        json.loads(args[0])
+        load(args[0])
         return 0
 
-    data = json.loads(args[0])
+    data = load(args[0])
     path = args[1] if len(args) > 1 else ""
 
-    if op == "get":
-        emit(walk(data, path))
+    if op == "get" or op == "getn":
+        target = walk(data, path)
+        # A number is the document's to spell, which this does not keep: `1e3`
+        # comes back `1000.0`. 7 says so, and the caller has it read again.
+        if op == "get" and (is_number(target) or (
+                isinstance(target, (dict, list)) and ODD_NUMBER.search(args[0]))):
+            return 7
+        emit(target)
     elif op == "keys":
         target = walk(data, path)
         if isinstance(target, dict):
@@ -182,7 +215,13 @@ def main():
     elif op == "type":
         print(kind(walk(data, path)))
     elif op == "length":
-        print(len(walk(data, path)))
+        target = walk(data, path)
+        if target is None:
+            print(0)
+        elif isinstance(target, (dict, list, str)):
+            print(len(target))
+        else:
+            return 1
     elif op == "pretty":
         print(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False))
     elif op == "compact":
@@ -190,7 +229,7 @@ def main():
     elif op == "set":
         raw = args[2]
         try:
-            value = json.loads(raw)
+            value = load(raw)
         except ValueError:
             value = raw
         data = assign(data, [p for p in path.split("\x1f") if p], value)
@@ -207,7 +246,7 @@ def main():
         # replaces them, so one call built a different document depending on
         # the tool; the contract is that the right operand replaces a key
         # rather than merging into it.
-        data.update(json.loads(args[1]))
+        data.update(load(args[1]))
         print(dump(data))
     else:
         return 2
@@ -221,7 +260,11 @@ except (KeyError, IndexError, TypeError, ValueError):
 PYTHON
 }
 
+# 7 is a number, or a container with one in it, that python would respell; see
+# `_json_read` in `json.sh`, which has it read again. `getn` keeps python's own
+# spelling, for a shell without the reader in bash.
 _json_get_python()     { _json_py get "$1" "${2:-}"; }
+_json_getn_python()    { _json_py getn "$1" "${2:-}"; }
 _json_set_python()     { _json_py set "$1" "$2" "$3"; }
 _json_keys_python()    { _json_py keys "$1" "${2:-}"; }
 _json_valid_python()   { _json_py valid "$1"; }

@@ -40,6 +40,7 @@ _json_pl() {
     "${_TOOL_PATH_perl}" -MJSON::PP -e '
         use strict;
         use warnings;
+        use B;
 
         # UTF-8 out. Without it a character string is written byte by byte and
         # anything outside ASCII arrives mangled.
@@ -51,8 +52,8 @@ _json_pl() {
         # output layer encodes once. One coder for both double-encoded: `café`
         # came back as `cafÃ©`, the UTF-8 bytes read as latin-1 and encoded
         # again.
-        my $in    = JSON::PP->new->utf8->allow_nonref;
-        my $coder = JSON::PP->new->canonical->allow_nonref;
+        my $in    = JSON::PP->new->utf8->allow_nonref->allow_bignum;
+        my $coder = JSON::PP->new->canonical->allow_nonref->allow_bignum;
 
         my ($op, @args) = @ARGV;
 
@@ -64,7 +65,7 @@ _json_pl() {
             my ($data, $path) = @_;
             for my $part (grep { $_ ne "" } split /\x1f/, $path) {
                 if (ref($data) eq "ARRAY") {
-                    return (0, undef) unless $part =~ /^\d+$/ && $part < scalar(@$data);
+                    return (0, undef) unless $part =~ /^[0-9]+\z/ && $part < scalar(@$data);
                     $data = $data->[$part];
                 } elsif (ref($data) eq "HASH") {
                     return (0, undef) unless exists $data->{$part};
@@ -82,9 +83,13 @@ _json_pl() {
             return "boolean" if JSON::PP::is_bool($v);
             return "object"  if ref($v) eq "HASH";
             return "array"   if ref($v) eq "ARRAY";
-            # A scalar that has been used as a number is one. Perl does not
-            # otherwise distinguish, and the document said which it was.
-            return "number"  if $v =~ /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$/;
+            # Perl keeps what the decoder made a number apart from what it made a
+            # string only in the flags of the scalar, and a number too long for
+            # a native one comes as an object. Reading the text of the value
+            # called the string `"1"` a number.
+            return "number"  if ref($v) =~ /^Math::Big/;
+            my $f = B::svref_2object(\$v)->FLAGS;
+            return "number"  if ($f & (B::SVp_IOK | B::SVp_NOK)) && !($f & B::SVp_POK);
             return "string";
         }
 
@@ -107,10 +112,19 @@ _json_pl() {
         exit 1 if $@;
 
         my $path = defined $args[1] ? $args[1] : "";
+        # Keys came out of the decoder as characters, so the path has to be
+        # characters too, or `é` on argv is two bytes that match no key.
+        utf8::decode($path);
 
-        if ($op eq "get") {
+        if ($op eq "get" || $op eq "getn") {
             my ($found, $v) = walk($data, $path);
             exit 1 unless $found;
+            # A number is spelled by the document, and perl respells it, `1e3` as
+            # `1000`, in a container as much as alone. 7 says so, and the caller
+            # has it read again. A container is judged by the text of the
+            # document, since what perl prints of it has lost the spelling.
+            exit 7 if $op eq "get" && (kind($v) eq "number"
+                || (ref($v) && $args[0] =~ /[0-9][.eE]|[0-9]{16}/));
             emit($v);
         } elsif ($op eq "keys") {
             my ($found, $v) = walk($data, $path);
@@ -125,9 +139,12 @@ _json_pl() {
         } elsif ($op eq "length") {
             my ($found, $v) = walk($data, $path);
             exit 1 unless $found;
-            if (ref($v) eq "ARRAY")   { print scalar(@$v), "\n"; }
-            elsif (ref($v) eq "HASH") { print scalar(keys %$v), "\n"; }
-            else                      { print length($v), "\n"; }
+            my $k = kind($v);
+            if ($k eq "array")       { print scalar(@$v), "\n"; }
+            elsif ($k eq "object")   { print scalar(keys %$v), "\n"; }
+            elsif ($k eq "string")   { print length($v), "\n"; }
+            elsif ($k eq "null")     { print "0\n"; }
+            else                      { exit 1; }
         } elsif ($op eq "pretty") {
             print JSON::PP->new->canonical->pretty->encode($data);
         } elsif ($op eq "compact") {
@@ -187,7 +204,11 @@ _json_pl() {
     ' "$@" 2>/dev/null
 }
 
+# 7 is a number, or a container with one in it, that perl would respell; see
+# `_json_read` in `json.sh`, which has it read again. `getn` keeps perl's own
+# spelling, for a shell without the reader in bash.
 _json_get_perl()     { _json_pl get "$1" "${2:-}"; }
+_json_getn_perl()    { _json_pl getn "$1" "${2:-}"; }
 _json_set_perl()     { _json_pl set "$1" "$2" "$3"; }
 _json_keys_perl()    { _json_pl keys "$1" "${2:-}"; }
 _json_valid_perl()   { _json_pl valid "$1"; }

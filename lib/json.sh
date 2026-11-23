@@ -13,8 +13,9 @@
 # `json_type`, `json_length` and `json_valid`. What writes (`json_set`,
 # `json_delete`, `json_merge`, `json_pretty`, `json_compact`, `json_write`)
 # needs one of the three, and without them refuses with status 2 and says so.
-# `json_query` runs a jq program through jq, gojq or jaq, whichever `deps` finds
-# first, and refuses with status 2 where there is none.
+# `json_query` (in `json/query.sh`) runs a jq program through jq, gojq or jaq,
+# whichever `deps` finds first that has the options the call uses, and refuses
+# with status 2 where there is none.
 #
 # A path is the one the toml reader takes: `a.b.0.c`, an integer segment
 # indexing an array, a segment in double quotes one segment whatever it holds
@@ -48,6 +49,7 @@ _NUTSHELL_JSON_SH=1
 # dependency was real and unrecorded at once.
 use deps
 use super::json::build
+use super::json::query
 
 # What joins the segments of a path on their way to a backend.
 _JSON_US="$(printf '\037.')"; _JSON_US="${_JSON_US%.}"
@@ -277,31 +279,6 @@ json_get_or() {
         echo "$result"
     else
         echo "$default"
-    fi
-}
-
-#[pub]
-# Run a jq program over a document, through jq, gojq or jaq, whichever `deps`
-# finds first. Strings come back bare and everything else compact, so
-# `json_query '.a | length' "$doc"` prints `3`. The document is the second
-# argument, or stdin when there is none.
-# Usage: json_query '.items[] | .name' "$json"
-# Usage: curl -s "$url" | json_query '.total'
-# Returns: what the program printed; status 2 when no jq family tool is here
-json_query() {
-    local filter="${1:-}" tool="" t
-    for t in jq gojq jaq; do
-        deps_has "$t" && { tool="$t"; break; }
-    done
-    if [ -z "$tool" ]; then
-        echo "json_query: needs jq, gojq or jaq, and this machine has none" >&2
-        return 2
-    fi
-    [ -n "$filter" ] || return 1
-    if [ "$#" -ge 2 ]; then
-        printf '%s\n' "$2" | "$(deps_path "$tool")" -c -r "$filter"
-    else
-        "$(deps_path "$tool")" -c -r "$filter"
     fi
 }
 

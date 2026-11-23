@@ -63,11 +63,16 @@ _toml_cache_by() { _tcb="${_TOML_CACHE_FLOOR}|${BASH_VERSION}"; }
 # and a subshell's additions are gone with it.
 declare -gA _TOML_CACHE_DIRFD=() _TOML_CACHE_FILEFD=()
 
-# _toml_cache_held <array name> <path> -> rc 0 where <path> is still the inode
-# the array holds a descriptor for
+# _toml_cache_held <array name> <path> [<fd in use>] -> rc 0 where <path> is
+# still the inode the array holds a descriptor for
+#
+# The held number is a miss where it is the descriptor being checked: a caller
+# that closed the memo's descriptor frees its number, an open of a new inode
+# can take it, and the memo would then vouch for a file by comparing it with
+# itself.
 _toml_cache_held() {
     local -n _tch="$1"
-    [[ -n "${_tch[$2]:-}" && "/dev/fd/${_tch[$2]}" -ef "$2" ]]
+    [[ -n "${_tch[$2]:-}" && "${_tch[$2]}" != "${3:-}" && "/dev/fd/${_tch[$2]}" -ef "$2" ]]
 }
 
 # _toml_cache_hold <array name> <path> <fd to duplicate | -> keeps a descriptor
@@ -103,8 +108,8 @@ _toml_cache_trusted() {
     local -a list=()
     [[ -f "$fd" && -O "$fd" && ! -L "$p" && "$fd" -ef "$p" ]] || return 1
     d="${p%/*}"
-    ! _toml_cache_held _TOML_CACHE_FILEFD "$p" || need_f=0
-    ! _toml_cache_held _TOML_CACHE_DIRFD "$d" || need_d=0
+    ! _toml_cache_held _TOML_CACHE_FILEFD "$p" "$2" || need_f=0
+    ! _toml_cache_held _TOML_CACHE_DIRFD "$d" "$2" || need_d=0
     (( need_f || need_d )) || return 0
     if (( need_f )); then
         if [[ -e "/proc/${BASHPID:-$$}/fd/$2" ]]; then list=("/proc/${BASHPID:-$$}/fd/$2")

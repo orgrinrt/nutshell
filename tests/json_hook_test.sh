@@ -186,3 +186,58 @@ it_hands_a_document_of_more_values_than_the_floor_budget_to_jq() {
     assert_eq "$(_jh_runs)" "0"
     rm -rf "$_JH_DIR"
 }
+
+#[test]
+it_sends_type_to_the_tool_for_an_unpaired_high_surrogate() {
+    # jq 1.7 refuses the document: `jq -r .a|type` on each of these printed a
+    # parse error and exited 5, which json_type reports as status 1. The floor
+    # read the lone surrogate as U+FFFD and answered `string`.
+    _jh_spy || return 0
+    local d out rc
+    for d in '{"a":"\ud83d"}' '{"a":"\ud800A"}' '{"a":"\ud83d😀"}'; do
+        rc=0; out="$(json_type "$d" a 2>/dev/null)" || rc=$?
+        assert_eq "$rc" "1" "json_type a on $d"
+        assert_eq "$out" "" "json_type a on $d"
+        rc=0; out="$(json_type "$d" 2>/dev/null)" || rc=$?
+        assert_eq "$rc" "1" "json_type at the root of $d"
+        assert_eq "$out" "" "json_type at the root of $d"
+    done
+    assert_ne "$(_jh_runs)" "0" "jq was asked"
+    rm -rf "$_JH_DIR"
+}
+
+#[test]
+it_answers_type_without_jq_for_a_lone_low_surrogate_and_an_escaped_nul() {
+    # jq accepts both (a low surrogate with no high one is U+FFFD, \u0000 a
+    # NUL), so the floor answers and jq does not run.
+    _jh_spy || return 0
+    local d
+    for d in '{"a":"\udc00"}' '{"a":"\u0000"}' '{"a":"x\u0000y\udc00"}'; do
+        assert_eq "$(json_type "$d" a)" "string" "json_type a on $d"
+        assert_eq "$(json_type "$d")" "object" "json_type at the root of $d"
+    done
+    assert_eq "$(_jh_runs)" "0" "jq ran for a document it accepts"
+    rm -rf "$_JH_DIR"
+}
+
+#[test]
+it_gives_status_1_for_json_keys_on_a_missing_path_either_side_of_the_floor() {
+    # jq exits 5 on `.x | keys` of null; the status of a path with nothing at
+    # it is 1, as for json_get, whichever reader answered.
+    deps_has jq || { skip "jq is not on this machine"; return 0; }
+    local small='{"a":{"b":1},"n":1}' pad big rc out
+    printf -v pad '%*s' "$(( _JSON_FLOOR_MAX + 10 ))" ''
+    big="{\"pad\":\"${pad}\",\"a\":{\"b\":1},\"n\":1}"
+    assert_ok test "${#big}" -gt "$_JSON_FLOOR_MAX"
+    local doc
+    for doc in "$small" "$big"; do
+        rc=0; out="$(json_keys "$doc" nope 2>/dev/null)" || rc=$?
+        assert_eq "$rc" "1" "a missing path, ${#doc} bytes"
+        assert_eq "$out" "" "a missing path, ${#doc} bytes"
+        rc=0; out="$(json_keys "$doc" n 2>/dev/null)" || rc=$?
+        assert_eq "$rc" "1" "a number has no keys, ${#doc} bytes"
+        rc=0; out="$(json_keys "$doc" a 2>/dev/null)" || rc=$?
+        assert_eq "$rc" "0" "an object has keys, ${#doc} bytes"
+        assert_eq "$out" "b"
+    done
+}

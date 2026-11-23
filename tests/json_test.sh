@@ -136,6 +136,9 @@ _readers() { _impls; printf 'bash\n'; }
 
 _agrees_over() {
     local lister="$1" impl first="" seen=0 got rc
+    # Picked here, in this shell: a first call made inside the capture below
+    # would pick in the subshell and drop the backend this loop named.
+    json_detect
     shift
     while IFS= read -r impl; do
         _JSON_IMPL="$impl"
@@ -208,6 +211,8 @@ it_returns_the_same_text_from_every_backend() {
     _agrees json_compact '{"a":[[1,2],[3]]}'
     _agrees_read json_type '{"a":null}' a
     _agrees_read json_keys '{"a":[1,2]}' a
+    _agrees_read json_keys '{"a":1}' nope
+    _agrees_read json_keys '{"a":1}' a
     _agrees json_set '{"a":{"b":1}}' a.b 9
     _agrees json_delete '{"a":{"b":1,"c":2}}' a.b
 }

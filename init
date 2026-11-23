@@ -591,6 +591,9 @@ _nut_gate() {
         has\(bin\(*\)\))
             inner="${a#has(bin(}"; inner="${inner%))}"
             [[ -n "$inner" ]] || return 1
+            # What `deps` hides is absent here too, read before the remembered
+            # answer since a hide can come after it.
+            case " ${NUT_DEPS_HIDE:-} " in *" $inner "*) return 1 ;; esac
             # Remembered, because `command -v` is the only word here that costs
             # anything and this sits in front of every `use`. Not `shell` or
             # `env`: both are a `case` on a variable, which is free, and both

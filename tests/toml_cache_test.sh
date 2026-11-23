@@ -451,3 +451,26 @@ toml_get "$d/b.toml" k')"
     rm -rf "$_TC_D"
     assert_eq "$out" "b"
 }
+
+#[test]
+it_does_not_trust_a_new_tree_that_lands_on_the_descriptor_the_memo_held() {
+    # The memo's descriptor, closed by the caller, is free again; the next open
+    # of the kept tree can land on that very number, and comparing the file
+    # with itself skipped the check of an inode never checked.
+    _tc_fresh
+    _tc_two_prime
+    local out
+    out="$(_tc_two "$_TC_D/log" '_TOML_ID=""; toml_get "$d/a.toml" k >/dev/null
+held=""; for p in "${!_TOML_CACHE_FILEFD[@]}"; do case "$p" in *nutshell/toml/*) held="${_TOML_CACHE_FILEFD[$p]}"; f="$p" ;; esac; done
+[[ -n "$held" ]] || { echo "no memo"; exit 1; }
+printf "printf \"PLANTED \"; return 1\n" > "$f.x"; chmod 666 "$f.x"; mv -f "$f.x" "$f"
+# Every free number below the memo taken but one, which the load spends on
+# saving stderr, so its open of the tree lands on the number the memo held.
+spare=""; for ((i = 10; i < held; i++)); do [[ -e /dev/fd/$i ]] || { eval "exec $i</dev/null"; spare="$i"; }; done
+[[ -z "$spare" ]] || eval "exec $spare<&-"
+eval "exec $held<&-"
+_TOML_ID=""; toml_get "$d/a.toml" k')"
+    rm -rf "$_TC_D"
+    assert_not_contains "$out" "PLANTED"
+    assert_contains "$out" "a"
+}

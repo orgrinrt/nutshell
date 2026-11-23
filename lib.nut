@@ -27,6 +27,8 @@ git                      lib/git.sh
 hash                     lib/hash.sh
 inuse                    lib/inuse.sh
 http                     lib/http.sh
+http::opts               lib/http/opts.sh            internal
+http::retry              lib/http/retry.sh           internal
 key                      lib/key.sh
 json                     lib/json.sh
 json::build              lib/json/build.sh           internal

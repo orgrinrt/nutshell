@@ -83,6 +83,7 @@ toml::impl::bash_path    lib/toml/impl/bash_path.sh   internal
 toml::impl::from_json    lib/toml/impl/from_json.sh   internal
 toml::impl::taplo        lib/toml/impl/taplo.sh       internal
 toml::impl::yq           lib/toml/impl/yq.sh          internal
+toml::cache              lib/toml/cache.sh            internal
 toml::json               lib/toml/json.sh
 toml::write              lib/toml/write.sh
 validate                 lib/validate.sh

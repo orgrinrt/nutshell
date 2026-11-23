@@ -179,6 +179,9 @@ _nut_resolve() {
         toml::impl::yq)
             { [ "$_nr_reach" = public ] && { echo "nutshell: 'toml::impl::yq' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/toml/impl/yq.sh"; return 0; }
             ;;
+        toml::cache)
+            { [ "$_nr_reach" = public ] && { echo "nutshell: 'toml::cache' is internal to that library" >&2; return 1; }; printf '%s' "$_nr_root/lib/toml/cache.sh"; return 0; }
+            ;;
         toml::json)
             { printf '%s' "$_nr_root/lib/toml/json.sh"; return 0; }
             ;;

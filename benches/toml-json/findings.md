@@ -92,7 +92,28 @@ Two of the four targets are met and two are missed:
 mikefarah yq stays out of the large-file path and off the 4 MB arms: it reads
 1 MB in 2.8 s where taplo takes 0.29 s, and a 4 MB start would run for minutes.
 
-## The tracker itself
+## After the review fixes, 2026-11-23, runs `results/20261123110647` (4 KB), `results/20261123110715` (1 MB) and `results/20261123110824` (4 MB)
+
+Same host, load average under 1. The wide-integer check, the text-keyed floor
+parse and the kept JSON's header changed; the numbers did not move beyond the
+noise, and the two met targets and the two missed ones stand.
+
+| per start | 4 KB | 1 MB | 4 MB |
+|---|---|---|---|
+| floor, cold | 53 | 2689 | 10933 |
+| floor, warm | 29 | 105 | 359 |
+| taplo, cold | 58 | 345 | 1581 |
+| taplo, warm | 28 | 91 | 355 |
+| mikefarah yq, cold | 64 | 2799 | not run |
+| mikefarah yq, warm | 27 | 99 | not run |
+
+## The tracker itself: a spike, with no standing
+
+**This section is an ad-hoc spike and not a bench result.** It was timed by a
+throwaway loop over the workspace's own lane files, which move, and left no
+record in `results/`; the commit message of 68b2be1 repeats its figures, and
+they stand there with no more weight than this. The bench arms above are the
+numbers to quote. What the spike showed, for what it is worth:
 
 The 54 lane files of `.shared/scripts/life`, 4.3 MB of TOML into 4.3 MB of JSON,
 converted one after another in one process, taplo present, measured outside this

@@ -101,7 +101,7 @@ _tc_place() {
 _tc_plant() {
     _tc_place
     mkdir -p "${_TC_AT%/*}"
-    printf 'printf "PLANTED " >&2; return 1\n' > "$_TC_AT"
+    printf 'printf "PLANTED "; return 1\n' > "$_TC_AT"
     chmod "$1" "$_TC_AT"
     chmod "$2" "${_TC_AT%/*}"
 }

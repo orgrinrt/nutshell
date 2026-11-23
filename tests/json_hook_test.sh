@@ -4,10 +4,9 @@
 # A per-tool-call hook reads its payload and takes a field or two out of it,
 # every call. Where the document is small and the path is plain, the reader in
 # bash answers without running jq, and its answer has to be the one jq gives,
-# byte for byte. Where it could differ (a number jq spells another way, a
-# string jq would repair, a document past the size where jq is the faster) the
-# question goes to the tool. The expected values are what jq 1.7 printed for
-# the same calls, written in.
+# byte for byte. Where it could differ (a string jq would repair, a document
+# past the size where jq is the faster) the question goes to the tool. The
+# expected values are what jq 1.7 printed for the same calls, written in.
 
 use json deps test
 source "${BASH_SOURCE[0]%/*}/fixtures/hide_tools.sh"
@@ -90,13 +89,24 @@ it_gives_the_same_with_no_tool_at_all() {
 }
 
 #[test]
-it_asks_jq_where_it_would_spell_a_number_another_way() {
-    # jq 1.7 prints an exponent as `1E+3`, and the floor prints numbers as
-    # written; and `length` of a number is its absolute value to jq.
+it_answers_a_number_as_the_document_wrote_it_without_running_jq() {
+    # jq 1.7 prints an exponent as `1E+3`; a number is printed as written on
+    # every backend, so the floor answers for it and jq is not asked.
     _jh_spy || return 0
-    assert_eq "$(json_get '{"a":1e3}' a)" "1E+3"
-    assert_eq "$(json_get '{"a":[1e3,2]}' a)" "[1E+3,2]"
-    assert_eq "$(json_length '{"a":-5}' a)" "5"
+    assert_eq "$(json_get '{"a":1e3}' a)" "1e3"
+    assert_eq "$(json_get '{"a":[1e3,2]}' a)" "[1e3,2]"
+    assert_eq "$(json_get '{"a":-1.0E+2}' a)" "-1.0E+2"
+    assert_eq "$(_jh_runs)" "0" "jq ran for a number"
+    rm -rf "$_JH_DIR"
+}
+
+#[test]
+it_asks_jq_for_the_length_of_a_number_and_gets_no_length() {
+    # jq counts a number as its absolute value; the length of a number is not
+    # there, whoever is asked, and the floor leaves the question to the tool.
+    _jh_spy || return 0
+    json_length '{"a":-5}' a >/dev/null 2>&1; assert_eq "$?" "1"
+    assert_eq "$(json_length '{"a":-5}' a 2>/dev/null)" ""
     assert_ne "$(_jh_runs)" "0"
     rm -rf "$_JH_DIR"
 }
@@ -114,11 +124,15 @@ it_asks_jq_where_the_string_is_not_one_it_would_print_as_written() {
 }
 
 #[test]
-it_asks_jq_for_a_number_segment_on_an_object() {
-    # jq reads a segment of digits as an index, and an object has none.
+it_reads_a_number_segment_on_an_object_as_a_key_through_jq_too() {
+    # A segment of digits indexes an array and is a plain key on an object. jq
+    # was asked for `.[1]` and failed with its own status.
     _jh_spy || return 0
-    json_get '{"1":"x"}' 1 >/dev/null 2>&1; assert_ne "$?" "0"
-    assert_eq "$(json_get '{"1":"x"}' 1 2>/dev/null)" ""
+    _JSON_IMPL=jq
+    assert_eq "$(json_get '{"1":"x"}' 1)" "x"
+    assert_eq "$(json_get '{"a":{"0":"z"}}' a.0)" "z"
+    assert_eq "$(json_type '{"a":{"0":1}}' a.0)" "number"
+    assert_ne "$(_jh_runs)" "0"
     rm -rf "$_JH_DIR"
 }
 

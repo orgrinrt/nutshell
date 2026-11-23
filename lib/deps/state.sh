@@ -107,6 +107,7 @@ _DEPS_CONFIG_KEY=""
 # Usage: _deps_unlearn <tool> -> forgets what is known of the tool
 #[pub(super)]
 _deps_unlearn() {
+    local IFS="$_DEPS_WS"
     local _t="$1" _k _w _new
     _deps_key "$_t" || return 1
     _k="$_dk"
@@ -124,6 +125,7 @@ _deps_unlearn() {
 # Usage: _deps_drop_caps -> forgets every capability
 #[pub(super)]
 _deps_drop_caps() {
+    local IFS="$_DEPS_WS"
     local _w
     for _w in $_TOOL_CAN_NAMES; do eval "unset _TOOL_CAN_${_w}"; done
     _TOOL_CAN_NAMES=""
@@ -141,6 +143,14 @@ _deps_drop_caps() {
 # cannot always make one so. They are written by this module and read by
 # everyone; treat them as read-only from outside.
 
+# What a walk of one of the lists here splits on: space, tab and newline, as
+# IFS is unless a caller has changed it. Each function that walks a list sets
+# its own IFS to this, so a caller holding `IFS=:` around a call does not make
+# the lists read as one word. Written out rather than `$' \t\n'`, which is
+# not POSIX and this file has to read under dash.
+_DEPS_WS=' 	
+'
+
 # Modules that pick a tool once and keep the pick. Each registers a function
 # when it picks, and `deps_hide` and `deps_forget` run them all, so a module
 # does not reach into another's state and none is left answering with a tool
@@ -151,6 +161,7 @@ _DEPS_RESET_HOOKS=""
 # Usage: _deps_reset_modules -> runs every registered hook
 #[pub(super)]
 _deps_reset_modules() {
+    local IFS="$_DEPS_WS"
     local _h
     for _h in $_DEPS_RESET_HOOKS; do "$_h" || true; done
 }

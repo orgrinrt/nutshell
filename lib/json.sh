@@ -41,7 +41,31 @@
 # different text depending on which tool happened to be installed, and on perl
 # a different order on every run.
 #
-# Status: 0 found, 1 not there or not JSON, 2 nothing here can do it.
+# Status: 0 found, 1 not there or not JSON, 2 nothing here can do it. A tool's
+# own status never gets out. One text and one status whoever reads, for
+# `json_get`, `json_has`, `json_keys`, `json_type`, `json_length` and
+# `json_valid`, held against every backend by `tests/json_contract_test.sh`:
+#
+#   - a document is exactly one JSON value; text after it, a second value and
+#     nothing at all are not JSON, and neither is a literal JSON does not have
+#     (`01`, `.5`, `1.`, `+1`, `NaN`)
+#   - a segment of digits indexes an array and is a plain key on an object,
+#     `a.0` on `{"a":{"0":1}}` included; any other segment on an array is not
+#     there, so `a.-1`, `a.+1` and `a.1e0` are status 1; leading zeros count
+#     (`a.01` is index 1)
+#   - a number is printed as the document wrote it, alone or inside a
+#     container: `1e3` is `1e3`, `1.50` is `1.50`; a string is printed bare
+#   - `json_length` is the count of an array or object, the characters of a
+#     string and 0 for null; a number or a boolean has none, status 1
+#   - an empty segment is dropped, so a path of nothing but those is the
+#     whole document, and an empty key cannot be reached
+#   - outside it: a string holding a NUL or a lone surrogate, which jq and perl
+#     repair or refuse and python and the reader in bash keep; and a number
+#     jq or perl would respell (jq 1.7 only an exponent, perl a fraction too),
+#     where neither the reader in bash, up to `_JSON_FLOOR_MAX` bytes and 400
+#     levels deep, nor python, at any size, is there to print it as written:
+#     it comes back in the tool's spelling, `1e3` as `1E+3` under jq and
+#     `1000` under perl, and not as nothing
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -199,7 +223,27 @@ _json_read() {
         [ "$rc" -le 1 ] && return "$rc"
     fi
     _json_ready_for "$name" || return 1
-    "_json_${op}_${_JSON_NOW}" "$json" "$_js_out"
+    rc=0
+    "_json_${op}_${_JSON_NOW}" "$json" "$_js_out" || rc=$?
+    [ "$rc" -eq 7 ] || return "$rc"
+    # A backend ends a get with 7 where it would print a number, or a container
+    # holding one, in a spelling of its own, `1e3` as `1E+3` or `1000`, and the
+    # document's is the answer. The reader in bash has it to the byte and runs no
+    # process, but costs a parse in bash, so it answers up to the size where jq
+    # is the faster. Past that python does, which keeps the text of every number
+    # it parses and is exact at any size. Where neither can, a shell without bash
+    # or one with no python and a document nested deeper than the reader holds
+    # or bigger than it may be asked about, the backend's spelling is the answer,
+    # and a status of 0 beats none.
+    if [ "${#json}" -le "$_JSON_FLOOR_MAX" ] && type _json_get_bash >/dev/null 2>&1 \
+        && _json_get_bash "$json" "$_js_out"; then
+        return 0
+    fi
+    if [ "$_JSON_NOW" != python ] && { deps_has python3 || deps_has python; } \
+        && use super::json::impl::python && _json_get_python "$json" "$_js_out"; then
+        return 0
+    fi
+    "_json_getn_${_JSON_NOW}" "$json" "$_js_out"
 }
 
 # -----------------------------------------------------------------------------
@@ -212,7 +256,8 @@ _json_read() {
 # Usage: json_get '{"a":{"b":1}}' "a.b" -> "1"
 # Usage: json_get '[1,2,3]' "1" -> "2"
 # Usage: json_get '{"k.d":{"z":1}}' '"k.d".z' -> "1"
-# Returns: The value at the path; status 1 when there is none
+# Returns: The value at the path, a number as the document wrote it; status 1
+# when there is none, or the document is not one JSON value
 json_get() { _json_read get json_get "$@"; }
 
 #[pub]
@@ -248,10 +293,13 @@ json_valid() {
 json_type() { _json_read type json_type "$@"; }
 
 #[pub]
-# Get the length of a JSON array or object
+# Get the length of a JSON array, object or string
 # Usage: json_length '[1,2,3]' -> "3"
 # Usage: json_length '{"a":1,"b":2}' -> "2"
-# Returns: Length as number
+# Usage: json_length '"abc"' -> "3"
+# Usage: json_length null -> "0"
+# Returns: The count of an array or object, the characters of a string, 0 for
+# null; status 1 for a number or a boolean, which have none
 json_length() { _json_read length json_length "$@"; }
 
 #[pub]

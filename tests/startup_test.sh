@@ -249,3 +249,15 @@ log_warn x; log_error x; log_info x')"
     rm -rf "$_ST_D"
     assert_eq "$out" "$(printf 'warn\nerror\ninfo')"
 }
+
+#[test]
+it_starts_with_home_unset() {
+    # Some hook runners start a child with no HOME. What needs it, the kept
+    # trees of the toml reader, is off, and nothing says so unasked.
+    _st_dir || return 0
+    printf '#!/usr/bin/env nutshell\nuse json toml\nprintf "a = 1\\n" > "%s/f.toml"\ntoml_get "%s/f.toml" a\njson_get "{\\"b\\":2}" b\nprintf ok\n' "$_ST_D" "$_ST_D" > "$_ST_D/s.sh"
+    local out
+    out="$(env -i PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" "$NUT" "$_ST_D/s.sh" 2>&1)"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "$(printf '1\n2\nok')"
+}

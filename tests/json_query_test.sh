@@ -287,3 +287,44 @@ it_moves_a_call_off_jq_and_gojq_to_jaq_when_only_jaq_lists_the_option() {
     assert_eq "$(json_query '.a' '{}')" "$(_jq_lines jq -c -r .a)"
     rm -rf "$t"
 }
+
+# -----------------------------------------------------------------------------
+# --args: the operands after the filter are `$ARGS.positional`
+
+#[test]
+it_passes_the_operands_after_the_filter_as_positional_with_args() {
+    _jq_need_jq || return 0
+    assert_eq "$(json_query -n --args '$ARGS.positional' a 'b c')" '["a","b c"]'
+    assert_eq "$(json_query -n '$ARGS.positional[1]' --args x y)" "y"
+    # The document is then stdin, as it is for jq.
+    assert_eq "$(printf '{"a":1}' | json_query --args '[.a, $ARGS.positional[0]]' z)" '[1,"z"]'
+    # An operand led by a dash after `--` is still one of them.
+    assert_eq "$(json_query -n --args '$ARGS.positional' -- -r "it's")" '["-r","it'"'"'s"]'
+    assert_eq "$(json_query -n --args '$ARGS.positional')" '[]'
+}
+
+#[test]
+it_hands_args_to_the_tool_after_the_filter() {
+    local t; t="$(mktemp -d)"
+    _jq_fake "$t/bin" gojq "$_JQ_FULL_HELP --args"
+    _jq_path "$t/bin"
+    _hide_tools jq jaq
+    assert_eq "$(json_query -n --args '$ARGS' -- a -b)" "$(_jq_lines gojq -c -r -n '$ARGS' --args -- a -b)"
+    assert_eq "$(json_query -n --args '$ARGS' a b)" "$(_jq_lines gojq -c -r -n '$ARGS' --args a b)"
+    rm -rf "$t"
+}
+
+#[test]
+it_moves_args_off_a_tool_whose_help_lacks_it_and_refuses_with_none() {
+    local t out rc; t="$(mktemp -d)"
+    _jq_fake "$t/bin" jq
+    _jq_fake "$t/bin" jaq "$_JQ_FULL_HELP --args"
+    _jq_path "$t/bin"
+    _hide_tools gojq
+    assert_eq "$(json_query -n --args '$ARGS' a)" "$(_jq_lines jaq -c -r -n '$ARGS' --args a)"
+    _hide_tools jaq
+    out="$(json_query -n --args '$ARGS' a 2>&1)"; rc=$?
+    assert_eq "$rc" "2"
+    assert_contains "$out" "--args"
+    rm -rf "$t"
+}

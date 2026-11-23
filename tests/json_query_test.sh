@@ -15,13 +15,23 @@
 use json deps test
 source "${BASH_SOURCE[0]%/*}/fixtures/hide_tools.sh"
 
-# A stand-in that prints its own name and its arguments on one line.
+_JQ_FULL_HELP="--arg --argjson --slurpfile --rawfile -e, --exit-status"
+
+# _jq_fake <dir> <name> [<help>] -> a stand-in that prints its own name and
+# then each argument on a line of its own, so quoting reaches the test intact.
+# Asked `--help`, it prints <help>, by default every option json_query passes.
 _jq_fake() {
-    local dir="$1" name="$2"
+    local dir="$1" name="$2" help="${3-$_JQ_FULL_HELP}"
     mkdir -p "$dir"
-    printf '#!/bin/sh\necho "%s $*"\n' "$name" > "$dir/$name"
+    printf '#!/bin/sh\nif [ "$1" = --help ]; then echo "usage: %s %s"; exit 0; fi\nprintf "%%s\\n" %s "$@"\n' "$name" "$help" "$name" > "$dir/$name"
     chmod +x "$dir/$name"
 }
+
+# _jq_lines <word...> -> the words, one to a line, as a stand-in prints them
+_jq_lines() { printf '%s\n' "$@"; }
+
+# _jq_path <dir> -> PATH with <dir> first, and deps made to look again
+_jq_path() { PATH="$1:$PATH"; deps_forget; json_detect; }
 
 # _jq_only_real -> skip text when there is no jq to test against, else nothing
 _jq_need_jq() {
@@ -123,7 +133,74 @@ it_refuses_a_variable_option_with_no_name_and_value() {
     out="$(json_query --arg n 2>&1)"; rc=$?
     assert_eq "$rc" "2"
     assert_contains "$out" "--arg"
-    assert_contains "$out" "--arg"
+}
+
+#[test]
+it_binds_an_arg_value_with_spaces_and_quotes_as_one_string() {
+    _jq_need_jq || return 0
+    assert_eq "$(json_query -n --arg v 'a b "c" '"'"'d'"'"'' '$v')" "a b \"c\" 'd'"
+    assert_eq "$(json_query -n --json --arg v 'a "b"' '$v')" '"a \"b\""'
+}
+
+#[test]
+it_ends_options_at_a_double_dash() {
+    _jq_need_jq || return 0
+    local rc
+    assert_eq "$(json_query -- '.a' '{"a":1}')" "1"
+    # A filter that starts with `-`, as jq 1.7 prints it: `jq -n -- -1` gives -1.
+    assert_eq "$(json_query -n -- '-1')" "-1"
+    assert_eq "$(json_query -n -- '-1 | tostring')" "-1"
+    # After `--` a word that looks like an option is the document.
+    assert_eq "$(json_query -- '. + 1' '-1')" "0"
+}
+
+#[test]
+it_takes_an_option_written_after_the_filter_as_an_option() {
+    _jq_need_jq || return 0
+    assert_eq "$(json_query '.a' --json '{"a":"x"}')" '"x"'
+    assert_eq "$(json_query '.a' '{"a":"x"}' --json)" '"x"'
+}
+
+#[test]
+it_refuses_more_than_a_filter_and_a_document_with_status_2() {
+    _jq_need_jq || return 0
+    local out rc
+    out="$(json_query '.a' '{}' '{}' 2>&1)"; rc=$?
+    assert_eq "$rc" "2"
+    assert_contains "$out" "json_query"
+    out="$(json_query -- '.a' '{}' extra 2>&1)"; rc=$?
+    assert_eq "$rc" "2"
+    assert_contains "$out" "extra"
+}
+
+#[test]
+it_takes_the_long_option_forms() {
+    _jq_need_jq || return 0
+    assert_eq "$(json_query --null-input '1 + 1')" "2"
+    assert_eq "$(printf '1 2 3\n' | json_query --slurp 'add')" "6"
+    assert_eq "$(printf 'a\nb\n' | json_query --raw-input --slurp 'length')" "4"
+    assert_eq "$(json_query --null-input --raw-output '"a"')" "a"
+    assert_eq "$(json_query --null-input --join-output '"a","b"')" "ab"
+    assert_eq "$(json_query --null-input --compact-output '{"a": [1, 2]}')" '{"a":[1,2]}'
+    json_query --exit-status '.a' '{"a":false}' >/dev/null
+    assert_eq "$?" "1"
+    json_query --exit-status '.a' '{"a":null}' >/dev/null
+    assert_eq "$?" "1"
+    json_query --exit-status '.a' '{"a":0}' >/dev/null
+    assert_eq "$?" "0"
+}
+
+#[test]
+it_gives_status_1_for_a_query_the_tool_failed_and_keeps_2_for_a_refusal() {
+    _jq_need_jq || return 0
+    local out rc d; d="$(mktemp -d)"
+    # jq 1.7 exits 2 on this: "Could not open ...: No such file or directory".
+    out="$(json_query --slurpfile s "$d/none.json" '$s' '{}' 2>&1)"; rc=$?
+    assert_eq "$rc" "1"
+    assert_contains "$out" "none.json"
+    json_query --frobnicate '.' '{}' >/dev/null 2>&1; rc=$?
+    assert_eq "$rc" "2"
+    rm -rf "$d"
 }
 
 # -----------------------------------------------------------------------------
@@ -134,41 +211,44 @@ it_refuses_a_variable_option_with_no_name_and_value() {
 it_hands_every_option_family_to_gojq_as_it_took_it() {
     local t; t="$(mktemp -d)"
     _jq_fake "$t/bin" gojq
-    PATH="$t/bin:$PATH"
+    _jq_path "$t/bin"
     _hide_tools jq jaq
-    json_detect
-    assert_eq "$(json_query '.a' '{}')" "gojq -c -r .a"
-    assert_eq "$(json_query --arg n v '.a' '{}')" "gojq -c -r --arg n v .a"
-    assert_eq "$(json_query --argjson n 1 '.a' '{}')" "gojq -c -r --argjson n 1 .a"
-    assert_eq "$(json_query --slurpfile n /f '.a' '{}')" "gojq -c -r --slurpfile n /f .a"
-    assert_eq "$(json_query --rawfile n /f '.a' '{}')" "gojq -c -r --rawfile n /f .a"
-    assert_eq "$(json_query -n -s -R -e '.a' '{}')" "gojq -c -r -n -s -R -e .a"
-    assert_eq "$(json_query -nc '.a')" "gojq -c -r -n .a"
-    assert_eq "$(json_query --json '.a' '{}')" "gojq -c .a"
-    assert_eq "$(json_query -j '.a' '{}')" "gojq -c -j .a"
+    assert_eq "$(json_query '.a' '{}')" "$(_jq_lines gojq -c -r .a)"
+    assert_eq "$(json_query --arg n 'v w "x"' '.a' '{}')" "$(_jq_lines gojq -c -r --arg n 'v w "x"' .a)"
+    assert_eq "$(json_query --argjson n 1 '.a' '{}')" "$(_jq_lines gojq -c -r --argjson n 1 .a)"
+    assert_eq "$(json_query --slurpfile n /f '.a' '{}')" "$(_jq_lines gojq -c -r --slurpfile n /f .a)"
+    assert_eq "$(json_query --rawfile n /f '.a' '{}')" "$(_jq_lines gojq -c -r --rawfile n /f .a)"
+    assert_eq "$(json_query -n -s -R -e '.a' '{}')" "$(_jq_lines gojq -c -r -n -s -R -e .a)"
+    assert_eq "$(json_query -nc '.a')" "$(_jq_lines gojq -c -r -n .a)"
+    assert_eq "$(json_query --json '.a' '{}')" "$(_jq_lines gojq -c .a)"
+    assert_eq "$(json_query -j '.a' '{}')" "$(_jq_lines gojq -c -j .a)"
+    # A filter that starts with `-` reaches the tool led by a space, which every
+    # jq family parser skips and no option parser takes for an option.
+    assert_eq "$(json_query -n -- '-1')" "$(_jq_lines gojq -c -r -n ' -1')"
     rm -rf "$t"
 }
 
 #[test]
-it_hands_the_options_jaq_has_to_jaq() {
+it_hands_the_options_a_jaq_lists_in_its_help_to_jaq() {
     local t; t="$(mktemp -d)"
     _jq_fake "$t/bin" jaq
-    PATH="$t/bin:$PATH"
+    _jq_path "$t/bin"
     _hide_tools jq gojq
-    json_detect
-    assert_eq "$(json_query --arg n v '.a' '{}')" "jaq -c -r --arg n v .a"
-    assert_eq "$(json_query --argjson n 1 '.a' '{}')" "jaq -c -r --argjson n 1 .a"
-    assert_eq "$(json_query -n -s -R '.a' '{}')" "jaq -c -r -n -s -R .a"
+    assert_eq "$(json_query --arg n v '.a' '{}')" "$(_jq_lines jaq -c -r --arg n v .a)"
+    assert_eq "$(json_query --argjson n 1 '.a' '{}')" "$(_jq_lines jaq -c -r --argjson n 1 .a)"
+    assert_eq "$(json_query -n -s -R '.a' '{}')" "$(_jq_lines jaq -c -r -n -s -R .a)"
+    assert_eq "$(json_query -e '.a' '{}')" "$(_jq_lines jaq -c -r -e .a)"
+    assert_eq "$(json_query --slurpfile n /f '.a' '{}')" "$(_jq_lines jaq -c -r --slurpfile n /f .a)"
+    assert_eq "$(json_query --rawfile n /f '.a' '{}')" "$(_jq_lines jaq -c -r --rawfile n /f .a)"
     rm -rf "$t"
 }
 
 #[test]
-it_refuses_what_jaq_lacks_when_jaq_is_all_there_is() {
+it_refuses_what_the_only_tool_does_not_list_in_its_help() {
     local t out rc opt; t="$(mktemp -d)"
-    _jq_fake "$t/bin" jaq
-    PATH="$t/bin:$PATH"
+    _jq_fake "$t/bin" jaq "--arg --argjson"
+    _jq_path "$t/bin"
     _hide_tools jq gojq
-    json_detect
     for opt in "-e" "--slurpfile n /f" "--rawfile n /f"; do
         # shellcheck disable=SC2086
         out="$(json_query $opt '.a' '{}' 2>&1)"; rc=$?
@@ -176,38 +256,34 @@ it_refuses_what_jaq_lacks_when_jaq_is_all_there_is() {
         assert_contains "$out" "${opt%% *}" "$opt"
         assert_contains "$out" "jaq" "$opt"
     done
+    # A call it can make still goes to it.
+    assert_eq "$(json_query -n '.a')" "$(_jq_lines jaq -c -r -n .a)"
     rm -rf "$t"
 }
 
 #[test]
-it_picks_another_tool_for_a_call_the_first_cannot_make() {
+it_moves_a_call_off_a_jq_whose_help_lacks_an_option_to_gojq() {
+    # A jq before 1.6 has no --rawfile; the call goes to the next tool that has.
     local t; t="$(mktemp -d)"
-    _jq_fake "$t/bin" gojq; _jq_fake "$t/bin" jaq
-    PATH="$t/bin:$PATH"
-    # Only jaq and gojq here, so jq is hidden: jaq is third in the order, but
-    # gojq is first of the two and has every option.
-    _hide_tools jq
-    json_detect
-    assert_eq "$(json_query -e '.a' '{}')" "gojq -c -r -e .a"
-    # With gojq hidden as well, jaq is the only one and `-e` is refused.
-    _hide_tools gojq
-    json_detect
-    json_query -e '.a' '{}' >/dev/null 2>&1
-    assert_eq "$?" "2"
-    # A call jaq can make still goes to jaq.
-    assert_eq "$(json_query -n '.a')" "jaq -c -r -n .a"
+    _jq_fake "$t/bin" jq "--arg --argjson --slurpfile -e, --exit-status"
+    _jq_fake "$t/bin" gojq
+    _jq_path "$t/bin"
+    _hide_tools jaq
+    assert_eq "$(json_query --rawfile n /f '.a' '{}')" "$(_jq_lines gojq -c -r --rawfile n /f .a)"
+    # A call jq can make stays on jq.
+    assert_eq "$(json_query --slurpfile n /f '.a' '{}')" "$(_jq_lines jq -c -r --slurpfile n /f .a)"
     rm -rf "$t"
 }
 
 #[test]
-it_keeps_jq_for_a_call_jaq_cannot_make() {
-    # jq has every option, so a call jaq cannot make is not moved off jq:
-    # the order jq, gojq, jaq holds for every call jq can make.
-    _jq_need_jq || return 0
+it_moves_a_call_off_jq_and_gojq_to_jaq_when_only_jaq_lists_the_option() {
     local t; t="$(mktemp -d)"
-    _jq_fake "$t/bin" gojq; _jq_fake "$t/bin" jaq
-    PATH="$PATH:$t/bin"
-    json_detect
-    assert_eq "$(json_query -e '.a' '{"a":3}')" "3"
+    _jq_fake "$t/bin" jq "--arg --argjson"
+    _jq_fake "$t/bin" gojq "--arg --argjson --slurpfile"
+    _jq_fake "$t/bin" jaq
+    _jq_path "$t/bin"
+    assert_eq "$(json_query -e '.a' '{}')" "$(_jq_lines jaq -c -r -e .a)"
+    assert_eq "$(json_query --slurpfile n /f '.a' '{}')" "$(_jq_lines gojq -c -r --slurpfile n /f .a)"
+    assert_eq "$(json_query '.a' '{}')" "$(_jq_lines jq -c -r .a)"
     rm -rf "$t"
 }

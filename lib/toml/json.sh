@@ -31,7 +31,7 @@ use super::toml super::toml::impl::bash super::toml::emit super::toml::large
 # a backend never sees, since there is no file to key a kept tree by: it is not
 # cached, and the tree it leaves is dropped so the next read starts clean.
 #
-# A file of `_TOML_JSON_LARGE` bytes or more takes the path of
+# A file of `_TOML_JSON_LARGE` bytes or more, 4 KB, takes the path of
 # `lib/toml/large.sh`: the JSON an earlier process kept for the same text, or
 # taplo's JSON where it holds nothing taplo would rewrite, else the floor.
 # Every path prints the same text.

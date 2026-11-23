@@ -33,13 +33,13 @@
 # the tree and 4 MB would take minutes per start, which is itself the result.
 #
 # Usage:
-#   ./bench toml-json [repeats] [sizes in MB, "1 4" by default]
+#   ./bench toml-json [repeats] [sizes in KB, "4 1000 4000" by default]
 # =============================================================================
 
 use bench deps
 
 BENCH_REPEATS="${1:-${BENCH_REPEATS:-3}}"
-SIZES="${2:-1 4}"
+SIZES="${2:-4 1000 4000}"
 ROOT="$(cd "${BASH_SOURCE[0]%/*}/../.." && pwd)"
 
 _TJ_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nut-tomljson.XXXXXX")"
@@ -48,10 +48,9 @@ mkdir -p "$_TJ_TMP/cold"
 
 # _tj_gen <bytes> <file> -> a tracker-shaped file of at least that many bytes
 _tj_gen() {
-    local want="$1" file="$2" i=0 chunk="" size=0 key
+    local want="$1" file="$2" i=0 chunk="" key
     local note='Commits 1a00511d and 42599414 on main carry the state file at 5814 and 249840 lines from the coordinator doubling sets; #2874 restored it and #2875 guards the set. Every clone fetches the blob, and removing it needs a history rewrite of main, which is op'"'"'s call.\n\nMoved from the kaski ticket registry (kind question). State at the move: waiting at 2026-10-31T16:34:50Z by coord, held by op.\nOptions: leave it; rewrite main to drop the blob; fold into the orphan data tree work\nRepos: clause-dev\nSubjects: workflow\nOp said, verbatim: \"file a ticket that is primarily mine, but it is something you have to carry\".'
-    : > "$file"
-    while (( size < want )); do
+    while :; do
         key="a_ticket_about_thing_number_${i}_in_the_workspace_lane"
         chunk+="[[action]]"$'\n'
         chunk+="key = \"${key}\""$'\n'
@@ -70,13 +69,9 @@ _tj_gen() {
         fi
         chunk+=$'\n'
         i=$(( i + 1 ))
-        if (( i % 100 == 0 )); then
-            printf '%s' "$chunk" >> "$file"
-            chunk=""
-            size="$(wc -c < "$file")"
-        fi
+        (( ${#chunk} < want )) || break
     done
-    printf '%s' "$chunk" >> "$file"
+    printf '%s' "$chunk" > "$file"
 }
 
 
@@ -142,13 +137,16 @@ _tj_case() {
     return "$rc"
 }
 
+# Every size in kilobytes, the smallest of them the one that decides where
+# `_TOML_JSON_LARGE` sits: below it a tool's start is the larger cost.
 _tj_rc=0
-for _tj_mb in $SIZES; do
-    _tj_file="$_TJ_TMP/${_tj_mb}mb.toml"
-    _tj_gen "$(( _tj_mb * 1000000 ))" "$_tj_file"
-    _tj_top=0 _tj_yq=$_TJ_HAS_YQ
-    (( _tj_mb >= 4 )) && _tj_top=1
-    (( _tj_mb > 1 )) && _tj_yq=0
-    _tj_case "${_tj_mb} MB" "$_tj_file" "$(( _tj_mb * 1000 ))" "$_tj_top" "$_tj_yq" || _tj_rc=1
+for _tj_kb in $SIZES; do
+    _tj_file="$_TJ_TMP/${_tj_kb}kb.toml"
+    _tj_gen "$(( _tj_kb * 1000 ))" "$_tj_file"
+    _tj_top=0 _tj_yq=$_TJ_HAS_YQ _tj_label="${_tj_kb} KB"
+    (( _tj_kb >= 4000 )) && _tj_top=1
+    (( _tj_kb > 1000 )) && _tj_yq=0
+    (( _tj_kb >= 1000 )) && _tj_label="$(( _tj_kb / 1000 )) MB"
+    _tj_case "$_tj_label" "$_tj_file" "$_tj_kb" "$_tj_top" "$_tj_yq" || _tj_rc=1
 done
 exit "$_tj_rc"

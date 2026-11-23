@@ -55,38 +55,63 @@ Where it went, each step measured rather than divided out:
 `toml` as of 667adfd, files of this shape: no float, no date-time, no integer
 near the 64-bit end.
 
-## After, 2026-11-23, runs `results/20261123102226` (1 MB) and `results/20261123102334` (4 MB)
+## After, 2026-11-23, runs `results/20261123104306` (4 KB), `results/20261123104335` (1 MB) and `results/20261123104444` (4 MB)
 
-Same host and bash, same arms, load average 3 to 4.
+Same host and bash, same arms, load average 1 to 3. The 4 KB case is the one
+that sets `_TOML_JSON_LARGE`, the size from which a file takes the large path.
 
-| per start | 1 MB before | 1 MB after | 4 MB before | 4 MB after |
-|---|---|---|---|---|
-| floor, cold | 9004 | 3043 | 251123 | 11384 |
-| floor, warm | 1255 | 114 | 10729 | 332 |
-| taplo, cold | 11311 | 346 | 302829 | 1476 |
-| taplo, warm | 1330 | 110 | 11508 | 362 |
-| mikefarah yq, cold | 17192 | 3198 | not run | not run |
-| mikefarah yq, warm | 1361 | 108 | not run | not run |
+| per start | 4 KB | 1 MB before | 1 MB after | 4 MB before | 4 MB after |
+|---|---|---|---|---|---|
+| floor, cold | 46 | 9004 | 2890 | 251123 | 11080 |
+| floor, warm | 25 | 1255 | 96 | 10729 | 363 |
+| taplo, cold | 50 | 11311 | 292 | 302829 | 1421 |
+| taplo, warm | 27 | 1330 | 95 | 11508 | 326 |
+| mikefarah yq, cold | 57 | 17192 | 2759 | not run | not run |
+| mikefarah yq, warm | 24 | 1361 | 99 | not run | not run |
+
+At 4 KB the two routes are the same number, 46 ms against 50 ms, the start of
+the process being 25 ms of either. Timed without the start, taplo's compact JSON
+passes the floor at about 2 KB, 6 ms against 9 ms per conversion, and is three
+times cheaper by 4 KB. So the threshold sits at 4096: from there the tool never
+loses, and below it the tree route stands, where the process also keeps the tree
+for whatever else it asks of the file.
 
 Two of the four targets are met and two are missed:
 
-- 4 MB on the floor, warm: 332 ms against 2000, met.
-- 4 MB through taplo, warm: 362 ms against 500, met.
-- 4 MB on the floor, cold: 11384 ms against 2000, missed. The parse is 11 s of
+- 4 MB on the floor, warm: 363 ms against 2000, met.
+- 4 MB through taplo, warm: 326 ms against 500, met.
+- 4 MB on the floor, cold: 11080 ms against 2000, missed. The parse is 11 s of
   it, 2.7 µs per byte of TOML read in bash, and the write 1.5 s. Meeting 2 s
   cold with no tool at all means another reader, not a faster version of this
   one.
-- 4 MB through taplo, cold: 1476 ms against 500, missed. taplo itself is 660 ms
+- 4 MB through taplo, cold: 1421 ms against 500, missed. taplo itself is 660 ms
   of it, the compaction 230 ms, the write of the kept JSON 190 ms and the start
   of the process 250 ms. Under 500 ms would need taplo to print compact JSON,
   which it has no flag for.
 
 mikefarah yq stays out of the large-file path and off the 4 MB arms: it reads
-1 MB in 3.2 s where taplo takes 0.35 s, and a 4 MB start would run for minutes.
+1 MB in 2.8 s where taplo takes 0.29 s, and a 4 MB start would run for minutes.
 
-What the time buys, warm: the JSON kept for the file's text, read back and
-printed, so a 4 MB text is parsed once per edit of it rather than once per
-process.
+## The tracker itself
+
+The 54 lane files of `.shared/scripts/life`, 4.3 MB of TOML into 4.3 MB of JSON,
+converted one after another in one process, taplo present, measured outside this
+bench because the files are the workspace's own and move:
+
+| | s |
+|---|---|
+| before | 18.0 |
+| after, cold | 11.4 |
+| after, warm | 1.0 |
+| after, cold, no tool at all | 12.0 |
+
+The python it would replace takes 1.2 s, so the warm run is what unblocks the
+port, and the first run after an edit of a lane file is the cold one.
+
+Cold stays at 11 s because 12 of the 54 files hold a float: taplo rewrites a
+float's spelling, so a file holding one is the floor's to read, and those twelve
+include the two largest. 30 files take the tool route, and 12 are under 4 KB and
+take the tree route.
 
 **holds for:** this host only, bash 5.2.21, taplo 0.10.0, mikefarah yq 4.44.3,
 `toml` as of this commit, files of this shape. A file holding a float, a

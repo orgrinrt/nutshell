@@ -1,0 +1,7 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+floor  cold,46,54,within the noise,yes
+floor  warm,25,26,54%,yes
+taplo  cold,50,60,within the noise,yes
+taplo  warm,27,34,58%,yes
+mikefarah yq  cold,57,69,123%,yes
+mikefarah yq  warm,24,25,52%,yes

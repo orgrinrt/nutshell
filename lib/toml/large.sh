@@ -27,9 +27,12 @@ _NUTSHELL_TOML_LARGE_SH=1
 
 use super::toml super::toml::cache super::toml::emit
 
-# The size in bytes from which a file takes this path. Below it the tree route
-# stands, and its tests, since a tool's start costs more than a small file does.
-_TOML_JSON_LARGE=65536
+# The size in bytes from which a file takes this path, measured rather than
+# guessed: `benches/toml-json` prices both routes from 1 KB up, and taplo's
+# compact JSON passes the floor at about 2 KB, 6 ms against 9 ms, and is three
+# times cheaper by 4 KB. Below this a tool's start is the larger cost, and the
+# tree route stands, with the process keeping the tree it built.
+_TOML_JSON_LARGE=4096
 
 # What in taplo's compact JSON is not what the floor writes, as one ERE: a
 # number that is a float or an `inf` or a `nan`, a `null`, a string that is a

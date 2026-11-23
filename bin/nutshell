@@ -131,9 +131,11 @@ _nut_prelude_stubs
 # On dev the interpreter loaded `extern` and `log` before the script, so a
 # script's own `log_warn` survived a later `use log`, which loaded nothing.
 # Now that `use` loads the module, it would go over the script's function;
-# `use` calls this first, sources, then evals what it left. One capture of the
-# row's definitions for each first load of a module the table names; a script
-# with no function of its own in the row pays only that.
+# `use` calls this first, sources, then evals what it left. Only names in
+# `_NUT_PRELUDE_OWN`, the table's functions the script's text defines, are
+# looked at, and `use` calls this only where there is one, so a script that
+# defines none pays nothing: a capture is a fork, and this runs on the first
+# load of every module the table names.
 _NUT_PRELUDE_FILES=""
 _nut_prelude_keep() {
     _NUT_PK=""
@@ -153,6 +155,7 @@ _nut_prelude_keep() {
     fns="${fns%%$'\n'*}"
     mod="${fns%% *}"; fns="${fns#* }"
     for f in $fns; do
+        [[ "$_NUT_PRELUDE_OWN" == *" $f "* ]] || continue
         declare -F "$f" >/dev/null && have+=" $f"
     done
     [[ -n "$have" ]] || return 0
@@ -543,6 +546,80 @@ else
 fi
 export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
 
+# What the script's own text says, read once before it runs.
+#
+# A stub called inside `$(...)` loads its module in that subshell and the load
+# is lost with it, so a loop of `x="$(fs_basename "$p")"` paid the whole load
+# on every pass. A function of the table written first in a `$(` of the text
+# has its module loaded here, once, before the script runs, as the interpreter
+# loaded `extern` and `log` before every script on dev. A call reached through
+# a pipe, a later word in the `$(` or a file the script sources is still lazy,
+# and pays the load in each subshell.
+#
+# And the functions of the table the text defines, `name()`, `name ()` or
+# `function name`, go in `_NUT_PRELUDE_OWN` for `_nut_prelude_keep`. One
+# defined in a file the script sources is not seen, and a later `use` of its
+# module goes over it.
+#
+# The text is cut at each `(` and at each `function ` by the shell's own field
+# splitting, globbing off, one pass each; only 80 bytes at the edge of a piece
+# are read for a word, so a long piece costs no more than a short one.
+_NUT_PRELUDE_OWN=""
+declare -A _NUT_PRELUDE_OWNER=()
+_nut_prelude_owner() {
+    _npo=""
+    [[ -n "$1" ]] || return 1
+    # A table built at the first question: a glob or a regex over the rows
+    # costs about 100us a question, and a text asks one for each definition.
+    if [[ ${#_NUT_PRELUDE_OWNER[@]} -eq 0 ]]; then
+        local mod fns f
+        while read -r mod fns; do
+            for f in $fns; do _NUT_PRELUDE_OWNER[$f]="$mod"; done
+        done <<< "$_NUT_PRELUDE_ROWS"
+    fi
+    _npo="${_NUT_PRELUDE_OWNER[$1]:-}"
+    [[ -n "$_npo" ]]
+}
+_nut_prelude_scan() {
+    local text="" mods="" own=" " f prev="" p IFS noglob="" _npo
+    local word_end='(^|[^A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*$'
+    local word_start='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)'
+    local -a parts defs
+    IFS= read -r -d '' text < "$1"
+    [[ "$text" == *'('* || "$text" == *'function '* ]] || return 0
+    [[ "$-" == *f* ]] && noglob=1
+    set -f
+    IFS='('
+    parts=( $text )
+    IFS=$'\x1e'
+    defs=( ${text//'function '/$'\x1e'} )
+    IFS=$' \t\n'
+    [[ -n "$noglob" ]] || set +f
+    for p in "${parts[@]}"; do
+        if [[ "${prev: -1}" == '$' ]]; then
+            # `$(` then its first word: a call in a capture.
+            f=""; [[ "${p:0:80}" =~ $word_start ]] && f="${BASH_REMATCH[1]}"
+            _nut_prelude_owner "$f" && [[ " $mods " != *" $_npo "* ]] && mods+=" $_npo"
+        elif [[ "$p" =~ ^[[:space:]]*\) ]]; then
+            # `name (` then `)`: a definition.
+            f="$prev"; (( ${#f} > 80 )) && f="${f: -80}"
+            [[ "$f" =~ $word_end ]] || { prev="$p"; continue; }
+            f="${BASH_REMATCH[2]}"
+            _nut_prelude_owner "$f" && own+="${f} "
+        fi
+        prev="$p"
+    done
+    for p in "${defs[@]:1}"; do
+        [[ "${p:0:80}" =~ $word_start ]] || continue
+        f="${BASH_REMATCH[1]}"
+        _nut_prelude_owner "$f" && own+="${f} "
+    done
+    [[ "$own" == " " ]] || _NUT_PRELUDE_OWN="$own"
+    # shellcheck disable=SC2086
+    [[ -z "$mods" ]] || use $mods
+}
+[[ "${_IS_COMMAND:-0}" -eq 1 ]] || _nut_prelude_scan "$NUTSHELL_SCRIPT"
+
 # Sourced, not executed, so the script runs in this environment with `use`
 # already defined.
 #
@@ -550,38 +627,5 @@ export NUTSHELL_SCRIPT NUTSHELL_SCRIPT_DIR
 # no-slash argument searches PATH first, so `nutshell test` in a directory
 # holding a script called `test` sourced `/bin/test` and reported that a binary
 # cannot be executed. The file the argument named was right there.
-# A stub called inside `$(...)` loads its module in that subshell and the
-# load is lost with it, so a loop of `x="$(fs_basename "$p")"` paid the whole
-# load on every pass. A function of the table written first in a `$(` of the
-# script's own text has its module loaded here, once, before the script runs,
-# as the interpreter loaded `extern` and `log` before every script on dev. A
-# script with no such call pays one read and one match; a call reached through
-# a pipe or a later word in the `$(` is still lazy, and pays per subshell.
-_nut_prelude_ahead() {
-    local text="" mods="" mod f IFS noglob=""
-    local -a parts
-    IFS= read -r -d '' text < "$1"
-    [[ "$text" == *'$('* ]] || return 0
-    # Each `$(` turned to one byte and the text split on it by the shell's own
-    # field splitting, globbing off: one pass. Only the first 80 bytes of a
-    # piece are read for its first word.
-    [[ "$-" == *f* ]] && noglob=1
-    set -f
-    IFS=$'\x1e'
-    parts=( ${text//'$('/$'\x1e'} )
-    IFS=$' \t\n'
-    [[ -n "$noglob" ]] || set +f
-    for f in "${parts[@]:1}"; do
-        f="${f:0:80}"; f="${f#"${f%%[![:space:]]*}"}"; f="${f%%[!A-Za-z0-9_]*}"
-        [[ -n "$f" && "$_NUT_PRELUDE_ROWS" == *[\ ]"$f"[\ $'\n']* ]] || continue
-        mod="${_NUT_PRELUDE_ROWS%%[\ ]"$f"[\ $'\n']*}"
-        mod="${mod##*$'\n'}"; mod="${mod%% *}"
-        [[ " $mods " == *" $mod "* ]] || mods+=" $mod"
-    done
-    # shellcheck disable=SC2086
-    [[ -z "$mods" ]] || use $mods
-}
-[[ "${_IS_COMMAND:-0}" -eq 1 ]] || _nut_prelude_ahead "$NUTSHELL_SCRIPT"
-
 # shellcheck source=/dev/null
 source "$NUTSHELL_SCRIPT"

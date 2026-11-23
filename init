@@ -293,7 +293,7 @@ use() {
             # module goes over it, as it stood on dev. `_nut_prelude_keep`
             # says which; local, as the module's own `use`s come through here.
             local _pk=""
-            if [[ -n "${_NUT_PRELUDE_ROWS:-}" ]]; then
+            if [[ -n "${_NUT_PRELUDE_OWN:-}" ]]; then
                 _nut_prelude_keep "$_real"
                 _pk="$_NUT_PK"
             fi

@@ -56,7 +56,7 @@ use super::deps::state super::deps::variants super::deps::config super::deps::pr
 _deps_sync_config() {
     local old="$_DEPS_CONFIG" t _k _rc
     _DEPS_CONFIG_KEY="${_NUT_ASKING_FROM:-}|${NUTSHELL_SCRIPT_DIR:-}|${PWD}"
-    _DEPS_CONFIG="$(_deps_find_config)" || _DEPS_CONFIG=""
+    _DEPS_CONFIG=""; _deps_find_config && _DEPS_CONFIG="$_DEPS_FOUND_CONFIG"
     [ "$_DEPS_CONFIG" != "$old" ] || return 0
     for _k in $_DEPS_SEEN; do eval "unset _TOOL_MISSING_${_k}"; done
     [ -n "$_DEPS_CONFIG" ] || return 0
@@ -142,7 +142,8 @@ deps_has() {
     # unavailable on every machine there has ever been. Neither module was
     # wrong to ask. The answer was.
     local path
-    if path="$(_deps_find_tool "$tool" "$_DEPS_CONFIG")"; then
+    if _deps_find_tool "$tool" "$_DEPS_CONFIG"; then
+        path="$_DEPS_FOUND"
         _deps_set PATH "$tool" "$path"
         _deps_set_variant "$tool" "$path"
         _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"

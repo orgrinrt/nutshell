@@ -228,6 +228,18 @@ it_reads_the_two_ends_of_the_64_bit_range() {
 }
 
 #[test]
+it_reads_a_signed_zero_as_the_integer_zero() {
+    # `-0` and `+0` are the integer 0 as taplo and mikefarah yq both give it,
+    # `{"a":0,"b":0}` from each, so the floor says the same and a file converted
+    # to JSON reads alike whoever read it.
+    _toml_parse_text t $'a = -0\nb = +0\nc = 0\n'
+    assert_eq "${_TOML_V[R${_TOML_US}a]}" "0"
+    assert_eq "${_TOML_V[R${_TOML_US}b]}" "0"
+    assert_eq "${_TOML_V[R${_TOML_US}c]}" "0"
+    assert_eq "${_TOML_T[R${_TOML_US}a]}" "int"
+}
+
+#[test]
 it_refuses_a_bare_word_as_a_value() {
     _tg_bad 'a = hello\n'
     assert_eq "$_TG_RC" "2"

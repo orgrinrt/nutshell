@@ -1,0 +1,7 @@
+case      toml_to_json over 1 MB of tracker-shaped TOML, 3 starts per arm
+size      1000
+repeats   3
+baseline  floor, cold
+bash      5.2.21(1)-release
+host      Linux x86_64
+taken     2026-11-23T10:22:26Z

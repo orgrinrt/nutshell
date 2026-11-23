@@ -12,7 +12,7 @@
 [ -n "${_NUTSHELL_TOML_JSON_SH:-}" ] && return 0
 _NUTSHELL_TOML_JSON_SH=1
 
-use super::toml super::toml::impl::bash
+use super::toml super::toml::impl::bash super::toml::emit super::toml::large
 
 #[pub]
 # Convert a TOML file to JSON, compact, keys in the order the file gives them.
@@ -30,6 +30,11 @@ use super::toml super::toml::impl::bash
 # A file named `-` is the text on standard input, which the floor reads whole and
 # a backend never sees, since there is no file to key a kept tree by: it is not
 # cached, and the tree it leaves is dropped so the next read starts clean.
+#
+# A file of `_TOML_JSON_LARGE` bytes or more, 4 KB, takes the path of
+# `lib/toml/large.sh`: the JSON an earlier process kept for the same text, or
+# taplo's JSON where it holds nothing taplo would rewrite, else the floor.
+# Every path prints the same text.
 # Usage: toml_to_json "file.toml" -> prints JSON, `-` reads standard input
 toml_to_json() {
     local file="${1:-}" rc=0
@@ -37,6 +42,9 @@ toml_to_json() {
     if [[ "$file" == - ]]; then
         _tj_stdin || return $?
     else
+        _tj_large "$file" || rc=$?
+        (( rc == 3 )) || return "$rc"
+        rc=0
         _toml_open_values "$file" || return $?
     fi
     # A value the tool rewrote, `_TOML_JL` of them, is the floor's to write.
@@ -44,13 +52,12 @@ toml_to_json() {
         _TOML_FROM=bash
         _toml_open "$file" || return $?
     fi
-    _tj_out=""
-    _tj_emit R || rc=$?
+    _toml_emit_json || rc=$?
     if (( rc != 0 )); then
         printf 'toml: %s: %s\n' "$file" "$_tj_err" >&2
         return 2
     fi
-    printf '%s\n' "$_tj_out"
+    printf '%s\n' "$_tj_json"
 }
 
 # _tj_stdin -> the tree of standard input's text, rc 2 and the reason where it is not TOML
@@ -62,75 +69,4 @@ _tj_stdin() {
     fi
     _TOML_ID="" _TOML_FROM=bash
     _toml_parse_text "-" "$c" || { printf '%s\n' "$_TOML_ERR" >&2; return 2; }
-}
-
-# _tj_emit <node> -> the node appended to `_tj_out` as JSON
-_tj_emit() {
-    local node="$1" k i n first=1
-    case "${_TOML_T[$node]}" in
-        table)
-            _tj_out+="$_TOML_LB"
-            _toml_children "$node"
-            local -a keys=("${_tc_keys[@]}")
-            for k in "${keys[@]}"; do
-                (( first )) || _tj_out+=","
-                first=0
-                _json_string_into _tj_s "$k"
-                _tj_out+="${_tj_s}:"
-                _tj_emit "$node$_TOML_US$k" || return 1
-            done
-            _tj_out+="$_TOML_RB" ;;
-        array|aot)
-            _tj_out+="["
-            n="${_TOML_N[$node]}"
-            for (( i = 0; i < n; i++ )); do
-                (( i )) && _tj_out+=","
-                _tj_emit "$node$_TOML_US$i" || return 1
-            done
-            _tj_out+="]" ;;
-        str|dt)
-            _json_string_into _tj_s "${_TOML_V[$node]}"
-            _tj_out+="$_tj_s" ;;
-        int|float|bool)
-            _tj_out+="${_TOML_V[$node]}" ;;
-        inf)
-            _toml_node_show "$node"
-            _tj_err="${_tn_out} is ${_TOML_V[$node]}, and JSON has no inf or nan"
-            return 1 ;;
-        *)
-            _toml_node_show "$node"
-            _tj_err="${_tn_out} has no type JSON can take"
-            return 1 ;;
-    esac
-}
-
-# _json_string_into <name> <text> -> the text as a JSON string, written to <name>
-# Every control character is escaped, so the result is a JSON string whatever
-# the TOML string held.
-_json_string_into() {
-    local __js_s="$2" __js_c __js_o="" __js_hex
-    __js_s="${__js_s//\\/\\\\}"
-    __js_s="${__js_s//\"/\\\"}"
-    __js_s="${__js_s//$'\n'/\\n}"
-    __js_s="${__js_s//$'\r'/\\r}"
-    __js_s="${__js_s//$'\t'/\\t}"
-    __js_s="${__js_s//$'\b'/\\b}"
-    __js_s="${__js_s//$'\f'/\\f}"
-    local LC_ALL=C
-    while [[ "$__js_s" == *[$'\x01'-$'\x1f']* ]]; do
-        __js_o+="${__js_s%%[$'\x01'-$'\x1f']*}"
-        __js_s="${__js_s#"${__js_s%%[$'\x01'-$'\x1f']*}"}"
-        __js_c="${__js_s:0:1}"
-        printf -v __js_hex '\\u%04x' "'$__js_c"
-        __js_o+="$__js_hex"
-        __js_s="${__js_s:1}"
-    done
-    printf -v "$1" '"%s"' "$__js_o$__js_s"
-}
-
-# _json_string <text> -> prints the text as a JSON string
-_json_string() {
-    local s
-    _json_string_into s "$1"
-    printf '%s' "$s"
 }

@@ -118,6 +118,7 @@ _deps_find_tool() {
 # PATH.
 : "${_DEPS_PIN_GET:=}"
 : "${_DEPS_PIN_CHECK:=}"
+_DEPS_PIN_SAID="" _DEPS_TXT_OF="" _DEPS_TXT=""
 _DEPS_PIN=""
 
 # The two pin functions are `deps::pins`', handed over by name when it is
@@ -127,7 +128,41 @@ _DEPS_PIN=""
 _deps_pin() {
     _DEPS_PIN=""
     [ -n "$_DEPS_PIN_GET" ] || return 1
+    _deps_may_pin "$1" "$2" || return 1
+    if [ "${_DEPS_PIN_SAID:-}" != "$1" ]; then
+        _DEPS_PIN_SAID="$1"
+        _deps_pin_verify "$1"
+    fi
     "$_DEPS_PIN_GET" "$1" "$2"
+}
+
+# What a manifest's text rules out before any reader is loaded. A key that pins
+# a tool spells the tool's name in the text, or writes it with a `\u` or `\U`
+# escape in a quoted key; text with neither cannot pin the tool, whatever else
+# it says. A hook asking for jq on every tool call then pays a read of the
+# file, not a load of the toml reader and a check of its kept tree. Text that
+# could pin goes to the reader, which decides; this only ever says "cannot".
+# The text is kept for the file it was read from, dropped when the manifest
+# changes (`_deps_sync_config`).
+# Usage: _deps_may_pin <file> <tool> -> rc 1 where the text cannot pin the tool
+#[pub(super)]
+_deps_may_pin() {
+    local _l
+    if [ "${_DEPS_TXT_OF:-}" != "$1" ]; then
+        _DEPS_TXT=""
+        [ -r "$1" ] || return 0
+        if [ -n "${BASH_VERSION:-}" ]; then
+            IFS= read -r -d '' _DEPS_TXT < "$1" || true
+        else
+            while IFS= read -r _l || [ -n "$_l" ]; do _DEPS_TXT="${_DEPS_TXT}${_l}
+"; done < "$1"
+        fi
+        _DEPS_TXT_OF="$1"
+    fi
+    case "$_DEPS_TXT" in
+        *"$2"* | *'\u'* | *'\U'*) return 0 ;;
+    esac
+    return 1
 }
 
 # Usage: _deps_pin_verify <file> -> says on stderr when the manifest cannot be read

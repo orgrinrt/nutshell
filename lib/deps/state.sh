@@ -140,3 +140,17 @@ _deps_drop_caps() {
 # The associative arrays beside it were never readonly either, since bash
 # cannot always make one so. They are written by this module and read by
 # everyone; treat them as read-only from outside.
+
+# Modules that pick a tool once and keep the pick. Each registers a function
+# when it picks, and `deps_hide` and `deps_forget` run them all, so a module
+# does not reach into another's state and none is left answering with a tool
+# `deps` no longer finds. A hook only drops what its module kept; the next call
+# picks again.
+_DEPS_RESET_HOOKS=""
+
+# Usage: _deps_reset_modules -> runs every registered hook
+#[pub(super)]
+_deps_reset_modules() {
+    local _h
+    for _h in $_DEPS_RESET_HOOKS; do "$_h" || true; done
+}

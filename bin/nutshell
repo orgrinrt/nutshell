@@ -231,7 +231,7 @@ _nut_manifest_to() {
     while [[ -n "$dir" && "$dir" != "/" ]]; do
         [[ -f "$dir/nut.toml" ]] && { _nut_mf="$dir/nut.toml"; return 0; }
         [[ -e "$dir/.git" ]] && return 1
-        [[ "$dir" == "$HOME" ]] && return 1
+        [[ -n "${HOME:-}" && "$dir" == "$HOME" ]] && return 1
         dir="${dir%/*}"
     done
     return 1

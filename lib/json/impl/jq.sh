@@ -137,7 +137,9 @@ _json_set_jq() {
 _json_keys_jq() {
     local json="${1:-}" path="${2:-}" expr
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | if type == \"array\" then range(length) else keys[] end" 2>/dev/null
+    # Status 1 where there is no such path or it holds a scalar, as the other
+    # readers give; jq itself exits 5.
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | if type == \"array\" then range(length) else keys[] end" 2>/dev/null || return 1
 }
 
 _json_valid_jq() {
@@ -159,14 +161,14 @@ _json_type_jq() {
     local json="${1:-}" path="${2:-}" expr
     _jq_present "$json" "$path" || return 1
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | type" 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | type" 2>/dev/null || return 1
 }
 
 _json_length_jq() {
     local json="${1:-}" path="${2:-}" expr
     _jq_present "$json" "$path" || return 1
     expr="$(_jq_path "$path")"
-    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | length" 2>/dev/null
+    printf '%s\n' "$json" | "${_TOOL_PATH_jq}" -r "$expr | length" 2>/dev/null || return 1
 }
 
 # `*` recurses into objects where python's `update` and perl's slice assignment

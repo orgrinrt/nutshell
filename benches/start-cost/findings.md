@@ -138,3 +138,58 @@ to 79ms.
 
 **holds for:** this host only, bash 5.2.21, `XDG_CACHE_HOME` writable, warm in
 every arm but the cold one, tools as this container has them.
+
+## The hook path, 2026-11-23, runs `results/20261123052230` and `results/20261123055727`
+
+Same host and bash, load about 1.3 on 4 cores for both. Three arms for what a
+per-tool-call hook does: `use json` and one `json_get` of a plain path from a
+2 KB payload on stdin, the first `deps_has jq`, and a start with HOME unset.
+Targets stated before the work: 25ms for the json arm, 14ms for the first
+`deps_has` (a bare start, about 9ms, and 5ms).
+
+| per start | 3a8cb8b ms | after ms |
+|---|---|---|
+| bash sourcing init | 5.1 | 4.6 |
+| init, use deps | 17.7 | 8.4 |
+| init, use extern log | 55.4 | 39.0 |
+| script, no use, no manifest | 8.8 | 7.9 |
+| script, no use, 300-line manifest | 34.1 | 23.8 |
+| script, use json, no manifest | 67.4 | 13.2 |
+| script, use json, one json_get of 2 KB stdin | 74.4 | 16.9 |
+| script, no use, first deps_has jq | 45.6 | 12.7 |
+| script, no use, HOME unset | fails | 7.8 |
+
+Where it went:
+
+- `use json` loaded `deps`, asked it about four tools and loaded every backend,
+  the builders and `json_query`. It loads the reader in bash and the path
+  splitter now; the rest loads at the first call that needs it.
+- The first tool question loaded `toml` and checked its kept tree of the
+  manifest for a pin, about 20ms. A manifest whose text never spells the tool
+  cannot pin it, which one read of the file tells.
+- `use` keyed each file it loaded through `nut_key`, which hexes a path a byte
+  at a time, three times a module: most of what a `use` cost. The tables are
+  one associative array now. `use deps` went from 12.6ms over `init` to 3.8.
+- `json_get` ran jq twice, about 9ms. The reader in bash answers a plain path
+  where its text is jq's to the byte. Its escape decoding cut the rest of the
+  string once per escape, 5ms for the payload's command; it substitutes over
+  the whole string now.
+
+The floor against jq, `json_get` of one top-level key, best of three, in one
+process (an ad-hoc measurement, not a bench arm): jq is about 9ms whatever the
+size up to 50 KB. The floor costs about 90us a value: 2.5ms at 8 values, 9.8ms
+at 53, 34ms at 203. A document of one long string costs it 2.6ms at 2 KB,
+9.5ms at 32 KB, 40ms at 128 KB. So the floor takes a document up to 32 KB and
+parses at most 64 values, past which it hands the question to jq having spent
+less than one run of jq.
+
+Both targets met: 16.9 against 25, and 12.7 against 14 (4.8ms over the bare
+start). What is left in the json arm is the reader's parse of the payload,
+about 3ms, and the four `use`s at about 0.8ms each; in the deps arm, building
+the `lib.nut` index on the first `use` of a process, about 1ms.
+
+A `$(json_get ...)` parses the document in the subshell and loses the tree with
+it, as a `$(json_query ...)` loads `json::query` and `deps` in it.
+
+**holds for:** this host only, bash 5.2.21, jq 1.7, `XDG_CACHE_HOME` writable,
+warm in every arm but the cold one, tools as this container has them.

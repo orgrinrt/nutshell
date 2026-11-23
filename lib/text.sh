@@ -44,19 +44,27 @@ use deps
 # Module status
 # -----------------------------------------------------------------------------
 
-_TEXT_READY=0
+_TEXT_READY=""
 _TEXT_ERROR=""
 
-# Check that we have at least one usable tool for text operations
-if deps_has_any "sed" "perl" "awk"; then
-    _TEXT_READY=1
-else
-    _TEXT_ERROR="No text processing tool available (need sed, perl, or awk)"
-fi
+# _text_check -> `_TEXT_READY`, whether at least one usable tool for text
+# operations is here; asked at the first question, and again after a reset
+_text_check() {
+    [ -z "$_TEXT_READY" ] || return 0
+    if deps_has_any "sed" "perl" "awk"; then _TEXT_READY=1
+    else _TEXT_READY=0 _TEXT_ERROR="No text processing tool available (need sed, perl, or awk)"; fi
+}
+# Asked at load, as it always was; not on the load a reset makes, which waits.
+[ -n "${_TEXT_RESETTING:-}" ] || _text_check
 
 # Track which impl was loaded (useful for debugging/testing)
 _TEXT_REPLACE_IMPL=""
 _TEXT_MATCH_IMPL=""
+
+# _text_reset -> the module as it was at load: the stubs back where picks had
+# replaced them, the picks forgotten, the check made again
+_text_reset() { _NUTSHELL_TEXT_SH="" _TEXT_RESETTING=1; source "${BASH_SOURCE[0]}"; _TEXT_RESETTING=""; }
+deps_on_reset _text_reset
 
 # -----------------------------------------------------------------------------
 # Line operations (pure bash + standard tools; no impl switching needed)
@@ -479,16 +487,12 @@ text_remove_comments() {
 #[pub]
 # Check if text module is ready to use
 # Usage: text_ready -> returns 0 if ready, 1 if not
-text_ready() {
-    [ "$_TEXT_READY" = "1" ]
-}
+text_ready() { _text_check; [ "$_TEXT_READY" = "1" ]; }
 
 #[pub]
 # Get text module error message (if not ready)
 # Usage: text_error -> prints error message
-text_error() {
-    echo "$_TEXT_ERROR"
-}
+text_error() { _text_check; echo "$_TEXT_ERROR"; }
 
 # Get which implementation was selected for text_replace
 # Usage: text_replace_impl -> "grep_sed" | "sed" | "perl" | "awk" | "none" | ""

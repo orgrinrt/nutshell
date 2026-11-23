@@ -261,3 +261,13 @@ it_starts_with_home_unset() {
     rm -rf "$_ST_D"
     assert_eq "$out" "$(printf '1\n2\nok')"
 }
+
+#[test]
+it_says_there_is_no_cache_directory_with_home_unset_only_when_asked() {
+    _st_dir || return 0
+    printf '#!/usr/bin/env nutshell\nuse xdg\nprintf "start\\n"\nxdg_cache_home || printf "refused\\n"\nXDG_CACHE_HOME=/c xdg_cache_home\n' > "$_ST_D/s.sh"
+    local out
+    out="$(env -i PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" "$NUT" "$_ST_D/s.sh" 2>&1)"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "$(printf 'start\nxdg: HOME is not set, so there is no XDG_CACHE_HOME directory\nrefused\n/c')"
+}

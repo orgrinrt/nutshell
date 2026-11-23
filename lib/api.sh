@@ -70,6 +70,7 @@ _api_internal() {
 # files mark `#[pub]` is in reach after a `use` of the module, so it is listed
 # under it: `json_query` sits in `json::query`, which only `json` loads.
 _api_parts() {
+    local IFS=$' \t\n'
     local root="$1" mod="$2" seen=" $2 " queue="$2" m d
     printf '%s\n' "$mod"
     while [[ -n "$queue" ]]; do

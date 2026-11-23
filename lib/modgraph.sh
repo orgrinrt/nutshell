@@ -289,6 +289,7 @@ _mg_reset() {
 # A second file for a module already recorded: its declarations, definitions
 # and calls are added to that module rather than becoming another one.
 _mg_merge_into() {
+    local IFS=$' \t\n'
     local mod="$1" file="$2" kind values fn pair
     local visraw=""
     while IFS=$'\t' read -r kind values; do
@@ -323,6 +324,7 @@ _mg_merge_into() {
 # Falls back to the file stem, which is what every file without a manifest
 # entry gets and what this always did.
 _mg_module_of() {
+    local IFS=$' \t\n'
     local file="$1" root="${2:-}" rel name f _rest
     local stem="${file##*/}"; stem="${stem%.sh}"
     [[ -n "$root" && -r "${root}/lib.nut" ]] || { printf '%s' "$stem"; return 0; }
@@ -351,6 +353,7 @@ _mg_module_of() {
 }
 
 _mg_analyse() {
+    local IFS=$' \t\n'
     local dir="$1" file mod line kind values
     # The library root, so the manifest can say which module a file is. `dir`
     # is the lib directory; the manifest sits above it.
@@ -411,6 +414,7 @@ _mg_analyse() {
 # Splitting it means the payload that can be empty is always the last field,
 # and a trailing empty field is the one case this does not bite.
 _mg_serialise() {
+    local IFS=$' \t\n'
     local mod fn
     for mod in "${_MG_MODULES[@]}"; do
         printf 'D\t%s\t%s\n' "$mod" "${_MG_DECLARES[$mod]:-}"
@@ -423,6 +427,7 @@ _mg_serialise() {
 }
 
 _mg_load() {
+    local IFS=$' \t\n'
     local file="$1" tag key payload fn
     _mg_reset
     while IFS=$'\t' read -r tag key payload; do
@@ -504,6 +509,7 @@ modgraph_visibility() { printf '%s' "${_MG_VIS[$1]:-}"; }
 #[pub]
 # Usage: modgraph_public toml -> prints the functions toml marks #[pub], one per line
 modgraph_public() {
+    local IFS=$' \t\n'
     local fn
     for fn in ${_MG_DEFINES[$1]:-}; do
         [[ "${_MG_VIS[$fn]:-}" == "pub" ]] && printf '%s\n' "$fn"
@@ -524,6 +530,7 @@ modgraph_public() {
 #[pub]
 # Usage: modgraph_cycle -> prints a cycle path, or nothing. Returns 1 if none.
 modgraph_cycle() {
+    local IFS=$' \t\n'
     local -A state=()
     local found=""
 
@@ -592,6 +599,7 @@ modgraph_cycle() {
 #[pub]
 # Usage: modgraph_audit -> prints violations, one per line. Returns 1 if any.
 modgraph_audit() {
+    local IFS=$' \t\n'
     local found=0 mod fn owner vis declared
     local -A used=()
 

@@ -107,6 +107,7 @@ _DEPS_CONFIG_KEY=""
 # Usage: _deps_unlearn <tool> -> forgets what is known of the tool
 #[pub(super)]
 _deps_unlearn() {
+    local IFS=$' \t\n'
     local _t="$1" _k _w _new
     _deps_key "$_t" || return 1
     _k="$_dk"
@@ -124,6 +125,7 @@ _deps_unlearn() {
 # Usage: _deps_drop_caps -> forgets every capability
 #[pub(super)]
 _deps_drop_caps() {
+    local IFS=$' \t\n'
     local _w
     for _w in $_TOOL_CAN_NAMES; do eval "unset _TOOL_CAN_${_w}"; done
     _TOOL_CAN_NAMES=""
@@ -151,6 +153,7 @@ _DEPS_RESET_HOOKS=""
 # Usage: _deps_reset_modules -> runs every registered hook
 #[pub(super)]
 _deps_reset_modules() {
+    local IFS=$' \t\n'
     local _h
     for _h in $_DEPS_RESET_HOOKS; do "$_h" || true; done
 }

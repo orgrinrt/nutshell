@@ -56,6 +56,7 @@ use key super::deps::state super::deps::config
 # forgotten, so an entry in the script's own `[deps.paths]` takes effect
 # whatever got to the tool first.
 _deps_sync_config() {
+    local IFS=$' \t\n'
     local old="$_DEPS_CONFIG" t _k _rc
     _DEPS_CONFIG_KEY="${_NUT_ASKING_FROM:-}|${NUTSHELL_SCRIPT_DIR:-}|${PWD}"
     _DEPS_CONFIG=""; _deps_find_config && _DEPS_CONFIG="$_DEPS_FOUND_CONFIG"
@@ -99,6 +100,7 @@ _deps_scan_all() {
     [ "${_DEPS_SCANNED:-0}" = "1" ] && return 0
     _DEPS_SCANNED=1
     use super::deps::probe || return 1
+    local IFS=$' \t\n'
     local tools="sed awk grep perl stat mktemp find sort wc tr
         head tail dirname basename uname cut tee xargs"
     local tool
@@ -183,6 +185,7 @@ deps_on_reset() {
 # is right until something installs the tool. The manifest is read again too.
 # Usage: deps_forget [tool...] -> forgets the named tools, or every one
 deps_forget() {
+    local IFS=$' \t\n'
     local _t _k _new=""
     if [ "$#" -eq 0 ]; then
         for _k in $_DEPS_SEEN; do
@@ -328,6 +331,7 @@ deps_cap() {
 # Usage: deps_caps -> "sed_inplace=1\ngrep_pcre=1\n..."
 deps_caps() {
     _deps_scan_all
+    local IFS=$' \t\n'
     local cap _c
     for cap in $_TOOL_CAN_NAMES; do
         _deps_get _c CAN "$cap"
@@ -425,6 +429,7 @@ deps_info() {
 # Check all common tools and report status
 # Usage: deps_check -> returns 0 if all basic tools present
 deps_check() {
+    local IFS=$' \t\n'
     local required="sed awk grep stat mktemp find sort wc tr head tail"
     local missing=""
     local tool

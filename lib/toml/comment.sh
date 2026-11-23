@@ -21,6 +21,7 @@ _TOML_RE_COMMENT='^[[:blank:]]*#(.*)$'
 # _tm_inside <line> -> rc 0 where a value the reader recorded spans the line
 # past its first, so that the line is the value's and not a comment
 _tm_inside() {
+    local IFS=$' \t\n'
     local k a b
     for k in "${!_TOML_W[@]}"; do
         read -r a b _ <<< "${_TOML_W[$k]}"
@@ -40,6 +41,7 @@ _tm_inside() {
 # Returns 1 where there is no comment, 2 where the file is not TOML.
 # Usage: toml_comment "file.toml" "section.key" -> prints the comment text, one line each
 toml_comment() {
+    local IFS=$' \t\n'
     local file="${1:-}" path="${2:-}" first rest ln line t
     local -a lines above=() out=()
     [[ -n "$file" && -n "$path" ]] || return 1

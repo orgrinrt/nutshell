@@ -162,6 +162,7 @@ _log_marked() {
 # Unlike log_step, which is a flat heading, these nest.
 # Usage: log_open "Partitioning"
 log_open() {
+    local IFS=$' \t\n'
     _log_should_emit info || { LOG_DEPTH=$(( LOG_DEPTH + 1 )); return 0; }
     _log_marks_init
     local bold="" reset=""
@@ -189,6 +190,7 @@ log_close() {
 # It worked. Marked, indented, and counted.
 # Usage: log_ok "made an ESP at /dev/sdb1"
 log_ok() {
+    local IFS=$' \t\n'
     _log_should_emit info || return 0
     _log_marked "$_LOG_M_OK" '\033[0;32m' "$*"
 }
@@ -197,6 +199,7 @@ log_ok() {
 # Worth a look, and the run goes on.
 # Usage: log_warned "the free region is tight"
 log_warned() {
+    local IFS=$' \t\n'
     LOG_WARNINGS=$(( LOG_WARNINGS + 1 ))
     _log_should_emit warn || return 0
     _log_marked "$_LOG_M_WARN" '\033[0;33m' "$*"
@@ -206,6 +209,7 @@ log_warned() {
 # It did not work.
 # Usage: log_failed "could not set the esp flag"
 log_failed() {
+    local IFS=$' \t\n'
     LOG_FAILURES=$(( LOG_FAILURES + 1 ))
     _log_should_emit error || return 0
     _log_marked "$_LOG_M_BAD" '\033[0;31m' "$*"
@@ -216,6 +220,7 @@ log_failed() {
 # not read as a run of results.
 # Usage: log_flat "sgdisk: 3 partitions"
 log_flat() {
+    local IFS=$' \t\n'
     _log_should_emit info || return 0
     _log_marked "$_LOG_M_FLAT" "" "$*"
 }
@@ -337,6 +342,7 @@ log_worst() {
 #[pub]
 # Usage: log_debug "probing $path" -> to stderr, only when LOG_LEVEL=debug
 log_debug() {
+    local IFS=$' \t\n'
     _log_should_emit debug || return 0
     local color="" reset=""
     if _log_should_color; then
@@ -349,6 +355,7 @@ log_debug() {
 #[pub]
 # Usage: log_info "building" -> to stdout
 log_info() {
+    local IFS=$' \t\n'
     _log_should_emit info || return 0
     local color="" reset=""
     if _log_should_color; then
@@ -361,6 +368,7 @@ log_info() {
 #[pub]
 # Usage: log_warn "falling back to sed" -> to stderr
 log_warn() {
+    local IFS=$' \t\n'
     _log_should_emit warn || return 0
     local color="" reset=""
     if _log_should_color; then
@@ -373,6 +381,7 @@ log_warn() {
 #[pub]
 # Usage: log_error "no such file" -> to stderr
 log_error() {
+    local IFS=$' \t\n'
     _log_should_emit error || return 0
     local color="" reset=""
     if _log_should_color; then
@@ -385,6 +394,7 @@ log_error() {
 #[pub]
 # Usage: log_success "41 passed" -> to stdout
 log_success() {
+    local IFS=$' \t\n'
     _log_should_emit info || return 0
     local color="" reset=""
     if _log_should_color; then
@@ -397,6 +407,7 @@ log_success() {
 #[pub]
 # Usage: log_step "Building" -> a heading, to stdout
 log_step() {
+    local IFS=$' \t\n'
     _log_should_emit info || return 0
     local color="" reset="" bold=""
     if _log_should_color; then
@@ -410,6 +421,7 @@ log_step() {
 #[pub]
 # Usage: log_substep "linking" -> an indented line under a step
 log_substep() {
+    local IFS=$' \t\n'
     _log_should_emit info || return 0
     local color="" reset=""
     if _log_should_color; then
@@ -431,6 +443,7 @@ log_substep() {
 #[pub]
 # Usage: log_tagged BLOCK red "unsigned commit" -> "[BLOCK] unsigned commit"
 log_tagged() {
+    local IFS=$' \t\n'
     local tag="$1" want="$2"; shift 2
     local color="" reset=""
     if _log_should_color; then
@@ -452,6 +465,7 @@ log_tagged() {
 #[pub]
 # Usage: log_fatal "cannot continue" -> to stderr, then exits 1
 log_fatal() {
+    local IFS=$' \t\n'
     local color="" reset=""
     if _log_should_color; then
         color='\033[0;31m'  # Red

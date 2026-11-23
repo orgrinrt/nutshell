@@ -256,8 +256,14 @@ str_distance() {
             _left=$_best
             _j=$(( _j + 1 ))
         done
+        # The row is split on whitespace, whatever IFS the caller holds, and the
+        # caller's IFS is put back after: POSIX has no `local`.
+        _sd_ifs_set="${IFS+s}"; _sd_ifs="${IFS-}"
+        IFS=' 	
+'
         # shellcheck disable=SC2086
         set -- $_newrow
+        if [ -n "$_sd_ifs_set" ]; then IFS="$_sd_ifs"; else unset IFS; fi
         _i=$(( _i + 1 ))
     done
 

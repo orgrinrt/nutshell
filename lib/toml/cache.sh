@@ -97,7 +97,10 @@ _toml_cache_trusted() {
 _toml_cache_load() {
     local f="$1" _tc_src="$2" _tcb _tca _tcr body g fd ok=1
     _toml_cache_at "$f" || return 1
-    [[ -r "$_tca" ]] || return 1
+    # A regular file and no link before the open: opening a FIFO blocks until
+    # a writer comes, and a device never ends. The checks after the open still
+    # catch a file swapped in between.
+    [[ -f "$_tca" && ! -L "$_tca" && -r "$_tca" ]] || return 1
     for g in "${_TOML_CACHE_FLOOR}/bash.sh" "${_TOML_CACHE_FLOOR}/bash_lex.sh" \
         "${_TOML_CACHE_FLOOR}/bash_path.sh" "$_TOML_CACHE_SELF"; do
         [[ "$_tca" -nt "$g" ]] || return 1

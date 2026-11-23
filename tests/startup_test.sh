@@ -119,18 +119,87 @@ it_defines_each_stubbed_function_in_the_module_the_stub_names() {
     # would stop at the guard at the first call. Each row is checked in a bash
     # that loaded only that module.
     local table="${NUT%/bin/nutshell}/prelude.nut" init="${NUT%/bin/nutshell}/init"
-    local name mod fns n=0 bad=""
+    local name mod fns bad="" listed want
     [[ -r "$table" ]] || { assert_eq "missing" "$table"; return 0; }
     while read mod fns; do
         case "$mod" in ""|"#"*) continue ;; esac
         for name in $fns; do
-            n=$(( n + 1 ))
             env -i PATH="$PATH" HOME="$HOME" bash -c '. "$1" || exit 1; use "$2" >/dev/null 2>&1; declare -F "$3" >/dev/null' \
                 _ "$init" "$mod" "$name" || bad+=" $name($mod)"
         done
     done < "$table"
     assert_eq "$bad" ""
-    # The public functions `use extern log` defined on dev at 2173589, which
-    # is what the interpreter loaded before every script there.
-    assert_eq "$n" "165"
+    # The table names exactly the public functions `use extern log` defines,
+    # which is what the interpreter loaded before every script on dev: those
+    # a bash has after the `use` and did not have after `init` alone.
+    local tmp; tmp="$(mktemp -d)"
+    listed="$(while read mod fns; do
+        case "$mod" in ""|"#"*) continue ;; esac
+        printf "%s\n" $fns
+    done < "$table" | LC_ALL=C sort)"
+    want="$(env -i PATH="$PATH" HOME="$HOME" bash -c '. "$1" || exit 1
+        declare -F > "$2.a"; use extern log >/dev/null 2>&1; declare -F > "$2.b"
+        LC_ALL=C comm -13 <(LC_ALL=C sort "$2.a") <(LC_ALL=C sort "$2.b") | sed "s/^declare -f //" | grep -v "^_"
+        rm -f "$2.a" "$2.b"' _ "$init" "$tmp/f")"
+    rm -rf "$tmp"
+    assert_eq "$listed" "$want"
+    assert_contains "$listed" "log_warn"
+}
+
+#[test]
+it_keeps_a_function_the_script_defined_over_a_later_use_of_its_module() {
+    # On dev, where the interpreter loaded `log` and `extern` first, this
+    # printed `my own warn` three times: the later `use`s loaded nothing.
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'log_warn() { printf "my own warn\n"; }
+log_warn x
+use log
+log_warn x
+use extern
+log_warn x')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "$(printf 'my own warn\nmy own warn\nmy own warn')"
+}
+
+#[test]
+it_replaces_the_stubs_of_a_module_beside_a_function_the_script_kept() {
+    # Only the function the script wrote is kept: the module's other stubs give
+    # way to the real functions.
+    _st_dir || return 0
+    local out
+    out="$(_st_run 'log_warn() { printf "mine\n"; }
+use log
+log_warn x
+case "$(declare -f log_info)" in *_nut_prelude*) printf "stub\n" ;; *) printf "real\n" ;; esac
+log_info hi')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "$(printf 'mine\nreal\n[INFO] hi')"
+}
+
+#[test]
+it_keeps_a_function_defined_before_the_interpreter_is_sourced() {
+    local out
+    out="$(env -i PATH="$PATH" HOME="$HOME" bash -c 'log_warn() { printf "mine\n"; }; source "$1" >/dev/null 2>&1; log_warn x' _ "$NUT")"
+    assert_eq "$out" "mine"
+}
+
+#[test]
+it_says_a_stub_whose_module_did_not_define_it() {
+    # A stub made again after its module loaded: the `use` loads nothing, and
+    # the guard stops the stub calling itself.
+    local out rc
+    out="$(env -i PATH="$PATH" HOME="$HOME" bash -c 'source "$1" >/dev/null 2>&1; use log; unset -f log_warn; _nut_prelude_stubs; log_warn x' _ "$NUT" 2>&1)"; rc=$?
+    assert_eq "$rc" "1"
+    assert_eq "$out" "[ERROR] log_warn: use log loaded but did not define it"
+}
+
+#[test]
+it_runs_a_stub_inside_a_subshell_and_leaves_the_parent_unloaded() {
+    _st_dir || return 0
+    local out
+    out="$(_st_run '( log_info hi )
+nutshell_loaded log && printf "loaded\n" || printf "not loaded\n"')"
+    rm -rf "$_ST_D"
+    assert_eq "$out" "$(printf '[INFO] hi\nnot loaded')"
 }

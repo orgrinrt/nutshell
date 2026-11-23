@@ -43,8 +43,11 @@ toml_find() {
     [[ -n "$key" ]] || return 1
     shift 2 || return 1
     # No text to scan for where it is empty, or spans lines, which a file may
-    # spell with carriage returns or a trailing backslash.
+    # spell with carriage returns or a trailing backslash, or is an array or an
+    # inline table, which `toml_get` prints on one line however the file
+    # spells it.
     [[ -n "$want" && "$want" != *$'\n'* && "$want" != *$'\r'* ]] || scan=0
+    case "$want" in '['*|'{'*) scan=0 ;; esac
     needle="$want"
     if [[ "$want" =~ $_TOML_RE_FIND_DATE ]]; then needle="${want:0:10}"
     elif [[ "$want" =~ $_TOML_RE_FIND_TIME ]]; then needle="${want%%Z*}"

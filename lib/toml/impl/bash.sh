@@ -85,7 +85,7 @@ _toml_load() {
 }
 
 # _toml_parse_text <id> <text> -> the tree, or rc 2 and `_TOML_ERR`
-#[pub(super)]
+#[pub(lib)]
 _toml_parse_text() {
     local LC_ALL=C
     _tp_id="$1"

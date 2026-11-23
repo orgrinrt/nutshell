@@ -171,3 +171,27 @@ it_refuses_a_file_the_reader_refuses_when_asked_for_a_comment() {
     rm -rf "$d"
     assert_eq "$rc" "2"
 }
+
+#[test]
+it_finds_a_date_time_the_file_spells_with_lower_case_letters_or_a_space() {
+    local d; d="$(_tq_dir)"
+    printf 'at = 2024-05-06t10:00:00z\n' > "$d/a.toml"
+    printf 'at = 2024-05-06 10:00:00Z\n' > "$d/b.toml"
+    printf 'at = 2024-05-07T10:00:00Z\n' > "$d/c.toml"
+    local got; got="$(cd "$d" && toml_find at 2024-05-06T10:00:00Z a.toml b.toml c.toml)"
+    rm -rf "$d"
+    assert_eq "$got" $'a.toml\nb.toml'
+}
+
+#[test]
+it_finds_a_float_the_file_writes_with_underscores_and_a_sign() {
+    local d; d="$(_tq_dir)"
+    printf 'x = 1_000.5\n' > "$d/a.toml"
+    printf 'x = +2.5\n' > "$d/b.toml"
+    local one two
+    one="$(cd "$d" && toml_find x 1000.5 a.toml b.toml)"
+    two="$(cd "$d" && toml_find x 2.5 a.toml b.toml)"
+    rm -rf "$d"
+    assert_eq "$one" "a.toml"
+    assert_eq "$two" "b.toml"
+}

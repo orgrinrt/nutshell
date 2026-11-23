@@ -87,5 +87,7 @@ toml::impl::yq           lib/toml/impl/yq.sh          internal
 toml::cache              lib/toml/cache.sh            internal
 toml::json               lib/toml/json.sh
 toml::write              lib/toml/write.sh
+toml::find               lib/toml/find.sh
+toml::comment            lib/toml/comment.sh
 validate                 lib/validate.sh
 xdg                      lib/xdg.sh

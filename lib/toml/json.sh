@@ -12,7 +12,7 @@
 [ -n "${_NUTSHELL_TOML_JSON_SH:-}" ] && return 0
 _NUTSHELL_TOML_JSON_SH=1
 
-use super::toml
+use super::toml super::toml::impl::bash
 
 #[pub]
 # Convert a TOML file to JSON, compact, keys in the order the file gives them.

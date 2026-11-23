@@ -191,6 +191,12 @@ _nut_resolve() {
         toml::write)
             { printf '%s' "$_nr_root/lib/toml/write.sh"; return 0; }
             ;;
+        toml::find)
+            { printf '%s' "$_nr_root/lib/toml/find.sh"; return 0; }
+            ;;
+        toml::comment)
+            { printf '%s' "$_nr_root/lib/toml/comment.sh"; return 0; }
+            ;;
         validate)
             { printf '%s' "$_nr_root/lib/validate.sh"; return 0; }
             ;;

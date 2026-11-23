@@ -21,7 +21,7 @@
 #   use git
 #
 #   git_require_repo "$dir" || exit 2
-#   base="$(git_trunk dev main)"
+#   base="$(git_trunk dev main)"        # or git_trunk --remote
 #   git_changed_files "$base" | while read -r f; do ...; done
 # =============================================================================
 
@@ -70,25 +70,69 @@ git_root() {
     git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null
 }
 
-# git_branch [dir]
+# git_branch [--show-current|--kind] [dir]
+#
+# The checked-out branch. A detached head has none, and the three forms say so
+# in their own ways: the plain one answers `HEAD`, as it always has,
+# `--show-current` answers nothing (git's own form, and what the clones that ask
+# it raw expect), and `--kind` answers `branch` or `detached`. A repository with
+# no commit yet is on a branch all the same and names it. Where the directory
+# is not a repository every form fails.
 #[pub]
-# Usage: git_branch [dir] -> the checked-out branch
+# Usage: git_branch [--show-current|--kind] [dir] -> the branch, "HEAD" or "" detached, "branch"|"detached"
 git_branch() {
-    git -C "${1:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null
+    local mode=name
+    case "${1:-}" in
+        --show-current) mode=current; shift ;;
+        --kind) mode=kind; shift ;;
+    esac
+    local dir="${1:-.}" name
+    git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 1
+    if name="$(git -C "$dir" symbolic-ref -q --short HEAD 2>/dev/null)"; then
+        case "$mode" in kind) printf 'branch\n' ;; *) printf '%s\n' "$name" ;; esac
+        return 0
+    fi
+    case "$mode" in
+        name) printf 'HEAD\n' ;;
+        kind) printf 'detached\n' ;;
+    esac
+    return 0
 }
 
-# git_trunk <preferred...>
+# git_trunk [-C <dir>] [--remote[=<name>] [--live]] [<preferred...>]
 #
 # The first named branch that exists, so a caller states its policy once and
 # still works in a repository that has not adopted it yet. `git_trunk dev main`
 # is this workspace's rule written down: dev is the trunk, main is the fallback
 # for a repository that has only just joined.
+#
+# `--remote` asks the remote instead of the local branches: the first
+# preferred branch the remote has (`dev main` where none is named), else the
+# branch the remote's HEAD names. The remote is `origin` unless `=<name>` says
+# otherwise, and it is read from the remote-tracking refs the clone already has;
+# `--live` asks the remote itself, which needs the network. Fails where there is
+# no such remote or it has none of them.
 #[pub]
-# Usage: git_trunk dev main -> the first of those that exists
+# Usage: git_trunk dev main -> the first of those that exists; git_trunk --remote -> the remote's dev, else main, else its HEAD
 git_trunk() {
-    local candidate
+    local dir=. remote="" live=0 candidate
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -C) dir="${2:?-C wants a directory}"; shift 2 ;;
+            --remote) remote=origin; shift ;;
+            --remote=*) remote="${1#--remote=}"; shift ;;
+            --live) live=1; shift ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+    if [ -n "$remote" ]; then
+        [ $# -gt 0 ] || set -- dev main
+        _git_trunk_remote "$dir" "$remote" "$live" "$@"
+        return
+    fi
     for candidate in "$@"; do
-        if git rev-parse --verify "$candidate" >/dev/null 2>&1; then
+        if git -C "$dir" rev-parse --verify "$candidate" >/dev/null 2>&1; then
             printf '%s' "$candidate"
             return 0
         fi
@@ -233,4 +277,103 @@ git_tracked() {
             case "$f" in $p) printf '%s\n' "$f"; break ;; esac
         done
     done
+}
+
+# -----------------------------------------------------------------------------
+# The trunk a remote has
+# -----------------------------------------------------------------------------
+#
+# Answered from the remote-tracking refs a clone already has, or from the remote
+# itself where the caller asks for the live answer.
+
+# _git_remote_branches <dir> <remote> <live>
+#
+# The branch names the remote has, one per line. Live asks the remote and fails
+# where it cannot be reached; otherwise the remote-tracking refs answer, and
+# fail where the remote is not configured.
+_git_remote_branches() {
+    local dir=$1 remote=$2 live=$3
+    if [ "$live" = 1 ]; then
+        local out ref _o
+        out="$(git -C "$dir" ls-remote --heads "$remote" 2>/dev/null)" || return 1
+        while IFS=$'\t' read -r _o ref; do
+            [ -n "$ref" ] && printf '%s\n' "${ref#refs/heads/}"
+        done <<< "$out"
+        return 0
+    fi
+    git -C "$dir" remote get-url "$remote" >/dev/null 2>&1 || return 1
+    git -C "$dir" for-each-ref --format='%(refname)' "refs/remotes/${remote}/" 2>/dev/null |
+        sed "s|^refs/remotes/${remote}/||" | grep -vx HEAD
+    return 0
+}
+
+# _git_remote_head <dir> <remote> <live>
+#
+# The branch the remote's HEAD names, or nothing where that is not known.
+_git_remote_head() {
+    local dir=$1 remote=$2 live=$3
+    if [ "$live" = 1 ]; then
+        local out line
+        out="$(git -C "$dir" ls-remote --symref "$remote" HEAD 2>/dev/null)" || return 0
+        while IFS= read -r line; do
+            case "$line" in "ref: refs/heads/"*) line="${line#ref: refs/heads/}"; printf '%s' "${line%%$'\t'*}"; return 0 ;; esac
+        done <<< "$out"
+    else
+        git -C "$dir" symbolic-ref -q "refs/remotes/${remote}/HEAD" 2>/dev/null |
+            sed "s|^refs/remotes/${remote}/||"
+    fi
+}
+
+# _git_trunk_remote <dir> <remote> <live> <candidates...>
+#
+# The first candidate the remote has, else the branch its HEAD names. Fails
+# where the remote cannot be asked or has neither.
+_git_trunk_remote() {
+    local dir=$1 remote=$2 live=$3; shift 3
+    local have candidate head
+    have="$(_git_remote_branches "$dir" "$remote" "$live")" || return 1
+    for candidate in "$@"; do
+        if printf '%s\n' "$have" | grep -qxF -- "$candidate"; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    head="$(_git_remote_head "$dir" "$remote" "$live")"
+    [ -n "$head" ] || return 1
+    printf '%s' "$head"
+}
+
+# -----------------------------------------------------------------------------
+# What a clone holds that nobody else does
+# -----------------------------------------------------------------------------
+#
+# The two questions that decide whether a clone can be thrown away.
+
+# git_is_clean [dir]
+#
+# Whether the checkout has nothing uncommitted: no staged change, no unstaged
+# change and no untracked file that is not ignored. An ignored file alone is
+# clean, since it is what a clone regenerates. Exit 0 when clean, 1 when not,
+# 2 where the directory is not a repository, so a caller can tell a dirty
+# clone from a place that is not one.
+#[pub]
+# Usage: git_is_clean [dir] -> 0 clean, 1 uncommitted work, 2 not a repository
+git_is_clean() {
+    local dir="${1:-.}" out
+    out="$(git -C "$dir" status --porcelain 2>/dev/null)" || return 2
+    [ -z "$out" ]
+}
+
+# git_unpushed [dir]
+#
+# The commits on any local branch that no remote-tracking ref contains, one
+# per line as `<hash><tab><subject>`. With no remote at all that is every
+# commit. Tags and the stash are not branches and are not read.
+#[pub]
+# Usage: git_unpushed [dir] -> "<hash>\t<subject>" per commit only this clone has; 2 where not a repository
+git_unpushed() {
+    local dir="${1:-.}"
+    git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 2
+    git -C "$dir" log --branches --not --remotes --format='%H%x09%s' 2>/dev/null
+    return 0
 }

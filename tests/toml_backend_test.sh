@@ -129,7 +129,7 @@ for f in "$3"/*.toml; do
 done
 printf 'backend\t%s\n' "$_TOML_BACKEND"
 EOF
-    ( cd / && "${NUTSHELL_ROOT}/bin/nutshell" "$d/sub/s.sh" "$FIX" "$_TB_GET" "$d/bad" 2>&1 )
+    ( cd / && XDG_CACHE_HOME="$d/cache" "${NUTSHELL_ROOT}/bin/nutshell" "$d/sub/s.sh" "$FIX" "$_TB_GET" "$d/bad" 2>&1 )
 }
 
 # _tb_check <backend> <output> -> asserts the backend ran and read every fixture
@@ -240,19 +240,57 @@ it_picks_its_backend_from_pins_deps_reads_through_toml() {
     printf 'a = 1\n[t]\nb = "x"\n' > "$d/f.toml"
     cat > "$d/sub/s.sh" <<'EOS'
 use toml deps
-printf 'a=%s\n' "$(toml_get "$1" a)"
 toml_get "$1" a > /dev/null
 printf 'backend=%s\n' "$_TOML_BACKEND"
+printf 'a=%s\n' "$(toml_get "$1" a)"
 deps_has jq > /dev/null
 printf 't.b=%s\n' "$(toml_get "$1" t.b)"
 printf 'deps=%s\n' "$(toml_get "$2" deps.paths.yq)"
 printf 'a=%s\n' "$(toml_get "$1" a)"
 EOS
-    out="$( cd / && "${NUTSHELL_ROOT}/bin/nutshell" "$d/sub/s.sh" "$d/f.toml" "$d/nut.toml" 2>/dev/null )"
-    assert_eq "$out" "a=1
-backend=bash
+    out="$( cd / && XDG_CACHE_HOME="$d/cache" "${NUTSHELL_ROOT}/bin/nutshell" "$d/sub/s.sh" "$d/f.toml" "$d/nut.toml" 2>/dev/null )"
+    assert_eq "$out" "backend=bash
+a=1
 t.b=x
 deps=${d}/no-yq
 a=1"
     rm -rf "$d"
+}
+
+# _tb_check_kept <output> -> every fixture answered as the JSON and values above
+# give it, each from the floor's kept tree, and the files that are not TOML 1.0
+# refused all the same
+_tb_check_kept() {
+    local out="$1" n j p v
+    while IFS=$'\t' read -r n j; do
+        assert_contains "$out" "json	${n}	${j}"
+        assert_contains "$out" "from	${n}	bash"
+    done <<< "$_TB_JSON"
+    while IFS=$'\t' read -r n p v; do
+        assert_contains "$out" "get	${n}	${p}	${v}"
+    done <<< "$_TB_GET"
+    while IFS=$'\t' read -r n _; do
+        [[ " ${_TB_LAX} " == *" yq ${n} "* ]] && continue
+        assert_contains "$out" "bad	${n}	2"
+    done <<< "$_TB_BAD"
+}
+
+#[test]
+it_answers_every_fixture_alike_from_the_trees_the_floor_kept_where_a_tool_is_picked() {
+    # N1 holds across the cache: the floor runs first and keeps a tree for each
+    # fixture, then a process whose backend is the tool reads the same files
+    # and every answer is the one the tool gives in the tests above.
+    local t be; t="$(mktemp -d)"
+    _tb_fake "$t/yq" 'yq 0.0.0' "$t/log"
+    _tb_fake "$t/taplo" 'something 1.0' "$t/log"
+    _tb_run "$t/u" "$t/yq" "$t/taplo" > /dev/null
+    for be in taplo yq; do
+        if [[ "$be" == taplo ]]; then deps_can toml_json_taplo || continue
+        else [[ "$(deps_variant yq)" == mikefarah ]] && deps_can toml_read || continue; fi
+        if [[ "$be" == taplo ]]; then _tb_run "$t/u" "$t/yq" "$(deps_path taplo)" > "$t/out"
+        else _tb_run "$t/u" "$(deps_path yq)" "$t/taplo" > "$t/out"
+        fi
+        _tb_check_kept "$(cat "$t/out")"
+    done
+    rm -rf "$t"
 }

@@ -54,6 +54,35 @@ _toml_cache_at() {
 # What parsed a kept tree: the floor's directory and the bash that ran it.
 _toml_cache_by() { _tcb="${_TOML_CACHE_FLOOR}|${BASH_VERSION}"; }
 
+# What this process has already checked, held as open descriptors so that the
+# inode checked is the one compared again: bash has no builtin that reads an
+# inode number, but `-ef` on `/dev/fd/N` and the path compares device and inode.
+# A directory or a kept tree swapped for another inode is not found here and is
+# checked again; one that is the same inode is not. A mode changed after the
+# check, by the reader's own hand, is not seen until the next process. Bounded,
+# and a subshell's additions are gone with it.
+declare -gA _TOML_CACHE_DIRFD=() _TOML_CACHE_FILEFD=()
+
+# _toml_cache_held <array name> <path> -> rc 0 where <path> is still the inode
+# the array holds a descriptor for
+_toml_cache_held() {
+    local -n _tch="$1"
+    [[ -n "${_tch[$2]:-}" && "/dev/fd/${_tch[$2]}" -ef "$2" ]]
+}
+
+# _toml_cache_hold <array name> <path> <fd to duplicate | -> keeps a descriptor
+# on the inode just checked, in place of one it held for that path
+_toml_cache_hold() {
+    local -n _tch="$1"
+    local h
+    [[ -z "${_tch[$2]:-}" ]] || { h="${_tch[$2]}"; exec {h}<&-; unset "_tch[$2]"; }
+    (( ${#_tch[@]} < 64 )) || return 0
+    if [[ "$3" == - ]]; then { exec {h}< "$2"; } 2>/dev/null || return 0
+    else { exec {h}<&"$3"; } 2>/dev/null || return 0
+    fi
+    _tch[$2]="$h"
+}
+
 # _toml_cache_trusted <file> <fd> <root> -> rc 0 where the file open on <fd> is
 # the one at <file>, and it and every directory from its own up to <root> are
 # the reader's own and neither group- nor other-writable, none of them below
@@ -67,24 +96,45 @@ _toml_cache_by() { _tcb="${_TOML_CACHE_FLOOR}|${BASH_VERSION}"; }
 # directory, could be swapped, so each is checked. Ownership is bash's own
 # test; the mode has no builtin, and `find -perm` is the POSIX spelling of it,
 # `-H` so a `/proc` entry is read as the file it opens. A `find` that fails
-# trusts nothing.
+# trusts nothing. One `find` takes what is not already checked in this process:
+# the file where this inode was not, the directories where theirs was not.
 _toml_cache_trusted() {
-    local p="$1" fd="/dev/fd/$2" root="$3" d open
-    local -a list
+    local p="$1" fd="/dev/fd/$2" root="$3" d open dh="" need_f=1 need_d=1
+    local -a list=()
     [[ -f "$fd" && -O "$fd" && ! -L "$p" && "$fd" -ef "$p" ]] || return 1
-    if [[ -e "/proc/${BASHPID:-$$}/fd/$2" ]]; then list=("/proc/${BASHPID:-$$}/fd/$2")
-    else list=("$p")
-    fi
     d="${p%/*}"
-    while [[ "$d" != "$root" ]]; do
-        [[ "$d" == "$root"/* && -d "$d" && ! -L "$d" && -O "$d" ]] || return 1
+    ! _toml_cache_held _TOML_CACHE_FILEFD "$p" || need_f=0
+    ! _toml_cache_held _TOML_CACHE_DIRFD "$d" || need_d=0
+    (( need_f || need_d )) || return 0
+    if (( need_f )); then
+        if [[ -e "/proc/${BASHPID:-$$}/fd/$2" ]]; then list=("/proc/${BASHPID:-$$}/fd/$2")
+        else list=("$p")
+        fi
+    fi
+    if (( need_d )); then
+        { exec {dh}< "$d"; } 2>/dev/null || return 1
+        while [[ "$d" != "$root" ]]; do
+            [[ "$d" == "$root"/* && -d "$d" && ! -L "$d" && -O "$d" ]] || { exec {dh}<&-; return 1; }
+            list+=("$d")
+            d="${d%/*}"
+        done
+        [[ -d "$d" && -O "$d" ]] || { exec {dh}<&-; return 1; }
         list+=("$d")
-        d="${d%/*}"
-    done
-    [[ -d "$d" && -O "$d" ]] || return 1
-    list+=("$d")
-    open="$(find -H "${list[@]}" -prune \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" || return 1
-    [[ -z "$open" ]]
+        d="${p%/*}"
+    fi
+    open="$(find -H "${list[@]}" -prune \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" || open=x
+    if [[ -n "$open" ]]; then
+        [[ -z "$dh" ]] || exec {dh}<&-
+        return 1
+    fi
+    if (( need_d )); then
+        # The descriptor opened before the check, still the path's inode.
+        if ! [[ "/dev/fd/$dh" -ef "$d" ]]; then exec {dh}<&-; return 1; fi
+        _toml_cache_hold _TOML_CACHE_DIRFD "$d" "$dh"
+        exec {dh}<&-
+    fi
+    (( ! need_f )) || _toml_cache_hold _TOML_CACHE_FILEFD "$p" "$2"
+    return 0
 }
 
 # The tree kept for a file's text, put in place of the one the floor holds.

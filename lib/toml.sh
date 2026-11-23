@@ -166,7 +166,8 @@ _toml_tool_json() {
 
 # _toml_open_values <file> -> the file read for its values, codes as `_toml_open`
 # The tree of the backend's JSON, made once while the file's text is the same.
-# The floor's tree where that is loaded already for the same text, since it
+# The floor's tree where that is loaded already or kept by an earlier process for
+# the same text, since it
 # answers everything, or where the backend cannot serve. `_TOML_FROM` says
 # which, `json` or `bash`. Where `_TOML_FLOOR_ONLY` is set, the floor alone: deps
 # sets it to read its own pins, since a backend is picked by asking deps.
@@ -179,6 +180,11 @@ _toml_open_values() {
     [[ "$_TOML_ID" == "$f" && "$_TOML_SRC" == "$c" ]] && { _toml_open "$f"; return; }
     _TOML_FROM=json
     [[ "$_TOML_ID" == "json$_TOML_US$f" && "$_TOML_SRC" == "$c" ]] && return 0
+    # A tree the floor kept for this very text answers everything, so a cold
+    # process takes it before any backend is asked.
+    _TOML_FROM=bash
+    _toml_cache_load "$f" "$c" && return 0
+    _TOML_FROM=json
     # A number past 64 bits is not refused by every tool: taplo gives
     # -9223372036854775809 as 0. A file that may hold one goes to the floor.
     # The match is on the text, so 19 digits in a row inside a string, a

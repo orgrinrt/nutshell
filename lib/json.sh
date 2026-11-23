@@ -61,10 +61,11 @@
 #     whole document, and an empty key cannot be reached
 #   - outside it: a string holding a NUL or a lone surrogate, which jq and perl
 #     repair or refuse and python and the reader in bash keep; and a number
-#     jq or perl would respell, where the reader in bash that prints it as
-#     written is absent (a shell without bash) or cannot hold the document
-#     (nested past 400 levels), which comes back in the tool's spelling, `1e3`
-#     as `1E+3` under jq and `1000` under perl, and not as nothing
+#     jq or perl would respell (jq 1.7 only an exponent, perl a fraction too),
+#     where neither the reader in bash, up to `_JSON_FLOOR_MAX` bytes and 400
+#     levels deep, nor python, at any size, is there to print it as written:
+#     it comes back in the tool's spelling, `1e3` as `1E+3` under jq and
+#     `1000` under perl, and not as nothing
 # =============================================================================
 
 # Prevent multiple inclusion
@@ -227,10 +228,19 @@ _json_read() {
     [ "$rc" -eq 7 ] || return "$rc"
     # A backend ends a get with 7 where it would print a number, or a container
     # holding one, in a spelling of its own, `1e3` as `1E+3` or `1000`, and the
-    # document's is the answer: the reader in bash has it to the byte. Where it
-    # cannot answer, a shell without it or a document nested deeper than it
-    # holds, the backend's spelling is, and a status of 0 beats none.
-    if type _json_get_bash >/dev/null 2>&1 && _json_get_bash "$json" "$_js_out"; then
+    # document's is the answer. The reader in bash has it to the byte and runs no
+    # process, but costs a parse in bash, so it answers up to the size where jq
+    # is the faster. Past that python does, which keeps the text of every number
+    # it parses and is exact at any size. Where neither can, a shell without bash
+    # or one with no python and a document nested deeper than the reader holds
+    # or bigger than it may be asked about, the backend's spelling is the answer,
+    # and a status of 0 beats none.
+    if [ "${#json}" -le "$_JSON_FLOOR_MAX" ] && type _json_get_bash >/dev/null 2>&1 \
+        && _json_get_bash "$json" "$_js_out"; then
+        return 0
+    fi
+    if [ "$_JSON_NOW" != python ] && { deps_has python3 || deps_has python; } \
+        && use super::json::impl::python && _json_get_python "$json" "$_js_out"; then
         return 0
     fi
     "_json_getn_${_JSON_NOW}" "$json" "$_js_out"

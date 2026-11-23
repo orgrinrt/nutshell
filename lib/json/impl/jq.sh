@@ -109,7 +109,16 @@ def step($s):
     else empty end;
 def at($p): if ($p | length) == 0 then . else (step($p[0]) | at($p[1:])) end;
 def nope: "" | halt_error(1);
-def odd: [.. | numbers | tojson | select(test("[.eE]|[0-9]{16}"))] | length > 0;
+# A digit and then an exponent mark outside a string, in the text of the document
+# and not in what jq prints: jq spells `1e-5` as `0.00001`. One linear pass.
+def hasexp: $raw | test("\\A(?:\"(?:[^\"\\\\]|\\\\.)*+\"|[^\"0-9]|[0-9](?![eE]))*+[0-9][eE]");
+# jq 1.7 keeps the text of a number through `fromjson` and `tojson` except for an
+# exponent; 1.6 turns the number into a double and prints that.
+def keeps: (1.50 | tojson) == "1.50";
+def holds: [.. | numbers] | length > 0;
+def odd:
+    if keeps then (holds and hasexp)
+    else [.. | numbers | tojson | select(test("[.eE]|[0-9]{16}"))] | length > 0 end;
 def doc: if strict then (try fromjson catch nope) else nope end;
 def read(f):
     ([doc | at($segs | split("\u001f") | map(select(. != "")))]) as $r
@@ -122,16 +131,18 @@ def read(f):
 _jq_read() {
     local rc=0
     printf '%s\n' "$1" | "${_TOOL_PATH_jq}" -R -s -c -S -r --arg segs "${2:-}" \
-        "${_JQ_READ_DEFS} read($3)" 2>/dev/null || rc=$?
+        ". as \$raw | ${_JQ_READ_DEFS} read($3)" 2>/dev/null || rc=$?
     [ "$rc" -eq 0 ] || [ "$rc" -eq 7 ] || rc=1
     return "$rc"
 }
 
-# A number is printed as the document wrote it, which jq does not do: it prints
-# `1e3` as `1E+3`, in a container as much as alone. So jq ends the run with 7
-# where the node is, or holds, a number with a fraction, an exponent or sixteen
-# digits (judged on the numbers alone, never on a string that looks like one),
-# and `json.sh` has the reader in bash answer instead; `_json_getn_jq` is what jq
+# A number is printed as the document wrote it, which jq 1.7 does for everything
+# but an exponent: `1e3` is `1E+3`, in a container as much as alone. So jq ends
+# the run with 7 where the node is, or holds, a number and the document has an
+# exponent outside a string, and `json.sh` has another reader answer. A jq that
+# does not keep the text (1.6) says 7 for a fraction, an exponent or sixteen
+# digits as well. `_json_getn_jq` is what jq prints itself, where there is no
+# other reader, and with it; `_json_getn_jq` is what jq
 # itself prints, for a shell without that reader.
 _json_get_jq() {
     _jq_read "${1:-}" "${2:-}" 'if odd then ("" | halt_error(7)) else . end'
@@ -172,7 +183,7 @@ _json_valid_jq() {
     # One value and no more, and only what JSON allows, as the other readers
     # have it: `-e` alone says `null` is false and reads a second value as
     # another document.
-    printf '%s\n' "${1:-}" | "${_TOOL_PATH_jq}" -R -s -e "${_JQ_READ_DEFS} strict and (try (fromjson | true) catch false)" >/dev/null 2>&1 || return 1
+    printf '%s\n' "${1:-}" | "${_TOOL_PATH_jq}" -R -s -e ". as \$raw | ${_JQ_READ_DEFS} strict and (try (fromjson | true) catch false)" >/dev/null 2>&1 || return 1
 }
 
 _json_pretty_jq() {

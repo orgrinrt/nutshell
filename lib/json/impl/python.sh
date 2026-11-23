@@ -50,16 +50,25 @@ _json_python_cmd() {
 # _json_py <operation> <arguments...>
 #
 # `-` as the program path means "read the program from stdin", which keeps the
-# program and the document on separate channels.
+# program and the document on separate channels. The document is on a third, fd 3:
+# an argument is capped at about 128 KB by the kernel, and a document past it
+# came back as nothing. The arguments after it are the path and the value.
 _json_py() {
-    local python_cmd
+    local python_cmd op="$1" doc="$2"
     python_cmd="$(_json_python_cmd)"
-    "$python_cmd" - "$@" <<'PYTHON' 2>/dev/null
+    shift 2
+    "$python_cmd" - "$op" "$@" <<'PYTHON' 3<<NUTSHELL_JSON_DOCUMENT 2>/dev/null
 import json
+import os
 import sys
 
 op = sys.argv[1]
-args = sys.argv[2:]
+# The heredoc that carries the document ends it with one newline of its own.
+with os.fdopen(3, "rb") as fd:
+    document = fd.read().decode("utf-8", "surrogateescape")
+if document.endswith("\n"):
+    document = document[:-1]
+args = [document] + sys.argv[2:]
 
 
 # A number as the document spelled it. Python reads `1e3` as 1000.0 and `-0` as 0,
@@ -263,6 +272,8 @@ try:
 except (KeyError, IndexError, TypeError, ValueError):
     sys.exit(1)
 PYTHON
+${doc}
+NUTSHELL_JSON_DOCUMENT
 }
 
 _json_get_python()     { _json_py get "$1" "${2:-}"; }

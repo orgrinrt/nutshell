@@ -35,9 +35,14 @@
 [ -n "${_NUTSHELL_JSON_IMPL_PERL_SH:-}" ] && return 0
 _NUTSHELL_JSON_IMPL_PERL_SH=1
 
-# _json_pl <operation> <arguments...>
+# _json_pl <operation> <document> <arguments...>
+#
+# The document goes in on stdin: as an argument the kernel caps it at about
+# 128 KB, and a document past that came back as nothing.
 _json_pl() {
-    "${_TOOL_PATH_perl}" -MJSON::PP -e '
+    local op="$1" doc="$2"
+    shift 2
+    printf '%s' "$doc" | "${_TOOL_PATH_perl}" -MJSON::PP -e '
         use strict;
         use warnings;
         use B;
@@ -52,10 +57,22 @@ _json_pl() {
         # output layer encodes once. One coder for both double-encoded: `café`
         # came back as `cafÃ©`, the UTF-8 bytes read as latin-1 and encoded
         # again.
-        my $in    = JSON::PP->new->utf8->allow_nonref->allow_bignum;
-        my $coder = JSON::PP->new->canonical->allow_nonref->allow_bignum;
+        my $in    = JSON::PP->new->utf8->allow_nonref;
+        my $coder = JSON::PP->new->canonical->allow_nonref;
 
         my ($op, @args) = @ARGV;
+
+        # The document, which comes on stdin, as the first argument.
+        binmode(STDIN);
+        unshift @args, do { local $/; my $text = <STDIN>; defined $text ? $text : "" };
+
+        # A fraction or an exponent, or a number too long for a native one,
+        # becomes an object so that the read can tell it was one. Only a get
+        # asks, since every float is slower as an object.
+        if ($op eq "get" || $op eq "getn") {
+            $in->allow_bignum;
+            $coder->allow_bignum;
+        }
 
         # Walk a path, its segments joined by the unit separator. Returns (found, value) so an absent key is told
         # apart from one present and holding null, which the caller turns into
@@ -211,7 +228,7 @@ _json_pl() {
             exit 2;
         }
         exit 0;
-    ' "$@" 2>/dev/null
+    ' "$op" "$@" 2>/dev/null
 }
 
 # 7 is a number, or a container holding one, that perl would respell; see

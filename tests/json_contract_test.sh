@@ -385,16 +385,24 @@ _jc_without_reader() {
 #[test]
 it_spells_a_number_its_own_way_where_there_is_no_reader_in_bash_under_jq() {
     deps_has jq || { skip "no jq on this machine"; return 0; }
-    assert_eq "$(_jc_without_reader jq '{"a":1e3}' a)" "1E+3|0"
-    assert_eq "$(_jc_without_reader jq '{"a":7}' a)" "7|0"
-    assert_eq "$(_jc_without_reader jq '{"a":[1e3,2]}' a)" "[1E+3,2]|0"
+    assert_eq "$(_jc_alone jq '{"a":1e3}' a)" "1E+3|0"
+    assert_eq "$(_jc_alone jq '{"a":7}' a)" "7|0"
+    assert_eq "$(_jc_alone jq '{"a":[1e3,2]}' a)" "[1E+3,2]|0"
 }
 
 #[test]
 it_spells_a_number_its_own_way_where_there_is_no_reader_in_bash_under_perl() {
     deps_has perl || { skip "no perl on this machine"; return 0; }
-    assert_eq "$(_jc_without_reader perl '{"a":1e3}' a)" "1000|0"
-    assert_eq "$(_jc_without_reader perl '{"a":7}' a)" "7|0"
+    assert_eq "$(_jc_alone perl '{"a":1e3}' a)" "1000|0"
+    assert_eq "$(_jc_alone perl '{"a":7}' a)" "7|0"
+}
+
+#[test]
+it_has_python_print_what_the_reader_in_bash_cannot_for_jq_and_perl() {
+    { deps_has python3 || deps_has python; } || { skip "no python on this machine"; return 0; }
+    deps_has jq && assert_eq "$(_jc_without_reader jq '{"a":1e3}' a)" "1e3|0" "jq, python behind it"
+    deps_has perl && assert_eq "$(_jc_without_reader perl '{"a":1e3}' a)" "1e3|0" "perl, python behind it"
+    return 0
 }
 
 #[test]
@@ -429,20 +437,20 @@ it_answers_a_respelled_number_of_a_document_the_reader_in_bash_cannot_hold() {
         if { deps_has python3 || deps_has python; }; then
             assert_eq "$(_jc_call_under perl get "$doc" a)" "1.50|0" "perl, python to hand"
         fi
-        assert_eq "$(_jc_perl_alone get "$doc" a)" "1.5|0" "perl, nobody else to ask"
+        assert_eq "$(_jc_alone perl "$doc" a)" "1.5|0" "perl, nobody else to ask"
     fi
 }
 
-# _jc_perl_alone <op> <document> <path> -> `text|status` under perl with python
-# hidden and the reader in bash gone
-_jc_perl_alone() {
+# _jc_alone <backend> <document> <path> -> `text|status` with python hidden and
+# the reader in bash gone: nothing is left to print a number as written
+_jc_alone() {
     local out rc=0
     out="$(
         _hide_tools python python3
         unset -f _json_get_bash
         json_detect
-        _JSON_IMPL=perl
-        json_"$1" "$2" "$3" 2>/dev/null
+        _JSON_IMPL="$1"
+        json_get "$2" "$3" 2>/dev/null
     )" || rc=$?
     printf '%s|%s' "$out" "$rc"
 }

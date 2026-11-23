@@ -311,20 +311,25 @@ _jc_asks() {
 }
 
 # One row a line: document ~ path ~ text ~ asked by jq ~ asked by python ~ asked
-# by perl. A number that is a fraction, an exponent or `-0` is spelled by the
-# reader in bash under jq and perl, which respell it; python keeps the text of
-# a number as the document gave it and asks nobody. Everything else is the
-# backend's own.
+# by perl. jq 1.7 prints every number as written except an exponent form, so it
+# asks where the document has an exponent outside a string and the node holds a
+# number; perl respells a fraction, an exponent and `-0` and asks for those;
+# python keeps the text of a number as the document gave it and asks nobody.
+# Everything else is the backend's own.
 _JC_ASKS=$(cat <<'CASES'
 {"a":7}~a~7~0~0~0
-{"a":12345678901234567}~a~12345678901234567~1~0~0
+{"a":12345678901234567}~a~12345678901234567~0~0~0
 {"a":"v1.2"}~a~v1.2~0~0~0
 {"a":["v1.2",3],"b":1.5}~a~["v1.2",3]~0~0~0
 {"a":{"b":[1,2,{"c":0}]}}~a~{"b":[1,2,{"c":0}]}~0~0~0
-{"a":1.5}~a~1.5~1~0~1
+{"a":1.5}~a~1.5~0~0~1
+{"a":1.50}~a~1.50~0~0~1
+{"a":1e-5}~a~1e-5~1~0~1
+{"a":7,"b":1e3}~a~7~1~0~0
+{"a":7,"s":"0e5"}~a~7~0~0~0
 {"a":1e3}~a~1e3~1~0~1
 {"a":-0}~a~-0~0~0~1
-{"a":[1,{"b":2.5}]}~a~[1,{"b":2.5}]~1~0~1
+{"a":[1,{"b":2.5}]}~a~[1,{"b":2.5}]~0~0~1
 CASES
 )
 
@@ -409,19 +414,37 @@ _jc_deep() {
 
 #[test]
 it_answers_a_respelled_number_of_a_document_the_reader_in_bash_cannot_hold() {
-    local doc b want
-    doc="$(_jc_deep 1.5)"
+    local doc; doc="$(_jc_deep 1.50)"
     # Not jq, which refuses a document nested past 256 before the reader in bash
-    # could have been asked.
-    for b in python perl; do
-        case "$b" in
-            python) { deps_has python3 || deps_has python; } || continue ;;
-            perl) deps_has perl || continue ;;
-        esac
-        want="$(_jc_without_reader "$b" "$doc" a)"
-        assert_eq "$want" "1.5|0" "$b with no reader in bash"
-        assert_eq "$(_jc_call_under "$b" get "$doc" a)" "1.5|0" "$b past the reader's depth"
-    done
+    # could have been asked. The reader holds 400 levels and this goes to 450.
+    if { deps_has python3 || deps_has python; }; then
+        # python keeps the text of the number, reader or no reader
+        assert_eq "$(_jc_call_under python get "$doc" a)" "1.50|0" "python past the reader's depth"
+        assert_eq "$(_jc_without_reader python "$doc" a)" "1.50|0" "python, no reader"
+    fi
+    if deps_has perl; then
+        # perl prints 1.5 where the reader would print 1.50, so the text says
+        # which of them answered. With python to hand perl asks it where the
+        # reader cannot; with none it gives its own.
+        if { deps_has python3 || deps_has python; }; then
+            assert_eq "$(_jc_call_under perl get "$doc" a)" "1.50|0" "perl, python to hand"
+        fi
+        assert_eq "$(_jc_perl_alone get "$doc" a)" "1.5|0" "perl, nobody else to ask"
+    fi
+}
+
+# _jc_perl_alone <op> <document> <path> -> `text|status` under perl with python
+# hidden and the reader in bash gone
+_jc_perl_alone() {
+    local out rc=0
+    out="$(
+        _hide_tools python python3
+        unset -f _json_get_bash
+        json_detect
+        _JSON_IMPL=perl
+        json_"$1" "$2" "$3" 2>/dev/null
+    )" || rc=$?
+    printf '%s|%s' "$out" "$rc"
 }
 
 # _jc_call_under <backend> <op> <document> <path> -> `text|status`, the backend named outright

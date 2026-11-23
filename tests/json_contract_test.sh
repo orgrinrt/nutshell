@@ -285,3 +285,148 @@ it_refuses_a_row_a_backend_gets_wrong() {
     assert_refused _jc_check named bash
     _JC_CASES="$saved"
 }
+
+# --- which backend answers ----------------------------------------------------
+#
+# The rows above agree whoever answers, which also hides a backend that hands
+# every number to the reader in bash: the text is right and the work is a whole
+# parse in bash. So here the reader is replaced by one that notes each call, and
+# a row says whether it was asked.
+
+# _jc_asks <backend> <document> <path> -> `text|status|asked`, asked being 1 where
+# the call went to the reader in bash and 0 where the backend answered
+_jc_asks() {
+    local f out rc=0
+    f="$(mktemp)"
+    out="$(
+        eval "$(declare -f _json_get_bash | sed '1s/^_json_get_bash/_jc_real_reader/')"
+        _json_get_bash() { echo asked >> "$f"; _jc_real_reader "$@"; }
+        json_detect
+        _JSON_IMPL="$1"
+        json_get "$2" "$3" 2>/dev/null
+    )" || rc=$?
+    out="${out//$'\n'/\\n}"
+    printf '%s|%s|%s' "$out" "$rc" "$([ -s "$f" ] && echo 1 || echo 0)"
+    rm -f "$f"
+}
+
+# One row a line: document ~ path ~ text ~ asked by jq ~ asked by python ~ asked
+# by perl. A number that is a fraction, an exponent or `-0` is spelled by the
+# reader in bash under jq and perl, which respell it; python keeps the text of
+# a number as the document gave it and asks nobody. Everything else is the
+# backend's own.
+_JC_ASKS=$(cat <<'CASES'
+{"a":7}~a~7~0~0~0
+{"a":12345678901234567}~a~12345678901234567~1~0~0
+{"a":"v1.2"}~a~v1.2~0~0~0
+{"a":["v1.2",3],"b":1.5}~a~["v1.2",3]~0~0~0
+{"a":{"b":[1,2,{"c":0}]}}~a~{"b":[1,2,{"c":0}]}~0~0~0
+{"a":1.5}~a~1.5~1~0~1
+{"a":1e3}~a~1e3~1~0~1
+{"a":-0}~a~-0~0~0~1
+{"a":[1,{"b":2.5}]}~a~[1,{"b":2.5}]~1~0~1
+CASES
+)
+
+_jc_check_asks() {
+    local backend="$1" col="$2" doc path want ask_jq ask_py ask_pl got expect report=""
+    while IFS='~' read -r doc path want ask_jq ask_py ask_pl; do
+        case "$col" in jq) expect="$ask_jq" ;; python) expect="$ask_py" ;; perl) expect="$ask_pl" ;; esac
+        got="$(_jc_asks "$backend" "$doc" "$path")"
+        [ "$got" = "${want}|0|${expect}" ] && continue
+        report+="json_get [${doc}] [${path}] under ${backend}: expected [${want}|0|${expect}], got [${got}]"$'\n'
+    done <<<"$_JC_ASKS"
+    assert_empty "$report" "calls answered by the wrong reader or with the wrong text"
+}
+
+#[test]
+it_answers_what_jq_can_spell_itself_without_the_reader_in_bash() {
+    deps_has jq || { skip "no jq on this machine"; return 0; }
+    _jc_check_asks jq jq
+}
+
+#[test]
+it_answers_every_number_python_reads_without_the_reader_in_bash() {
+    { deps_has python3 || deps_has python; } || { skip "no python on this machine"; return 0; }
+    _jc_check_asks python python
+}
+
+#[test]
+it_answers_what_perl_can_spell_itself_without_the_reader_in_bash() {
+    deps_has perl || { skip "no perl on this machine"; return 0; }
+    _jc_check_asks perl perl
+}
+
+# --- where the reader in bash cannot answer ------------------------------------
+#
+# A shell without it, and a document nested deeper than it holds, get the
+# backend's own spelling of a number it would respell, and a status of 0, in
+# place of nothing. That text is the one place a backend differs, so it is
+# written out per backend here and the header names it.
+
+# _jc_without_reader <backend> <document> <path> -> `text|status` with the reader
+# in bash gone
+_jc_without_reader() {
+    local out rc=0
+    out="$(
+        unset -f _json_get_bash
+        json_detect
+        _JSON_IMPL="$1"
+        json_get "$2" "$3" 2>/dev/null
+    )" || rc=$?
+    printf '%s|%s' "$out" "$rc"
+}
+
+#[test]
+it_spells_a_number_its_own_way_where_there_is_no_reader_in_bash_under_jq() {
+    deps_has jq || { skip "no jq on this machine"; return 0; }
+    assert_eq "$(_jc_without_reader jq '{"a":1e3}' a)" "1E+3|0"
+    assert_eq "$(_jc_without_reader jq '{"a":7}' a)" "7|0"
+    assert_eq "$(_jc_without_reader jq '{"a":[1e3,2]}' a)" "[1E+3,2]|0"
+}
+
+#[test]
+it_spells_a_number_its_own_way_where_there_is_no_reader_in_bash_under_perl() {
+    deps_has perl || { skip "no perl on this machine"; return 0; }
+    assert_eq "$(_jc_without_reader perl '{"a":1e3}' a)" "1000|0"
+    assert_eq "$(_jc_without_reader perl '{"a":7}' a)" "7|0"
+}
+
+#[test]
+it_keeps_the_text_of_a_number_under_python_with_no_reader_in_bash() {
+    { deps_has python3 || deps_has python; } || { skip "no python on this machine"; return 0; }
+    assert_eq "$(_jc_without_reader python '{"a":1e3}' a)" "1e3|0"
+    assert_eq "$(_jc_without_reader python '{"a":[1.50,-0]}' a)" "[1.50,-0]|0"
+}
+
+# A document nested past what the reader in bash holds, with a number the tool
+# would respell: the tool's text, not nothing.
+_jc_deep() {
+    local open="" close="" i
+    for (( i = 0; i < 450; i++ )); do open+="["; close+="]"; done
+    printf '{"a":%s,"d":%s%s}' "$1" "$open" "$close"
+}
+
+#[test]
+it_answers_a_respelled_number_of_a_document_the_reader_in_bash_cannot_hold() {
+    local doc b want
+    doc="$(_jc_deep 1.5)"
+    # Not jq, which refuses a document nested past 256 before the reader in bash
+    # could have been asked.
+    for b in python perl; do
+        case "$b" in
+            python) { deps_has python3 || deps_has python; } || continue ;;
+            perl) deps_has perl || continue ;;
+        esac
+        want="$(_jc_without_reader "$b" "$doc" a)"
+        assert_eq "$want" "1.5|0" "$b with no reader in bash"
+        assert_eq "$(_jc_call_under "$b" get "$doc" a)" "1.5|0" "$b past the reader's depth"
+    done
+}
+
+# _jc_call_under <backend> <op> <document> <path> -> `text|status`, the backend named outright
+_jc_call_under() {
+    local out rc=0
+    out="$(json_detect; _JSON_IMPL="$1"; json_"$2" "$3" "$4" 2>/dev/null)" || rc=$?
+    printf '%s|%s' "$out" "$rc"
+}

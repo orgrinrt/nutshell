@@ -38,15 +38,31 @@ use deps
 # Module status
 # -----------------------------------------------------------------------------
 
-_FS_READY=0
+_FS_READY=""
 _FS_ERROR=""
 
-# Check that we have basic filesystem tools
-if deps_has_any "stat" "perl"; then
-    _FS_READY=1
-else
-    _FS_ERROR="No stat tool available (need stat or perl)"
-fi
+# _fs_check -> `_FS_READY`, whether basic filesystem tools are here; asked at
+# load, and again at the first question after a reset
+_fs_check() {
+    [ -z "$_FS_READY" ] || return 0
+    if deps_has_any "stat" "perl"; then
+        _FS_READY=1
+    else
+        _FS_READY=0
+        _FS_ERROR="No stat tool available (need stat or perl)"
+    fi
+}
+# Asked at load, as it always was; not on the load a reset makes, which waits.
+[ -n "${_FS_RESETTING:-}" ] || _fs_check
+
+# _fs_reset -> the module as it was at load: the stubs back where picks had
+# replaced them, the check made again
+_fs_reset() {
+    _NUTSHELL_FS_SH="" _FS_RESETTING=1
+    source "${BASH_SOURCE[0]}"
+    _FS_RESETTING=""
+}
+deps_on_reset _fs_reset
 
 # -----------------------------------------------------------------------------
 # Existence checks (pure bash; no external tools needed)
@@ -428,6 +444,7 @@ fs_temp_dir() {
 # Check if fs module is ready to use
 # Usage: fs_ready -> returns 0 if ready, 1 if not
 fs_ready() {
+    _fs_check
     [ "$_FS_READY" = "1" ]
 }
 
@@ -435,5 +452,6 @@ fs_ready() {
 # Get fs module error message (if not ready)
 # Usage: fs_error -> prints error message
 fs_error() {
+    _fs_check
     echo "$_FS_ERROR"
 }

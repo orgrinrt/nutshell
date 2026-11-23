@@ -1,0 +1,14 @@
+arm,best_ms,worst_ms,ratio_to_baseline,ran
+bash  nothing loaded,29,32,within the noise,yes
+bash sourcing init,46,57,158%,yes
+init  use deps,84,121,289%,yes
+init  use extern log,390,434,1344%,yes
+script  no use  no manifest,79,89,272%,yes
+script  no use  300-line manifest,238,335,820%,yes
+script  use json  no manifest,132,147,455%,yes
+script  use toml  300-line manifest,244,291,841%,yes
+script  no use  300-line manifest  cold,1182,1316,4075%,yes
+script  20 captures of a stub  no manifest,708,751,2441%,yes
+script  use json  one json_get of 2 KB stdin,169,209,582%,yes
+script  no use  first deps_has jq,127,150,437%,yes
+script  no use  HOME unset,78,86,268%,yes

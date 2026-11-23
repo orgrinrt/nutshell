@@ -63,6 +63,26 @@ it_does_not_hold_for_a_command_that_is_not() {
 }
 
 #[test]
+it_does_not_hold_for_a_command_deps_hides() {
+    # The answer is remembered once given, so the hide is read before it: a
+    # command asked about and found, then hidden, no longer holds.
+    assert_ok _nut_gate "$HERE"
+    NUT_DEPS_HIDE="sh"
+    assert_fails _nut_gate "$HERE"
+    NUT_DEPS_HIDE="cat"
+    assert_ok _nut_gate "$HERE" "a hide of another command leaves this one"
+    NUT_DEPS_HIDE=""
+    assert_ok _nut_gate "$HERE"
+}
+
+#[test]
+it_does_not_hold_for_a_command_hidden_through_deps_hide() {
+    use deps
+    deps_hide sh
+    assert_fails _nut_gate "$HERE"
+}
+
+#[test]
 it_holds_for_the_shell_that_is_running_this() {
     assert_ok _nut_gate "shell(bash)"
     assert_ok _nut_gate "shell(bash4)"

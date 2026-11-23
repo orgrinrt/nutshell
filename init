@@ -150,36 +150,44 @@ export PATH="${_NUTSHELL_ROOT}/bin:$PATH"
 # `super::tui::key`, a consumer calls it `shebang::tui::key`, and both are the
 # same file. Keyed by the spelling, each of those loaded it again, and a module
 # without a guard of its own ran twice.
-# One variable per entry, keyed by `nut_key`, plus a list of the keys.
+# One table, an associative array keyed by the table's name and the key, plus a
+# list of each table's keys, a line apart.
 #
-# The list is there because `${!table[@]}` has no POSIX equivalent and two
-# readers need to walk what is loaded: `nutshell_modules` reports it and
-# `nut_reload` has to find every name that reached one file. `deps.sh` keeps
-# `_TOOL_CAN_NAMES` for exactly the same reason.
-_NUT_LOADED_KEYS=""
+# The list is there because two readers walk what is loaded: `nutshell_modules`
+# reports it and `nut_reload` has to find every name that reached one file. It
+# was one variable per entry keyed by `nut_key`, which hexes the key a byte at a
+# time: `use` keyed every file it loaded by a path of sixty bytes or more, three
+# times, and that was most of what a `use` cost. A removed entry keeps its line
+# and has an empty value, which every reader takes as absent.
+declare -p _NUT_LT >/dev/null 2>&1 || declare -gA _NUT_LT=()
+_NUT_LOADED_KEYS="${_NUT_LOADED_KEYS:-}"
 # The names that reached each file, so `nutshell_loaded <name>` still answers.
-_NUT_LOADED_AS_KEYS=""
+_NUT_LOADED_AS_KEYS="${_NUT_LOADED_AS_KEYS:-}"
 
 # _nut_loaded_set <table> <key> <value>, and the key goes in the list once.
 _nut_loaded_set() {
-    nut_key "$2" || return 1
-    eval "_NUT_${1}_${_nk}=\$3"
-    eval "case \" \$_NUT_${1}_KEYS \" in *\" \$_nk \"*) ;; *) _NUT_${1}_KEYS=\"\${_NUT_${1}_KEYS} \$_nk\" ;; esac"
+    [[ -n "${2:-}" ]] || return 1
+    if [[ -z "${_NUT_LT[$1$'\x1f'$2]+x}" ]]; then
+        case "$1" in
+            LOADED)    _NUT_LOADED_KEYS+="$2"$'\n' ;;
+            LOADED_AS) _NUT_LOADED_AS_KEYS+="$2"$'\n' ;;
+        esac
+    fi
+    _NUT_LT[$1$'\x1f'$2]="$3"
 }
 
 # _nut_loaded_get <table> <key>, into `_nl`
 _nut_loaded_get() {
     _nl=""
-    nut_key "$2" || return 1
-    eval "_nl=\"\${_NUT_${1}_${_nk}:-}\""
-    [ -n "$_nl" ]
+    [[ -n "${2:-}" ]] || return 1
+    _nl="${_NUT_LT[$1$'\x1f'$2]-}"
+    [[ -n "$_nl" ]]
 }
 
 # _nut_loaded_unset <table> <key>
 _nut_loaded_unset() {
-    nut_key "$2" || return 1
-    eval "unset _NUT_${1}_${_nk}"
-    eval "_NUT_${1}_KEYS=\"\$(printf '%s' \" \${_NUT_${1}_KEYS} \" | sed \"s/ \${_nk} / /\")\""
+    [[ -n "${2:-}" ]] || return 1
+    [[ -z "${_NUT_LT[$1$'\x1f'$2]+x}" ]] || _NUT_LT[$1$'\x1f'$2]=""
 }
 
 # nut_once
@@ -398,11 +406,11 @@ _lib_nut_lookup_to() {
     # which no module name has, takes the pattern.
     local s="$_nli" pat=$'\n'"${want}"$'\x1f' esc="$want" re=""
     case "$esc" in *[!A-Za-z0-9_:.-]*) esc="" ;; esac
-    [[ -n "$esc" ]] && re=$'\n'"${esc//./[.]}"$'\x1f''([^'$'\n'']*)'$'\n''(.*)'
+    [[ -n "$esc" ]] && re=$'\n'"${esc//./[.]}"$'\x1f''([^'$'\n'']*)'
     while :; do
         if [[ -n "$re" ]]; then
             [[ "$s" =~ $re ]] || break
-            row="${BASH_REMATCH[1]}"; s=$'\n'"${BASH_REMATCH[2]}"
+            row="${BASH_REMATCH[1]}"
         else
             [[ "$s" == *"$pat"* ]] || break
             s="${s#*"$pat"}"
@@ -452,7 +460,12 @@ _lib_nut_lookup_to() {
         for g in ${gwords[@]+"${gwords[@]}"}; do
             if ! _nut_gate "$g"; then held=1; break; fi
         done
-        [[ "$held" -eq 1 ]] && continue
+        if [[ "$held" -eq 1 ]]; then
+            # Past this row for the next try. Here and not at every match, since
+            # capturing the rest of the index each time copied all of it.
+            [[ -n "$re" ]] && s="${s#*"${pat}${gates}"$'\x1f'"${file}"$'\x1f'"${rest}"}"
+            continue
+        fi
 
         if [[ "$reach" == "public" && "${vis:-}" == "internal" ]]; then
             echo "nutshell: '${want}' is internal to that library" >&2
@@ -578,6 +591,9 @@ _nut_gate() {
         has\(bin\(*\)\))
             inner="${a#has(bin(}"; inner="${inner%))}"
             [[ -n "$inner" ]] || return 1
+            # What `deps` hides is absent here too, read before the remembered
+            # answer since a hide can come after it.
+            case " ${NUT_DEPS_HIDE:-} " in *" $inner "*) return 1 ;; esac
             # Remembered, because `command -v` is the only word here that costs
             # anything and this sits in front of every `use`. Not `shell` or
             # `env`: both are a `case` on a variable, which is free, and both
@@ -861,10 +877,11 @@ nut_reload() {
         fi
         if [[ -n "$file" ]]; then
             _nut_loaded_unset LOADED "$file"
-            local k
-            for k in $_NUT_LOADED_AS_KEYS; do
-                eval "_nl=\"\${_NUT_LOADED_AS_${k}:-}\""
-                [ "$_nl" = "$file" ] && { eval "unset _NUT_LOADED_AS_${k}"; }
+            local k rest="$_NUT_LOADED_AS_KEYS"
+            while [[ -n "$rest" ]]; do
+                k="${rest%%$'\n'*}"; rest="${rest#*$'\n'}"
+                _nut_loaded_get LOADED_AS "$k" && [[ "$_nl" == "$file" ]] \
+                    && _nut_loaded_unset LOADED_AS "$k"
             done
             # nut_once has its own record of the same fact.
             local once="_NUT_ONCE_${file//[^A-Za-z0-9]/_}"
@@ -1147,9 +1164,10 @@ export -f nutshell_loaded
 # List loaded modules
 # Usage: nutshell_modules
 nutshell_modules() {
-    local mod
-    for mod in $_NUT_LOADED_KEYS; do
-        echo "$mod"
+    local mod rest="$_NUT_LOADED_KEYS"
+    while [[ -n "$rest" ]]; do
+        mod="${rest%%$'\n'*}"; rest="${rest#*$'\n'}"
+        _nut_loaded_get LOADED "$mod" && printf '%s\n' "$mod"
     done | sort
 }
 export -f nutshell_modules
@@ -1175,3 +1193,10 @@ export -f nutshell_available
 : "${_DEPS_PIN_CHECK:=_nut_deps_pin_check}"
 _nut_deps_pin_get() { use deps::pins || return 1; _deps_pin_get "$@"; }
 _nut_deps_pin_check() { use deps::pins || return 0; _deps_pin_check "$@"; }
+
+# `key.sh` was sourced by path above, before `use` existed. Its name is
+# recorded now, so a later `use key` is answered from the table rather than
+# resolving the name and sourcing the file again to hit its guard. Not as a
+# loaded module: it is part of the interpreter, and `nutshell_modules` lists
+# what a script asked for.
+_nut_loaded_set LOADED_AS key "${_NUTSHELL_ROOT}/lib/key.sh"

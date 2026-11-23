@@ -31,18 +31,20 @@
 [ -n "${_NUTSHELL_DEPS_SH:-}" ] && return 0
 _NUTSHELL_DEPS_SH=1
 
+# The hide list this process was started with, the parent's word: a forget
+# clears what `deps_hide` added here and keeps this.
+_DEPS_ENV_HIDE="${NUT_DEPS_HIDE:-}"
+
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 
-# Declared, not sourced by path. A hand-rolled `source` loads the module and
-# hides it from the module-contract check, which reads `use` lines, so the
-# dependency was real and unrecorded at once.
-use os key
-
-# The rest of the module, split by concern, loaded ahead of what this file runs
-# when it is sourced.
-use super::deps::state super::deps::variants super::deps::config super::deps::probe
+# Declared, not sourced by path, so the module-contract check sees them. What a
+# presence question needs is loaded here; `os` (for `deps_info`), the variant
+# probes and the capability probes are loaded by the first question that needs
+# them, because a hook asks `deps_has` on every tool call and a `use` costs
+# about a millisecond before the file has run a line.
+use key super::deps::state super::deps::config
 
 # The manifest follows the unit that is running, and the entry point is only
 # known once the interpreter has set it: a module loaded earlier than that sees
@@ -59,8 +61,8 @@ _deps_sync_config() {
     _DEPS_CONFIG=""; _deps_find_config && _DEPS_CONFIG="$_DEPS_FOUND_CONFIG"
     [ "$_DEPS_CONFIG" != "$old" ] || return 0
     for _k in $_DEPS_SEEN; do eval "unset _TOOL_MISSING_${_k}"; done
+    _DEPS_PIN_SAID="" _DEPS_TXT_OF=""
     [ -n "$_DEPS_CONFIG" ] || return 0
-    _deps_pin_verify "$_DEPS_CONFIG"
     local list="$_TOOLS_AVAILABLE"
     for t in $list; do
         _rc=0; _deps_pin "$_DEPS_CONFIG" "$t" >/dev/null 2>&1 || _rc=$?
@@ -77,6 +79,7 @@ _deps_sync_config() {
 # in `deps_caps` once asked.
 _deps_probe_cap() {
     case " $_TOOL_CAN_NAMES " in *" $1 "*) return 0 ;; esac
+    use super::deps::probe || return 0
     case "$1" in
         toml_read)        deps_has yq >/dev/null 2>&1 || true
                           _deps_probe_toml "toml_read" yq "-p toml -o json ." mikefarah ;;
@@ -86,27 +89,16 @@ _deps_probe_cap() {
     return 0
 }
 
-# Every tool, resolved. What the load used to do, now asked for: resolving all
-# eighteen at load cost 125ms of a 148ms module load, on a path every consumer
-# of `fs` and `text` takes because they declare `use deps`. `deps_has` resolves
-# a tool it has not seen and remembers a miss, so the eager pass was a prefetch
-# of answers most callers never ask for.
-#
-# Only two questions need it: what is available, and which capabilities are
-# present. Both are whole-table questions and neither is asked by a module
-# picking an implementation.
-# What it costs to be called inside a command substitution, which is worth
-# stating because it is not obvious and it bit the test that pins capabilities:
-# a substitution is a subshell, so the scan happens there and the parent keeps
-# none of it. `x="$(deps_available)"` therefore scans every time it is called.
-#
-# The hot path is unaffected, because it is not a substitution: a dispatcher
-# calls `deps_has` directly and the answer it records stays in the shell that
-# recorded it. Only the two whole-table questions go through a substitution,
-# and neither is asked in a loop.
+# Every tool, resolved, for the two whole-table questions: what is available,
+# and which capabilities are present. Resolving all eighteen at load cost 125ms
+# of a 148ms module load, so it is asked for instead. Inside a substitution it
+# scans in the subshell and the parent keeps none of it, so
+# `x="$(deps_available)"` scans every time; neither question is asked in a loop,
+# and the hot path, `deps_has` called directly, keeps what it learns.
 _deps_scan_all() {
     [ "${_DEPS_SCANNED:-0}" = "1" ] && return 0
     _DEPS_SCANNED=1
+    use super::deps::probe || return 1
     local tools="sed awk grep perl stat mktemp find sort wc tr
         head tail dirname basename uname cut tee xargs"
     local tool
@@ -127,25 +119,25 @@ _deps_scan_all() {
 deps_has() {
     local tool="${1:-}"
     [ -z "$tool" ] && return 1
+    case " ${NUT_DEPS_HIDE:-} " in *" $tool "*) return 1 ;; esac
     [ "${_NUT_ASKING_FROM:-}|${NUTSHELL_SCRIPT_DIR:-}|${PWD}" = "$_DEPS_CONFIG_KEY" ] || _deps_sync_config
     local _hit
     _deps_get _hit PATH "$tool"    && [ -n "$_hit" ] && return 0
     _deps_get _hit MISSING "$tool" && [ -n "$_hit" ] && return 1
 
-    # Anything not in the eager list is looked for now, once, and remembered.
-    #
-    # Without this, `deps_has` answered no for every tool init did not scan
-    # for, and init scans for the unix text tools. So `json.sh` asked for jq
-    # and was told no on a machine with jq, and fell through its documented
-    # "jq, then python, then perl" preference to perl every time; `http.sh`
-    # asked for curl and for wget, was told no to both, and reported itself
-    # unavailable on every machine there has ever been. Neither module was
-    # wrong to ask. The answer was.
+    # Anything not known is looked for now, once, and remembered. Answering no
+    # for what nobody had scanned for once sent `json` to perl beside a jq.
     local path
     if _deps_find_tool "$tool" "$_DEPS_CONFIG"; then
         path="$_DEPS_FOUND"
         _deps_set PATH "$tool" "$path"
-        _deps_set_variant "$tool" "$path"
+        # Seven tools come in variants worth a probe, and the probes are loaded
+        # for those alone.
+        case "$tool" in
+            sed|awk|grep|stat|find|yq|taplo)
+                use super::deps::variants && _deps_set_variant "$tool" "$path" ;;
+            *)  _deps_set VARIANT "$tool" standard ;;
+        esac
         _TOOLS_AVAILABLE="${_TOOLS_AVAILABLE} ${tool}"
         return 0
     fi
@@ -156,24 +148,60 @@ deps_has() {
 }
 
 #[pub]
-# Forget what was learned about tools, so the next question looks again. A
-# miss is remembered for the life of the process, which is right until
-# something installs the tool. The manifest is read again as well.
+# Answer absent for tools the machine may well have, so a script or a test runs
+# the path a machine without them takes. `deps_run` refuses them too. Kept in
+# `NUT_DEPS_HIDE`, a space-separated list, exported, so a child process of this
+# one hides them as well; set it in the environment to hide tools from a child.
+# Usage: deps_hide "jq" ["python" ...] -> hides each, forgetting where it was found
+deps_hide() {
+    local _t
+    for _t in "$@"; do
+        [ -n "$_t" ] || continue
+        case " ${NUT_DEPS_HIDE:-} " in *" $_t "*) ;; *) NUT_DEPS_HIDE="${NUT_DEPS_HIDE:+${NUT_DEPS_HIDE} }${_t}" ;; esac
+        _deps_unlearn "$_t" || true
+    done
+    export NUT_DEPS_HIDE
+    _deps_drop_caps
+    _deps_reset_modules
+    return 0
+}
+
+#[pub]
+# Have a function run after every `deps_hide` and `deps_forget`, for a module that
+# keeps the pick of a tool and has to drop it. Said once is enough.
+# Usage: deps_on_reset _json_reset
+deps_on_reset() {
+    case " $_DEPS_RESET_HOOKS " in
+        *" $1 "*) : ;;
+        *) _DEPS_RESET_HOOKS="${_DEPS_RESET_HOOKS} $1" ;;
+    esac
+}
+
+#[pub]
+# Forget what was learned about tools, so the next question looks again, and
+# what `deps_hide` hid. A miss is remembered for the life of the process, which
+# is right until something installs the tool. The manifest is read again too.
 # Usage: deps_forget [tool...] -> forgets the named tools, or every one
 deps_forget() {
-    local _t _k
+    local _t _k _new=""
     if [ "$#" -eq 0 ]; then
         for _k in $_DEPS_SEEN; do
             eval "unset _TOOL_PATH_${_k} _TOOL_VARIANT_${_k} _TOOL_MISSING_${_k}"
         done
         _DEPS_SEEN=""
         _TOOLS_AVAILABLE=""
+        if [ -n "$_DEPS_ENV_HIDE" ]; then NUT_DEPS_HIDE="$_DEPS_ENV_HIDE"; export NUT_DEPS_HIDE; else unset NUT_DEPS_HIDE; fi
     else
         for _t in "$@"; do _deps_unlearn "$_t" || true; done
+        for _k in ${NUT_DEPS_HIDE:-}; do
+            case " $* " in *" $_k "*) ;; *) _new="${_new:+${_new} }${_k}" ;; esac
+        done
+        [ -z "${NUT_DEPS_HIDE:-}" ] || NUT_DEPS_HIDE="$_new"
     fi
     _deps_drop_caps
     _DEPS_CONFIG=""
     _DEPS_CONFIG_KEY=""
+    _deps_reset_modules
     return 0
 }
 
@@ -362,6 +390,7 @@ deps_require_cap() {
 # Print dependency information for debugging
 # Usage: deps_info -> prints formatted tool info
 deps_info() {
+    use os || return 1
     echo "nutshell dependency information"
     echo "================================"
     echo ""
@@ -425,6 +454,9 @@ deps_run() {
 
     local path
     if ! path="$(deps_path "$tool")"; then
+        case " ${NUT_DEPS_HIDE:-} " in
+            *" $tool "*) echo "[ERROR] Tool '$tool' is hidden (NUT_DEPS_HIDE)" >&2; return 1 ;;
+        esac
         echo "[ERROR] Tool '$tool' not available" >&2
         return 1
     fi

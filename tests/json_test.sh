@@ -136,6 +136,9 @@ _readers() { _impls; printf 'bash\n'; }
 
 _agrees_over() {
     local lister="$1" impl first="" seen=0 got rc
+    # Picked here, in this shell: a first call made inside the capture below
+    # would pick in the subshell and drop the backend this loop named.
+    json_detect
     shift
     while IFS= read -r impl; do
         _JSON_IMPL="$impl"
@@ -208,6 +211,8 @@ it_returns_the_same_text_from_every_backend() {
     _agrees json_compact '{"a":[[1,2],[3]]}'
     _agrees_read json_type '{"a":null}' a
     _agrees_read json_keys '{"a":[1,2]}' a
+    _agrees_read json_keys '{"a":1}' nope
+    _agrees_read json_keys '{"a":1}' a
     _agrees json_set '{"a":{"b":1}}' a.b 9
     _agrees json_delete '{"a":{"b":1,"c":2}}' a.b
 }
@@ -239,6 +244,8 @@ it_tells_a_json_literal_from_a_string() {
     # in either direction: too loose and a string gets injected into the jq
     # program unquoted, too tight and a number arrives quoted.
     deps_has jq || { skip "jq is not on this machine"; return 0; }
+    # A read alone loads no backend; a call that needs jq loads it.
+    json_valid '{}'
 
     for v in 1 -1 0 1.5 -1.5 10 -0.25 true false null '[1]' '[]' '{}' '{"a":1}'; do
         assert_ok _jq_is_json_literal "$v"
@@ -258,6 +265,7 @@ it_builds_a_path_that_tells_an_index_from_a_name() {
     # 0.1, not the second element. Bracket form for both, and a name quoted so
     # a key holding a dash or a space stays one segment.
     deps_has jq || { skip "jq is not on this machine"; return 0; }
+    json_valid '{}'
 
     # Segments arrive already split, joined by the unit separator, so a key
     # holding a dot is one segment.

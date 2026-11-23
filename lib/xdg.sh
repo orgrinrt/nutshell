@@ -42,6 +42,15 @@ _NUTSHELL_XDG_SH=1
 # dependency was real and unrecorded at once.
 use os validate
 
+# _xdg_home <what> -> rc 1, said on stderr, where HOME is unset or empty. Some
+# hook runners start a child with no HOME, and a directory under it is then
+# nowhere: said when one is asked for, and not before.
+_xdg_home() {
+    [ -n "${HOME:-}" ] && return 0
+    echo "xdg: HOME is not set, so there is no ${1} directory" >&2
+    return 1
+}
+
 # -----------------------------------------------------------------------------
 # XDG Base Directories (raw, without app name)
 # These are safe to use without XDG_APP_NAME being set.
@@ -54,6 +63,8 @@ use os validate
 xdg_data_home() {
     if [ -n "${XDG_DATA_HOME:-}" ]; then
         echo "$XDG_DATA_HOME"
+    elif ! _xdg_home XDG_DATA_HOME; then
+        return 1
     elif os_is_macos; then
         echo "${HOME}/Library/Application Support"
     else
@@ -68,6 +79,8 @@ xdg_data_home() {
 xdg_config_home() {
     if [ -n "${XDG_CONFIG_HOME:-}" ]; then
         echo "$XDG_CONFIG_HOME"
+    elif ! _xdg_home XDG_CONFIG_HOME; then
+        return 1
     elif os_is_macos; then
         echo "${HOME}/Library/Preferences"
     else
@@ -82,6 +95,8 @@ xdg_config_home() {
 xdg_state_home() {
     if [ -n "${XDG_STATE_HOME:-}" ]; then
         echo "$XDG_STATE_HOME"
+    elif ! _xdg_home XDG_STATE_HOME; then
+        return 1
     elif os_is_macos; then
         echo "${HOME}/Library/Application Support"
     else
@@ -96,6 +111,8 @@ xdg_state_home() {
 xdg_cache_home() {
     if [ -n "${XDG_CACHE_HOME:-}" ]; then
         echo "$XDG_CACHE_HOME"
+    elif ! _xdg_home XDG_CACHE_HOME; then
+        return 1
     elif os_is_macos; then
         echo "${HOME}/Library/Caches"
     else

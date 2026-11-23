@@ -117,6 +117,7 @@ _json_pl() {
             exit 1 unless $found;
             if (ref($v) eq "HASH")     { print "$_\n" for sort keys %$v; }
             elsif (ref($v) eq "ARRAY") { print "$_\n" for 0 .. $#$v; }
+            else { exit 1 }
         } elsif ($op eq "type") {
             my ($found, $v) = walk($data, $path);
             exit 1 unless $found;

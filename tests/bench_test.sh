@@ -455,3 +455,40 @@ it_clears_the_targets_with_the_arms() {
     assert_eq "${#_BENCH_TARGET_MS[@]}" "0"
     _bench_done
 }
+
+#[test]
+it_meets_a_target_its_arm_lands_on_exactly() {
+    # The target is a ceiling the arm may reach: 20ms against 20 is met.
+    _bench_fresh
+    _pin_runs 5 5 20 20
+    bench_case "on the line"
+    bench_verify _answer_of
+    bench_arm "a" _arm_a
+    bench_arm "b" _arm_b
+    bench_target _arm_b 20
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    local m; m="$(cat "$BENCH_RESULTS"/*.meta 2>/dev/null)"
+    _bench_done
+    assert_eq "$rc" "0"
+    assert_contains "$out" "b: 20ms against a target of 20ms, met"
+    assert_contains "$m" "target    b 20 met"
+}
+
+#[test]
+it_fails_a_run_whose_targeted_arm_was_not_run() {
+    # An arm left out at this size has no number to meet its target with, and
+    # a target nobody measured is not met.
+    _bench_fresh
+    bench_case "too big to hold to anything"
+    bench_size 100
+    bench_verify _answer_of
+    bench_arm "a"       _arm_a
+    bench_arm "too big" _arm_b 10
+    bench_target _arm_b 50
+    local out; out="$(bench_run 2>&1)"; local rc=$?
+    local m; m="$(cat "$BENCH_RESULTS"/*.meta 2>/dev/null)"
+    _bench_done
+    assert_eq "$rc" "1"
+    assert_contains "$out" "too big: -ms against a target of 50ms, not run"
+    assert_contains "$m" "target    too big 50 not run"
+}

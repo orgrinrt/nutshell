@@ -115,6 +115,7 @@ json_detect() {
     _JSON_READY=1
     _JSON_ERROR=""
     use deps || return 1
+    _deps_on_reset _json_reset
     if deps_has jq; then
         _JSON_TOOL="jq"
     elif deps_has python3 || deps_has python; then
@@ -130,6 +131,10 @@ json_detect() {
         _JSON_ERROR="No JSON tool available (need jq, python, perl or bash)"
     fi
 }
+
+# _json_reset -> the pick dropped, made again at the next call that needs it
+# Registered with `deps` when a pick is made, so a hide or a forget reaches it.
+_json_reset() { _JSON_PICKED=0; }
 
 # _json_now -> `_JSON_NOW`, the backend this call goes to, loaded; rc 1 where
 # there is none
@@ -175,8 +180,7 @@ _json_ready_for() {
 # _json_needs_tool <name> -> status 2 with the reason when the backend this call
 # goes to cannot write, which is the one in bash.
 _json_needs_tool() {
-    _json_now
-    case "$_JSON_NOW" in
+    _json_now && case "$_JSON_NOW" in
         jq|python|perl) return 0 ;;
     esac
     echo "${1}: needs jq, python or perl, and this machine has none" >&2
@@ -215,7 +219,8 @@ json_get() { _json_read get json_get "$@"; }
 # Get all keys at a path in JSON
 # Usage: json_keys '{"a":1,"b":2}' -> prints "a" and "b" on separate lines
 # Usage: json_keys '{"x":{"y":1}}' "x" -> prints "y"
-# Returns: Keys, one per line
+# Returns: Keys, one per line; status 1 where there is nothing at the path or it
+# holds a scalar, on every backend
 json_keys() { _json_read keys json_keys "$@"; }
 
 #[pub]

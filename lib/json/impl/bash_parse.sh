@@ -31,7 +31,9 @@
 #
 # `_JB_ODDN` says the document has a number jq may print another way than it
 # was written (a fraction, an exponent, more digits than a double keeps), and
-# `_JB_ODDS` a string it would not (a NUL, a surrogate with no pair).
+# `_JB_ODDS` a string it would not (a NUL, a surrogate with no pair), and
+# `_JB_ODDH` a high surrogate with no low one after it, which jq refuses the
+# whole document for, so that even `type` is the tool's to answer.
 
 [ -n "${_NUTSHELL_JSON_IMPL_BASH_PARSE_SH:-}" ] && return 0
 _NUTSHELL_JSON_IMPL_BASH_PARSE_SH=1
@@ -39,7 +41,7 @@ _NUTSHELL_JSON_IMPL_BASH_PARSE_SH=1
 declare -gA _JB_T=() _JB_V=() _JB_C=() _JB_CH=() _JB_KY=() _JB_KI=() _JB_UC=()
 declare -ga _jb_stk=()
 _JB_SRC="" _JB_SO=0 _JB_LEN=0 _jb_s="" _jb_key=""
-_JB_ID=0 _JB_TEXT="" _JB_RC=1 _JB_CHUNK=256 _JB_DEPTH=400 _JB_ODDN=0 _JB_ODDS=0 _JB_MAXN=0
+_JB_ID=0 _JB_TEXT="" _JB_RC=1 _JB_CHUNK=256 _JB_DEPTH=400 _JB_ODDN=0 _JB_ODDS=0 _JB_ODDH=0 _JB_MAXN=0
 _JB_US=$'\x1f'
 _JB_WS=$' \t\n\r'
 _JB_RE_STR=$'^"[^"\\\\\x01-\x1f]*(\\\\.[^"\\\\\x01-\x1f]*)*"'
@@ -123,7 +125,7 @@ _jb_decode() {
                 h=$(( 0x10000 + (h - 0xD800) * 0x400 + 16#$lo - 0xDC00 ))
                 i=$(( i + 1 )); seg="${part[i]:4}"
             else
-                h=0xFFFD _JB_ODDS=1
+                h=0xFFFD _JB_ODDS=1 _JB_ODDH=1
             fi
         elif (( h >= 0xDC00 && h < 0xE000 )); then
             h=0xFFFD _JB_ODDS=1
@@ -259,7 +261,7 @@ _jb_load() {
     local LC_ALL=C
     [[ "$_JB_TEXT" == "$1" && -n "$1" ]] && return "$_JB_RC"
     _JB_T=() _JB_V=() _JB_C=() _JB_CH=() _JB_KY=() _JB_KI=()
-    _JB_SRC="$1" _JB_LEN=${#1} _JB_SO=0 _JB_ID=0 _JB_RC=0 _JB_ODDN=0 _JB_ODDS=0
+    _JB_SRC="$1" _JB_LEN=${#1} _JB_SO=0 _JB_ID=0 _JB_RC=0 _JB_ODDN=0 _JB_ODDS=0 _JB_ODDH=0
     _jb_parse || _JB_RC=$?
     _JB_SRC="" _jb_s="" _JB_TEXT="$1"
     # Past the budget is no answer about the document, so it is not kept.

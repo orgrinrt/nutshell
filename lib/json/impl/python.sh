@@ -177,6 +177,8 @@ def main():
         elif isinstance(target, list):
             for i in range(len(target)):
                 print(i)
+        else:
+            return 1
     elif op == "type":
         print(kind(walk(data, path)))
     elif op == "length":

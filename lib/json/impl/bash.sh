@@ -171,6 +171,7 @@ _jb_utf8_ok() {
 _json_floor() {
     local LC_ALL=C op="$1" t s _JB_JQ_PATH=1 rc=0 _JB_MAXN="${_JSON_FLOOR_NODES:-64}"
     _jb_load "$2" || return 3
+    (( _JB_ODDH )) && return 3
     (( _JB_ODDS )) && [[ "$op" != type ]] && return 3
     if [[ "$2" == *[$'\x80'-$'\xff']* ]]; then _jb_utf8_ok "$2" || return 3; fi
     _jb_find "${3:-}" || rc=$?

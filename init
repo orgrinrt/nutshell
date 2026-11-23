@@ -1190,3 +1190,10 @@ export -f nutshell_available
 : "${_DEPS_PIN_CHECK:=_nut_deps_pin_check}"
 _nut_deps_pin_get() { use deps::pins || return 1; _deps_pin_get "$@"; }
 _nut_deps_pin_check() { use deps::pins || return 0; _deps_pin_check "$@"; }
+
+# `key.sh` was sourced by path above, before `use` existed. Its name is
+# recorded now, so a later `use key` is answered from the table rather than
+# resolving the name and sourcing the file again to hit its guard. Not as a
+# loaded module: it is part of the interpreter, and `nutshell_modules` lists
+# what a script asked for.
+_nut_loaded_set LOADED_AS key "${_NUTSHELL_ROOT}/lib/key.sh"
